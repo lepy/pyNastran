@@ -1,36 +1,85 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from itertools import count
-from six import iteritems, integer_types
-from six.moves import zip
+from typing import List
+
 import numpy as np
-from numpy import zeros, array_equal
+from numpy import zeros
 
-from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
-from pyNastran.f06.f06_formatting import write_floats_13e, write_float_13e, _eigenvalue_header
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
+from pyNastran.utils.numpy_utils import integer_types, float_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
+    StressObject, StrainObject, OES_Object, oes_data_code)
+from pyNastran.f06.f06_formatting import write_float_13e, _eigenvalue_header
 
+ELEMENT_NAME_TO_ELEMENT_TYPE = {
+    'CELAS1': 11,
+    'CELAS2': 12,
+    'CELAS3': 13,
+    'CELAS4': 14,
+}
 
 class RealSpringArray(OES_Object):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)
 
         self.nelements = 0  # result specific
-        if is_sort1:
-            self.add_new_eid = self.add_new_eid_sort1
+
+        self.itime = 0
+        self.itotal = 0
+        self.ielement = 0
+        self.element = None
+
+    @classmethod
+    def add_static_case(cls, table_name, element_name, element, data, isubcase,
+                        is_sort1=True, is_random=False, is_stress=True, is_msc=True,
+                        random_code=0, title='', subtitle='', label=''):
+
+        analysis_code = 1 # static
+        data_code = oes_data_code(table_name, analysis_code,
+                                  is_sort1=is_sort1, is_random=is_random,
+                                  random_code=random_code,
+                                  title=title, subtitle=subtitle, label=label,
+                                  is_msc=is_msc)
+        data_code['lsdvmns'] = [0] # TODO: ???
+        data_code['data_names'] = []
+
+        # I'm only sure about the 1s in the strains and the
+        # corresponding 0s in the stresses.
+        if is_stress:
+            data_code['stress_bits'] = [0, 0, 0, 0]
+            data_code['s_code'] = 0
         else:
-            raise NotImplementedError('SORT2')
+            data_code['stress_bits'] = [0, 1, 0, 1]
+            data_code['s_code'] = 1 # strain?
+
+        element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name]
+        data_code['element_name'] = element_name
+        data_code['element_type'] = element_type
+        data_code['load_set'] = 1
+
+        ntimes = data.shape[0]
+        nnodes = data.shape[1]
+        dt = None
+        obj = cls(data_code, is_sort1, isubcase, dt)
+        obj.element = element
+        obj.data = data
+
+        obj.ntimes = ntimes
+        obj.ntotal = nnodes
+        obj._times = [None]
+        obj.is_built = True
+        return obj
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
+
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
 
     def _reset_indices(self):
         self.itotal = 0
@@ -39,12 +88,81 @@ class RealSpringArray(OES_Object):
     def get_headers(self):
         raise NotImplementedError()
 
+    #def __mul__(self, factor):
+        #"""in-place multiplication"""
+        #assert isinstance(factor, float_types), 'factor=%s and must be a float' % (factor)
+        #self.data *= factor
+    #def __rmul__(self, factor):
+        #assert isinstance(factor, float_types), 'factor=%s and must be a float' % (factor)
+        #self.data *= factor
+
+    #def __sub__(self, factor):
+        #if isinstance(factor, float_types):
+            #self.data -= factor
+        #else:
+            ## TODO: should support arrays
+            #raise TypeError('factor=%s and must be a float' % (factor))
+    #def __add__(self, factor):
+        #"""[C] = [A] + b"""
+        #if isinstance(factor, float_types):
+            #self.data += factor
+        #else:
+            ## TODO: should support arrays
+            #raise TypeError('factor=%s and must be a float' % (factor))
+
+    #def __radd__(self, factor):
+        #"""[C] = b + [A]"""
+        #return self.__add__(factor)
+
+    def update_data_components(self):
+        pass
+
+    def __iadd__(self, factor):
+        """[A] += b"""
+        if isinstance(factor, float_types):
+            self.data += factor
+        else:
+            # TODO: should support arrays
+            raise TypeError('factor=%s and must be a float' % (factor))
+        self.update_data_components()
+
+    def __isub__(self, factor):
+        """[A] -= b"""
+        if isinstance(factor, float_types):
+            self.data -= factor
+        else:
+            # TODO: should support arrays
+            raise TypeError('factor=%s and must be a float' % (factor))
+        self.update_data_components()
+
+    def __imul__(self, factor):
+        """[A] *= b"""
+        assert isinstance(factor, float_types), 'factor=%s and must be a float' % (factor)
+        self.data *= factor
+        self.update_data_components()
+
+    def __idiv__(self, factor):
+        """[A] *= b"""
+        assert isinstance(factor, float_types), 'factor=%s and must be a float' % (factor)
+        self.data *= 1. / factor
+        self.update_data_components()
+
+    #def linear_combination(a, coeffs):
+        #import numexpr as ne
+        #local_vars = locals()
+        #letters = [
+            #'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+            #'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
+        #expr = ''
+        #for ai, coeff, letter in zip(a, coeffs, letters):
+            #expr += '%s*%s' % (coeff, letter)
+            #local_vars[letter] = ai.data
+        #c = ne.evaluate(expr)
+        #return c
+
     def build(self):
         """sizes the vectorized attributes of the RealSpringArray"""
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -58,34 +176,85 @@ class RealSpringArray(OES_Object):
         self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
+        float_fmt = 'float32' if self.size == 4 else 'float64'
+        dtype = float_fmt
         if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
+            int_fmt = 'int32' if self.size == 4 else 'int64'
+            dtype = int_fmt
         self.build_data(self.ntimes, self.nelements, dtype)
 
     def build_data(self, ntimes, nelements, dtype):
         """actually performs the build step"""
         self.ntimes = ntimes
         self.nelements = nelements
-        self._times = zeros(ntimes, dtype=dtype)
-        self.element = zeros(nelements, dtype='int32')
+        _times = zeros(ntimes, dtype=dtype)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        element = zeros(nelements, dtype=idtype)
 
         #[stress]
-        self.data = zeros((ntimes, nelements, 1), dtype='float32')
+        data = zeros((ntimes, nelements, 1), dtype=fdtype)
+
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element = group.create_dataset('element', data=element)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element = element
+            self.data = data
 
     def build_dataframe(self):
-        headers = self.get_headers()
-        if self.nonlinear_factor is not None:
-            column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'Item']
-        else:
-            self.data_frame = pd.Panel(self.data, major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'Item']
+        """creates a pandas dataframe
 
-    def __eq__(self, table):
+        v 0.24
+        Static                     0
+        ElementID Item
+        30        spring_stress  0.0
+        31        spring_stress  0.0
+        32        spring_stress  0.0
+        33        spring_stress  0.0
+
+        v 0.25 for test_bdf_op2_elements_01
+        Static  ElementID  spring_stress
+        0              30            0.0
+        1              31            0.0
+        2              32            0.0
+        3              33            0.0
+        ...
+        """
+        import pandas as pd
+
+        headers = self.get_headers()
+        if self.nonlinear_factor not in (None, np.nan):
+            # Mode                                1             2             3
+            # Freq                     1.482246e-10  3.353940e-09  1.482246e-10
+            # Eigenvalue              -8.673617e-19  4.440892e-16  8.673617e-19
+            # Radians                  9.313226e-10  2.107342e-08  9.313226e-10
+            # ElementID Item
+            # 30        spring_stress           0.0          -0.0          -0.0
+            # 31        spring_stress           0.0          -0.0          -0.0
+            # 32        spring_stress           0.0           0.0           0.0
+            # 33        spring_stress           0.0           0.0           0.0
+            column_names, column_values = self._build_dataframe_transient_header()
+            data_frame = self._build_pandas_transient_elements(
+                column_values, column_names,
+                headers, self.element, self.data)
+        else:
+            #Static     spring_stress
+            #ElementID
+            #30                   0.0
+            #31                   0.0
+            #32                   0.0
+            #33                   0.0
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=self.element)
+            data_frame.index.name = 'ElementID'
+            data_frame.columns.names = ['Static']
+        self.data_frame = data_frame
+
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -118,7 +287,7 @@ class RealSpringArray(OES_Object):
                 raise ValueError(msg)
         return True
 
-    def add_new_eid_sort1(self, dt, eid, stress):
+    def add_sort1(self, dt, eid, stress):
         self._times[self.itime] = dt
         #if self.itime == 0:
         #print('itime=%s eid=%s' % (self.itime, eid))
@@ -126,7 +295,7 @@ class RealSpringArray(OES_Object):
         self.data[self.itime, self.ielement, :] = [stress]
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -142,7 +311,7 @@ class RealSpringArray(OES_Object):
         assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i\n'
                        % (self.__class__.__name__, ntimes, nelements))
             ntimes_word = 'ntimes'
@@ -219,13 +388,85 @@ class RealSpringArray(OES_Object):
             page_num += 1
         return page_num - 1
 
+    def write_op2(self, op2, op2_ascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if itable == -1:
+            self._write_table_header(op2, op2_ascii, date)
+            itable = -3
+
+        #eids = self.element
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        nelements = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert self.ntimes == 1, self.ntimes
+
+        #device_code = self.device_code
+        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+
+        eids_device = self.element * 10 + self.device_code
+
+        #print('ntotal=%s' % (ntotal))
+        #assert ntotal == 193, ntotal
+
+        if self.is_sort1:
+            struct1 = Struct(endian + b'if')
+        else:
+            raise NotImplementedError('SORT2')
+
+        op2_ascii.write('%s-nelements=%i\n' % (self.element_name, nelements))
+        for itime in range(self.ntimes):
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            itable -= 1
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+
+            stress = self.data[itime, :, 0]
+
+            for eid, stressi in zip(eids_device, stress):
+                data = [eid, stressi]
+                op2_ascii.write('  eid=%s force=%s\n' % tuple(data))
+                op2.write(struct1.pack(*data))
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
+
 
 class RealSpringStressArray(RealSpringArray, StressObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         RealSpringArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['spring_stress']
         return headers
 
@@ -254,7 +495,7 @@ class RealSpringStrainArray(RealSpringArray, StrainObject):
         RealSpringArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['spring_strain']
         return headers
 
@@ -294,6 +535,11 @@ class RealNonlinearSpringStressArray(OES_Object):
 
         self.nelements = 0  # result specific
 
+        self.itime = 0
+        self.itotal = 0
+        self.ielement = 0
+        self.element = None
+
         if is_sort1:
             pass
         else:
@@ -318,16 +564,13 @@ class RealNonlinearSpringStressArray(OES_Object):
     def _get_msgs(self):
         raise NotImplementedError()
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['force', 'stress']
         return headers
 
     def build(self):
         """sizes the vectorized attributes of the RealNonlinearSpringStressArray"""
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -344,13 +587,25 @@ class RealNonlinearSpringStressArray(OES_Object):
         dtype = 'float32'
         if isinstance(self.nonlinear_factor, integer_types):
             dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.nelements, dtype='int32')
+        _times = zeros(self.ntimes, dtype=dtype)
+        element = zeros(self.nelements, dtype='int32')
 
         #[force, stress]
-        self.data = zeros((self.ntimes, self.nelements, 2), dtype='float32')
+        data = zeros((self.ntimes, self.nelements, 2), dtype='float32')
 
-    def __eq__(self, table):
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element = group.create_dataset('element', data=element)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element = element
+            self.data = data
+
+    def __eq__(self, table):  # pragma: no cover
         self._eq_header(table)
         assert self.is_sort1 == table.is_sort1
         if not np.array_equal(self.data, table.data):
@@ -385,12 +640,13 @@ class RealNonlinearSpringStressArray(OES_Object):
 
     def add_sort1(self, dt, eid, force, stress):
         """unvectorized method for adding SORT1 transient data"""
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [force, stress]
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -403,7 +659,7 @@ class RealNonlinearSpringStressArray(OES_Object):
         assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i\n'
                        % (self.__class__.__name__, ntimes, nelements))
             ntimes_word = 'ntimes'

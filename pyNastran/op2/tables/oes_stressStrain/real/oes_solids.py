@@ -1,22 +1,16 @@
-# pylint: disable=C0301,W0613,C0103,R0913,R0914,R0904,C0111,R0201,R0902
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+# pylint: disable=C0301,C0103,R0913,R0914,R0904,C0111,R0201,R0902
 from itertools import count
 from struct import Struct, pack
-from six import integer_types
-from six.moves import zip, range
+from typing import List
 
 import numpy as np
 from numpy import zeros, where, searchsorted
 from numpy.linalg import eigh  # type: ignore
 
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
-
-from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
+from pyNastran.utils.numpy_utils import integer_types, float_types
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 
 
 class RealSolidArray(OES_Object):
@@ -28,12 +22,12 @@ class RealSolidArray(OES_Object):
         #self.ntotal = 0
         self.nelements = 0  # result specific
 
-        if is_sort1:
-            #sort1
-            self.add_node = self.add_node_sort1
-            self.add_eid = self.add_eid_sort1
-        else:
-            raise NotImplementedError('SORT2')
+        #if is_sort1:
+            ##sort1
+            #self.add_node = self.add_node_sort1
+            #self.add_eid = self.add_eid_sort1
+        #else:
+            #raise NotImplementedError('SORT2')
 
     @property
     def is_real(self):
@@ -50,12 +44,64 @@ class RealSolidArray(OES_Object):
         self.itotal = 0
         self.ielement = 0
 
+    def update_data_components(self):
+        # vm
+        oxx = self.data[:, :, 0]
+        oyy = self.data[:, :, 1]
+        ozz = self.data[:, :, 2]
+        txy = self.data[:, :, 3]
+        tyz = self.data[:, :, 4]
+        txz = self.data[:, :, 5]
+
+        #I1 = oxx + oyy + ozz
+        #txyz = txy**2 + tyz**2 + txz ** 2
+        #I2 = oxx * oyy + oyy * ozz + ozz * oxx - txyz
+        #I3 = oxx * oyy * ozz + 2 * txy * tyz * txz + oxx * tyz**2 - oyy * txz**2 - ozz * txy
+
+        # (n_subarrays, nrows, ncols)
+
+        ovm = np.sqrt((oxx - oyy)**2 + (oyy - ozz)**2 + (oxx - ozz)**2 +
+                      3. * (txy**2 + tyz**2 + txz ** 2))
+        self.data[:, :, 9] = ovm
+        #A = [[doxx, dtxy, dtxz],
+             #[dtxy, doyy, dtyz],
+             #[dtxz, dtyz, dozz]]
+        #(_lambda, v) = eigh(A)  # a hermitian matrix is a symmetric-real matrix
+
+    def __iadd__(self, factor):
+        """[A] += b"""
+        #[oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, ovmShear]
+        if isinstance(factor, float_types):
+            self.data[:, :, :6] += factor
+        else:
+            # TODO: should support arrays
+            raise TypeError('factor=%s and must be a float' % (factor))
+        self.update_data_components()
+
+    def __isub__(self, factor):
+        """[A] -= b"""
+        if isinstance(factor, float_types):
+            self.data[:, :, :6] -= factor
+        else:
+            # TODO: should support arrays
+            raise TypeError('factor=%s and must be a float' % (factor))
+        self.update_data_components()
+
+    def __imul__(self, factor):
+        """[A] *= b"""
+        assert isinstance(factor, float_types), 'factor=%s and must be a float' % (factor)
+        self.data[:, :, :6] *= factor
+        self.update_data_components()
+
+    def __idiv__(self, factor):
+        """[A] *= b"""
+        assert isinstance(factor, float_types), 'factor=%s and must be a float' % (factor)
+        self.data[:, :, :6] *= 1. / factor
+        self.update_data_components()
+
     def build(self):
         """sizes the vectorized attributes of the RealSolidArray"""
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -69,14 +115,12 @@ class RealSolidArray(OES_Object):
         self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        _times = zeros(self.ntimes, dtype=dtype)
 
         # TODO: could be more efficient by using nelements for cid
-        self.element_node = zeros((self.ntotal, 2), dtype='int32')
-        self.element_cid = zeros((self.nelements, 2), dtype='int32')
+        element_node = zeros((self.ntotal, 2), dtype=idtype)
+        element_cid = zeros((self.nelements, 2), dtype=idtype)
 
         #if self.element_name == 'CTETRA':
             #nnodes = 4
@@ -87,25 +131,52 @@ class RealSolidArray(OES_Object):
         #self.element_node = zeros((self.ntotal, nnodes, 2), 'int32')
 
         #[oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, ovmShear]
-        self.data = zeros((self.ntimes, self.ntotal, 10), 'float32')
-        self.nnodes = self.element_node.shape[0] // self.nelements
+        data = zeros((self.ntimes, self.ntotal, 10), fdtype)
+        self.nnodes = element_node.shape[0] // self.nelements
         #self.data = zeros((self.ntimes, self.nelements, nnodes+1, 10), 'float32')
 
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element_node = group.create_dataset('element_node', data=element_node)
+            self.element_cid = group.create_dataset('element_cid', data=element_cid)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element_node = element_node
+            self.element_cid = element_cid
+            self.data = data
+
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+
         headers = self.get_headers()
         # TODO: cid?
-        element_node = [self.element_node[:, 0], self.element_node[:, 1]]
-        if self.nonlinear_factor is not None:
+        #element_node = [self.element_node[:, 0], self.element_node[:, 1]]
+        if self.nonlinear_factor not in (None, np.nan):
             column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values, major_axis=element_node, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+            data_frame = self._build_pandas_transient_element_node(
+                column_values, column_names,
+                headers, self.element_node, self.data)
+            #self.data_frame = pd.Panel(self.data, items=column_values, major_axis=element_node, minor_axis=headers).to_frame()
+            #self.data_frame.columns.names = column_names
+            #self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
         else:
-            self.data_frame = pd.Panel(self.data, major_axis=element_node, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+            # Static            sxc  sxd  sxe  sxf  smax  smin    MS_tension  MS_compression
+            # ElementID NodeID
+            # 12        22      0.0  0.0  0.0  0.0   0.0   0.0  1.401298e-45    1.401298e-45
+            #           26      0.0  0.0  0.0  0.0   0.0   0.0  1.401298e-45    1.401298e-45
+            index = pd.MultiIndex.from_arrays(self.element_node.T, names=['ElementID', 'NodeID'])
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=index)
+            data_frame.columns.names = ['Static']
+        self.data_frame = data_frame
 
-    def add_eid_sort1(self, eType, cid, dt, eid, node_id, oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, aCos, bCos, cCos, pressure, ovm):
+    def add_eid_sort1(self, unused_etype, cid, dt, eid, unused_node_id,
+                      oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3,
+                      unused_acos, unused_bcos, unused_ccos, unused_pressure, ovm):
         assert cid >= -1, cid
         assert eid >= 0, eid
 
@@ -131,7 +202,7 @@ class RealSolidArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -163,7 +234,9 @@ class RealSolidArray(OES_Object):
                     raise ValueError(msg)
         return True
 
-    def add_node_sort1(self, dt, eid, inode, node_id, oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, aCos, bCos, cCos, pressure, ovm):
+    def add_node_sort1(self, dt, eid, unused_inode, node_id,
+                       oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3,
+                       unused_acos, unused_bcos, unused_ccos, unused_pressure, ovm):
         # skipping aCos, bCos, cCos, pressure
         omax_mid_min = [o1, o2, o3]
         omin = min(omax_mid_min)
@@ -184,7 +257,11 @@ class RealSolidArray(OES_Object):
         self.itotal += 1
 
     @property
-    def nnodes_per_element(self):
+    def nnodes_per_element(self) -> int:
+        return self.nnodes_per_element_no_centroid + 1
+
+    @property
+    def nnodes_per_element_no_centroid(self) -> int:
         if self.element_type == 39: # CTETRA
             nnodes = 4
         elif self.element_type == 67: # CHEXA
@@ -195,7 +272,7 @@ class RealSolidArray(OES_Object):
             raise NotImplementedError('element_name=%s self.element_type=%s' % (self.element_name, self.element_type))
         return nnodes
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -214,7 +291,7 @@ class RealSolidArray(OES_Object):
 
         msg = []
 
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i nnodes=%i\n  nnodes_per_element=%s (including centroid)\n'
                        % (self.__class__.__name__, ntimes, nelements, nnodes, nnodes_per_element))
             ntimes_word = 'ntimes'
@@ -281,9 +358,9 @@ class RealSolidArray(OES_Object):
 
             cnnodes = nnodes + 1
             for i, deid, node_id, doxx, doyy, dozz, dtxy, dtyz, dtxz, do1, do2, do3, dp, dovm in zip(
-                count(), eids2, nodes, oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, p, ovm):
+                    count(), eids2, nodes, oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, p, ovm):
 
-                j = where(eids3 == deid)[0]
+                j = where(eids3 == deid)[0][0]
                 cid = cids3[j]
                 A = [[doxx, dtxy, dtxz],
                      [dtxy, doyy, dtyz],
@@ -319,81 +396,16 @@ class RealSolidArray(OES_Object):
             page_num += 1
         return page_num - 1
 
-    def _write_table_3(self, op2, op2_ascii, itable=-3, itime=0):
-        import inspect
-        frame = inspect.currentframe()
-        call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_table_3: %s\n' % (self.__class__.__name__, call_frame[1][3]))
-
-        op2.write(pack('12i', *[
-            4, itable, 4,
-            4, 1, 4,
-            4, 0, 4,
-            4, 146, 4,
-        ]))
-        approach_code = self.approach_code
-        table_code = self.table_code
-        isubcase = self.isubcase
-        element_type = self.element_type
-        #[
-            #'aCode', 'tCode', 'element_type', 'isubcase',
-            #'???', '???', '???', 'load_set'
-            #'format_code', 'num_wide', 's_code', '???',
-            #'???', '???', '???', '???',
-            #'???', '???', '???', '???',
-            #'???', '???', '???', '???',
-            #'???', 'Title', 'subtitle', 'label']
-        #random_code = self.random_code
-        format_code = 1
-        s_code = self.s_code
-        num_wide = self.num_wide
-        acoustic_flag = 0
-        thermal = 0
-        title = b'%-128s' % self.title
-        subtitle = b'%-128s' % self.subtitle
-        label = b'%-128s' % self.label
-        ftable3 = b'50i 128s 128s 128s'
-        oCode = 0
-        if self.analysis_code == 1:
-            lsdvmn = self.lsdvmn
-        else:
-            raise NotImplementedError(self.analysis_code)
-
-        table3 = [
-            approach_code, table_code, element_type, isubcase, lsdvmn,
-            0, 0, self.load_set, format_code, num_wide,
-            s_code, acoustic_flag, 0, 0, 0,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, thermal, thermal, 0,
-            title.encode('ascii'), subtitle.encode('ascii'), label.encode('ascii'),
-        ]
-
-        n = 0
-        for v in table3:
-            if isinstance(v, (int, float)):
-                n += 4
-            else:
-                n += len(v)
-        assert n == 584, n
-        data = [584] + table3 + [584]
-        fmt = 'i' + ftable3 + 'i'
-        #print(fmt)
-        #print(data)
-        #f.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
-        op2_ascii.write('%s header 3c = %s\n' % (self.table_name, data))
-        op2.write(pack(fmt, *data))
-
-    def write_op2(self, op2, op2_ascii, itable, date, is_mag_phase=False, endian='>'):
-        #if self.nnodes != 9:
-            #return
+    def write_op2(self, op2, op2_ascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
         import inspect
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
         op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
 
         if itable == -1:
+            #print('***************', itable)
             self._write_table_header(op2, op2_ascii, date)
             itable = -3
 
@@ -414,39 +426,50 @@ class RealSolidArray(OES_Object):
         # table 4 info
         #ntimes = self.data.shape[0]
         nnodes = self.data.shape[1]
-        nelements = len(eids2)
+        nelements = len(np.unique(eids2))
 
         # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
         #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
-        ntotal = 4 + 21 * nnodes_expected
+
+        nnodes_expected = self.nnodes_per_element_no_centroid
+        ntotali = 4 + 21 * nnodes_expected
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
 
         #print('shape = %s' % str(self.data.shape))
         assert nnodes > 1, nnodes
-        assert self.ntimes == 1, self.ntimes
+        #assert self.ntimes == 1, self.ntimes
 
-        device_code = self.device_code
+        #device_code = self.device_code
         op2_ascii.write('  ntimes = %s\n' % self.ntimes)
 
         #fmt = '%2i %6f'
         #print('ntotal=%s' % (ntotal))
         #assert ntotal == 193, ntotal
 
-        struct1 = Struct(self._endian + b'ii4si')
-        struct2 = Struct(self._endian + b'i20f')
+        if self.is_sort1:
+            #op2_format = endian + b'2i6f'
+            struct1 = Struct(endian + b'ii4si')
+            struct2 = Struct(endian + b'i20f')
+        else:
+            raise NotImplementedError('SORT2')
 
         cen = b'GRID'
+        op2_ascii.write('nelements=%i\n' % nelements)
         for itime in range(self.ntimes):
-            self._write_table_3(op2, op2_ascii, itable, itime)
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
 
             # record 4
-            header = [4, -4, 4,
+            #print('stress itable = %s' % itable)
+            itable -= 1
+            header = [4, itable, 4,
                       4, 1, 4,
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
             op2.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable - 1))
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
             op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
 
             oxx = self.data[itime, :, 0]
@@ -464,7 +487,7 @@ class RealSolidArray(OES_Object):
             #print('eids3', eids3)
             cnnodes = nnodes_expected + 1
             for i, deid, node_id, doxx, doyy, dozz, dtxy, dtyz, dtxz, do1, do2, do3, dp, dovm in zip(
-                count(), eids2, nodes, oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, p, ovm):
+                    count(), eids2, nodes, oxx, oyy, ozz, txy, tyz, txz, o1, o2, o3, p, ovm):
                 #print('  eid =', deid, node_id)
 
                 j = where(eids3 == deid)[0]
@@ -502,16 +525,12 @@ class RealSolidArray(OES_Object):
                 op2.write(struct2.pack(*data))
                 i += 1
 
-            itable -= 2
+            itable -= 1
             header = [4 * ntotal,]
             op2.write(pack('i', *header))
-            op2_ascii.write('footer = %s' % header)
-        header = [
-            4, itable, 4,
-            4, 1, 4,
-            4, 0, 4,
-        ]
-        op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
 
 
 class RealSolidStressArray(RealSolidArray, StressObject):
@@ -519,7 +538,7 @@ class RealSolidStressArray(RealSolidArray, StressObject):
         RealSolidArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         if self.is_von_mises:
             von_mises = 'von_mises'
         else:
@@ -533,7 +552,7 @@ class RealSolidStrainArray(RealSolidArray, StrainObject):
         RealSolidArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         if self.is_von_mises:
             von_mises = 'von_mises'
         else:
@@ -578,7 +597,7 @@ def _get_f06_header_nnodes(self, is_mag_phase=True):
     elif self.element_type == 68: # CPENTA
         msg = penta_msg
         nnodes = 6
-    else:
+    else:  # pragma: no cover
         msg = 'element_name=%s self.element_type=%s' % (self.element_name, self.element_type)
         raise NotImplementedError(msg)
     return nnodes, msg

@@ -2,8 +2,8 @@
 tests:
  - CELAS1, CELAS2, CELAS3, CELAS4
  - PELAS, PELAST
+
 """
-from __future__ import print_function
 import unittest
 
 from pyNastran.bdf.bdf import BDF, BDFCard, PELAS
@@ -15,12 +15,13 @@ class TestSprings(unittest.TestCase):
     tests:
      - CELAS1, CELAS2, CELAS3, CELAS4
      - PELAS, PELAST
+
     """
     def test_pelas_01(self):
         """tests PELAS"""
         lines = ['pelas, 201, 1.e+5']
         model = BDF(debug=False)
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -112,8 +113,8 @@ class TestSprings(unittest.TestCase):
         model.add_card(fields, fields[0])
         model.pop_parse_errors()
         model.validate()
-        e = model.elements[615]
-        str(e)
+        elem = model.elements[615]
+        str(elem)
 
 
 if __name__ == '__main__':  # pragma: no cover

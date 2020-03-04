@@ -1,6 +1,3 @@
-from __future__ import print_function
-from six import iteritems
-from six.moves import zip
 from itertools import count
 from numpy import array, zeros, arange, searchsorted, unique
 
@@ -68,10 +65,10 @@ class PBARL(Property):
             #: Material ID
             self.material_id = zeros(ncards, dtype='int32')
 
-            self.group = zeros(ncards, dtype='|S8')
+            self.group = zeros(ncards, dtype='|U8')
 
             #: Section Type (e.g. 'ROD', 'TUBE', 'I', 'H')
-            self.Type = zeros(ncards, dtype='|S8')
+            self.Type = zeros(ncards, dtype='|U8')
 
             #: non-structural mass
             self.nsm = zeros(ncards, dtype=float_fmt)
@@ -271,7 +268,7 @@ class PBARL(Property):
 
         dim = {}
         j = 0
-        for ii, dimi in iteritems(self.dim):
+        for ii, dimi in self.dim.items():
             if ii in i:
                 dim[j] = dimi
                 j += 1

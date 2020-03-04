@@ -1,11 +1,9 @@
 """
 defines:
  - GroupsModify
+
 """
 # -*- coding: utf-8 -*-
-from __future__ import print_function, unicode_literals, absolute_import
-from six import iteritems
-
 from numpy import setdiff1d, unique, hstack
 
 from qtpy import QtGui
@@ -16,41 +14,49 @@ from qtpy.QtWidgets import (
 
 from pyNastran.bdf.utils import parse_patran_syntax #, parse_patran_syntax_dict
 #from pyNastran.gui.menus.manage_actors import Model
-from pyNastran.gui.utils.qt.pydialog import PyDialog
+from pyNastran.gui.utils.qt.pydialog import PyDialog, check_patran_syntax
 from pyNastran.gui.utils.qt.qelement_edit import QElementEdit
-from .groups import Group, _get_collapsed_text
+
+from pyNastran.gui.menus.groups_modify.groups import Group, _get_collapsed_text
 #from .groups_modify.color_display import ColorDisplay
+from pyNastran.gui.utils.vtk.gui_utils import add_actors_to_gui, remove_actors_from_gui
+from pyNastran.gui.menus.highlight.highlight import create_highlighted_actors
+
+#import pyNastran
+from pyNastran.gui import ICON_PATH
+
 
 class GroupsModify(PyDialog):
     """
-    +--------------------------+
-    |     Groups : Modify      |
-    +--------------------------+
-    |                          |
-    |  Name        xxx Default |
-    |  Coords      xxx Default |
-    |  Elements    xxx Default |
-    |  Color       xxx Default |
-    |  Add         xxx Add     |
-    |  Remove      xxx Remove  |
-    |                          |
-    |      Set  OK Cancel      |
-    +--------------------------+
+    +-------------------------------+
+    |     Groups : Modify           |
+    +-------------------------------+
+    |                               |
+    |  Name        xxx Default      |
+    |  Nodes       xxx Default Show |
+    |  Color       xxx Default      |
+    |  Add         xxx Add     Show |
+    |  Remove      xxx Remove  Show |
+    |                               |
+    |      Set  OK Cancel           |
+    +-------------------------------+
     """
-    def __init__(self, data, win_parent=None, group_active='main'):
-        PyDialog.__init__(self, data, win_parent)
+    def __init__(self, data, win_parent=None, model_name=None, group_active='main'):
+        super(GroupsModify, self).__init__(data, win_parent)
         self.set_font_size(data['font_size'])
         self._updated_groups = False
+        self.model_name = model_name
+        self.actors = []
 
         #self.out_data = data
 
         #print(data)
-        keys = []
-        self.keys = [group.name for key, group in sorted(iteritems(data)) if isinstance(key, int)]
+        self.keys = [group.name for key, group in sorted(data.items())
+                     if isinstance(key, int)]
         self.active_key = self.keys.index(group_active)
 
         group_obj = data[self.active_key]
-        name = group_obj.name
+        unused_name = group_obj.name
 
         self.imain = 0
         self.nrows = len(self.keys)
@@ -72,77 +78,109 @@ class GroupsModify(PyDialog):
 
     def create_widgets(self):
         """creates the menu objects"""
+        #icon = QtGui.QPixmap(os.path.join(ICON_PATH, 'node.png'))
+        #icon = QtGui.QPixmap(os.path.join(ICON_PATH, 'element.png'))
         # Name
-        self.name = QLabel("Name:")
-        self.name_set = QPushButton("Set")
+        self.pick_style_label = QLabel('Pick Style:')
+        #self.pick_node_button = QPushButton('Node')
+        self.pick_element_button = QPushButton('Element')
+        self.pick_area_button = QPushButton('Area')
+        #self.pick_node_button.setIcon(icon)
+        #self.pick_area_button.setIcon(icon)
+
+        # Name
+        self.name_label = QLabel('Name:')
+        self.name_set = QPushButton('Set')
         self.name_edit = QLineEdit(str(self._default_name).strip())
-        self.name_button = QPushButton("Default")
+        self.name_button = QPushButton('Default')
 
         # elements
-        self.elements = QLabel("Element IDs:")
+        self.elements_label = QLabel('Element IDs:')
         self.elements_edit = QLineEdit(str(self._default_elements).strip())
-        self.elements_button = QPushButton("Default")
+        self.elements_button = QPushButton('Default')
+        self.elements_highlight_button = QPushButton('Show')
 
         # add
-        self.add = QLabel("Add Elements:")
-        self.add_edit = QElementEdit(self, str(''))
-        self.add_button = QPushButton("Add")
+        self.add_label = QLabel('Add Elements:')
+        self.add_edit = QElementEdit(self, self.model_name, pick_style='area')
+        self.add_button = QPushButton('Add')
+        self.add_highlight_button = QPushButton('Show')
 
         # remove
-        self.remove = QLabel("Remove Elements:")
-        self.remove_edit = QElementEdit(self, str(''))
-        self.remove_button = QPushButton("Remove")
+        self.remove_label = QLabel('Remove Elements:')
+        self.remove_edit = QElementEdit(self, self.model_name, pick_style='area')
+        self.remove_button = QPushButton('Remove')
+        self.remove_highlight_button = QPushButton('Show')
 
         # applies a unique implicitly
         self.eids = parse_patran_syntax(str(self._default_elements), pound=self.elements_pound)
 
         # closing
-        #self.apply_button = QPushButton("Apply")
-        self.ok_button = QPushButton("Close")
-        #self.cancel_button = QPushButton("Cancel")
+        #self.apply_button = QPushButton('Apply')
+        self.ok_button = QPushButton('Close')
+        #self.cancel_button = QPushButton('Cancel')
 
-        self.set_as_main_button = QPushButton("Set As Main")
+        self.set_as_main_button = QPushButton('Set As Main')
         self.create_group_button = QPushButton('Create New Group')
         self.delete_group_button = QPushButton('Delete Group')
 
-        self.name.setEnabled(False)
+        self.name_label.setEnabled(False)
         self.name_set.setEnabled(False)
         self.name_edit.setEnabled(False)
         self.name_button.setEnabled(False)
-        self.elements.setEnabled(False)
+
+        self.elements_label.setEnabled(False)
         self.elements_button.setEnabled(False)
         self.elements_edit.setEnabled(False)
-        self.add.setEnabled(False)
+        self.elements_highlight_button.setEnabled(False)
+
+        self.add_label.setEnabled(False)
         self.add_button.setEnabled(False)
         self.add_edit.setEnabled(False)
-        self.remove.setEnabled(False)
+        self.add_highlight_button.setEnabled(False)
+
+        self.remove_label.setEnabled(False)
         self.remove_button.setEnabled(False)
         self.remove_edit.setEnabled(False)
-        self.delete_group_button.setEnabled(False)
+        self.remove_highlight_button.setEnabled(False)
+
         #self.apply_button.setEnabled(False)
         #self.ok_button.setEnabled(False)
 
 
     def create_layout(self):
         """displays the menu objects"""
+        hbox = QHBoxLayout()
+        hbox.addWidget(self.pick_style_label)
+        hbox.addWidget(self.pick_element_button)
+        hbox.addWidget(self.pick_area_button)
+        hbox.addStretch()
+
         grid = QGridLayout()
-        grid.addWidget(self.name, 0, 0)
-        grid.addWidget(self.name_edit, 0, 1)
-        grid.addWidget(self.name_set, 0, 2)
-        grid.addWidget(self.name_button, 0, 3)
+        irow = 0
+        grid.addWidget(self.name_label, irow, 0)
+        grid.addWidget(self.name_edit, irow, 1)
+        grid.addWidget(self.name_set, irow, 2)
+        grid.addWidget(self.name_button, irow, 3)
+        irow += 1
 
-        grid.addWidget(self.elements, 2, 0)
-        grid.addWidget(self.elements_edit, 2, 1)
-        grid.addWidget(self.elements_button, 2, 2)
+        grid.addWidget(self.elements_label, irow, 0)
+        grid.addWidget(self.elements_edit, irow, 1)
+        grid.addWidget(self.elements_button, irow, 2)
+        grid.addWidget(self.elements_highlight_button, irow, 3)
+        irow += 1
 
-        grid.addWidget(self.add, 4, 0)
-        grid.addWidget(self.add_edit, 4, 1)
-        grid.addWidget(self.add_button, 4, 2)
+        grid.addWidget(self.add_label, irow, 0)
+        grid.addWidget(self.add_edit, irow, 1)
+        grid.addWidget(self.add_button, irow, 2)
+        grid.addWidget(self.add_highlight_button, irow, 3)
+        irow += 1
 
-        grid.addWidget(self.remove, 5, 0)
-        grid.addWidget(self.remove_edit, 5, 1)
-        grid.addWidget(self.remove_button, 5, 2)
-
+        grid.addWidget(self.remove_label, irow, 0)
+        grid.addWidget(self.remove_edit, irow, 1)
+        grid.addWidget(self.remove_button, irow, 2)
+        grid.addWidget(self.remove_highlight_button, irow, 3)
+        irow += 1
 
         ok_cancel_box = QHBoxLayout()
         #ok_cancel_box.addWidget(self.apply_button)
@@ -157,6 +195,7 @@ class GroupsModify(PyDialog):
 
         vbox = QVBoxLayout()
         vbox.addWidget(self.table)
+        vbox.addLayout(hbox)
         vbox.addLayout(grid)
         vbox.addLayout(main_create_delete)
         vbox.addStretch()
@@ -164,6 +203,7 @@ class GroupsModify(PyDialog):
         self.setLayout(vbox)
 
     def on_set_name(self):
+        self.remove_highlight_actor()
         name = str(self.name_edit.text()).strip()
         if name not in self.keys:
             self.name_edit.setStyleSheet("QLineEdit{background: white;}")
@@ -176,13 +216,31 @@ class GroupsModify(PyDialog):
         elif name == self.keys[self.active_key]:
             self.name_edit.setStyleSheet("QLineEdit{background: white;}")
 
+    def on_pick_element(self):
+        self.add_edit.pick_style = 'single'
+        self.remove_edit.pick_style = 'single'
+
+    def on_pick_area(self):
+        self.add_edit.pick_style = 'area'
+        self.remove_edit.pick_style = 'area'
+
+
     def set_connections(self):
+        """creates the actions for the menu"""
+        self.pick_element_button.clicked.connect(self.on_pick_element)
+        self.pick_area_button.clicked.connect(self.on_pick_area)
+
         self.name_set.clicked.connect(self.on_set_name)
         self.name_button.clicked.connect(self.on_default_name)
         self.elements_button.clicked.connect(self.on_default_elements)
+        self.elements_highlight_button.clicked.connect(self.on_highlight_elements)
 
         self.add_button.clicked.connect(self.on_add)
+        self.add_highlight_button.clicked.connect(self.on_highlight_add)
+
         self.remove_button.clicked.connect(self.on_remove)
+        self.remove_highlight_button.clicked.connect(self.on_highlight_remove)
+
         self.table.itemClicked.connect(self.on_update_active_key)
         self.ok_button.clicked.connect(self.on_ok)
 
@@ -191,6 +249,8 @@ class GroupsModify(PyDialog):
         self.delete_group_button.clicked.connect(self.on_delete_group)
 
     def on_create_group(self):
+        self.remove_highlight_actor()
+
         irow = self.nrows
         new_key = 'Group %s' % irow
         while new_key in self.keys:
@@ -219,7 +279,8 @@ class GroupsModify(PyDialog):
         #make the new group the default
         self.active_key = self.nrows - 1
 
-        self.keys = [group.name for key, group in sorted(iteritems(self.out_data)) if isinstance(key, int)]
+        self.keys = [group.name for key, group in sorted(self.out_data.items())
+                     if isinstance(key, int)]
         self.recreate_table()
 
     def recreate_table(self):
@@ -239,13 +300,14 @@ class GroupsModify(PyDialog):
         self._update_active_key_by_name(name)
 
     def on_delete_group(self):
+        self.remove_highlight_actor()
         if self.active_key == 0:
             return
 
         #self.deleted_groups.add(self.imain)
         items = {}
         j = 0
-        for i, key in sorted(iteritems(self.out_data)):
+        for i, key in sorted(self.out_data.items()):
             if isinstance(i, int):
                 continue
             if i != self.active_key:
@@ -258,7 +320,7 @@ class GroupsModify(PyDialog):
             self.imain = max(0, self.imain - 1)
         self.active_key = max(0, self.active_key - 1)
         self.nrows -= 1
-        self.keys = [group.name for key, group in sorted(iteritems(items))]
+        self.keys = [group.name for key, group in sorted(items.items())]
 
         self.recreate_table()
 
@@ -291,15 +353,65 @@ class GroupsModify(PyDialog):
         group = self.out_data[self.imain]
         if self._default_name == group.name and self.win_parent is not None:
             # we're not testing the menu
-            self.win_parent.post_group(group)
+            self.win_parent.post_group(group, update_groups=True)
 
     def closeEvent(self, event):
+        """closes the window"""
+        self.remove_highlight_actor()
         self.out_data['close'] = True
         event.accept()
 
+    def remove_highlight_actor(self):
+        """removes the highlighted actor"""
+        gui = self.win_parent
+        remove_actors_from_gui(gui, self.actors, render=True)
+        self.actors = []
+
+    def on_highlight(self, nids=None, eids=None):
+        """highlights the nodes"""
+        gui = self.win_parent
+        unused_name = self.keys[self.active_key]
+
+        if gui is not None:
+            self.remove_highlight_actor()
+            ## TODO: super strange; doesn't work...
+            mouse_actions = gui.mouse_actions
+            grid = mouse_actions.get_grid_selected(self.model_name)
+            #all_nodes = mouse_actions.node_ids
+            all_elements = mouse_actions.element_ids
+
+            actors = create_highlighted_actors(gui, grid,
+                                               all_nodes=None, nodes=nids,
+                                               all_elements=all_elements, elements=eids,
+                                               add_actors=False)
+            if actors:
+                add_actors_to_gui(gui, actors, render=True)
+                self.actors = actors
+
+    def on_highlight_elements(self):
+        """highlights the active elements"""
+        self.on_highlight(eids=self.eids)
+
+    def on_highlight_add(self):
+        """highlights the elements to add"""
+        eids, is_valid = check_patran_syntax(self.add_edit, pound=self.elements_pound)
+        if not is_valid:
+            #self.add_edit.setStyleSheet("QLineEdit{background: red;}")
+            return
+        self.on_highlight(eids=eids)
+
+    def on_highlight_remove(self):
+        """highlights the elements to remove"""
+        eids, is_valid = check_patran_syntax(self.remove_edit)
+        if not is_valid:
+            #self.remove_edit.setStyleSheet("QLineEdit{background: red;}")
+            return
+        self.on_highlight(eids=eids)
+
     def on_add(self):
-        eids, is_valid = self.check_patran_syntax(self.add_edit, pound=self.elements_pound)
-        #adict, is_valid = self.check_patran_syntax_dict(self.add_edit)
+        self.remove_highlight_actor()
+        eids, is_valid = check_patran_syntax(self.add_edit, pound=self.elements_pound)
+        #adict, is_valid = check_patran_syntax_dict(self.add_edit)
         if not is_valid:
             #self.add_edit.setStyleSheet("QLineEdit{background: red;}")
             return
@@ -322,8 +434,9 @@ class GroupsModify(PyDialog):
         self.out_data[self.active_key].element_ids = self.eids
 
     def on_remove(self):
-        eids, is_valid = self.check_patran_syntax(self.remove_edit)
-        #adict, is_valid = self.check_patran_syntax_dict(self.remove_edit)
+        self.remove_highlight_actor()
+        eids, is_valid = check_patran_syntax(self.remove_edit)
+        #adict, is_valid = check_patran_syntax_dict(self.remove_edit)
         if not is_valid:
             #self.remove_edit.setStyleSheet("QLineEdit{background: red;}")
             return
@@ -338,11 +451,13 @@ class GroupsModify(PyDialog):
         self.on_update_main()
 
     def on_default_name(self):
+        self.remove_highlight_actor()
         name = str(self._default_name)
         self.name_edit.setText(name)
         self.name_edit.setStyleSheet("QLineEdit{background: white;}")
 
     def on_default_elements(self):
+        self.remove_highlight_actor()
         element_str = str(self._default_elements)
         self.elements_edit.setText(element_str)
         self.elements_edit.setStyleSheet("QLineEdit{background: white;}")
@@ -374,10 +489,10 @@ class GroupsModify(PyDialog):
 
     def on_validate(self):
         name, flag0 = self.check_name(self.name_edit)
-        elements, flag1 = self.check_patran_syntax(self.elements_edit,
-                                                   pound=self.elements_pound)
-        #coords_value, flag2 = self.check_patran_syntax(self.coords_edit,
-                                                       #pound=self.coords_pound)
+        unused_elements, flag1 = check_patran_syntax(
+            self.elements_edit, pound=self.elements_pound)
+        #coords_value, flag2 = check_patran_syntax(
+            #self.coords_edit, pound=self.coords_pound)
 
         if all([flag0, flag1]):
             self._default_name = name
@@ -400,6 +515,7 @@ class GroupsModify(PyDialog):
             #self.destroy()
 
     def on_cancel(self):
+        self.remove_highlight_actor()
         self.out_data['close'] = True
         self.close()
 
@@ -429,42 +545,37 @@ class GroupsModify(PyDialog):
         self._apply_cids_eids()
 
         self.set_as_main_button.setEnabled(True)
+
         if name in ['main', 'anti-main']:
-            self.name.setEnabled(False)
-            self.name_set.setEnabled(False)
-            self.name_edit.setEnabled(False)
-            self.name_button.setEnabled(False)
-            self.elements.setEnabled(False)
-            self.elements_button.setEnabled(False)
+            enabled = False
             self.elements_edit.setEnabled(False)
-            self.add.setEnabled(False)
-            self.add_button.setEnabled(False)
-            self.add_edit.setEnabled(False)
-            self.remove.setEnabled(False)
-            self.remove_button.setEnabled(False)
-            self.remove_edit.setEnabled(False)
-            self.delete_group_button.setEnabled(False)
             if name == 'anti-main':
                 self.set_as_main_button.setEnabled(False)
             #self.apply_button.setEnabled(False)
             #self.ok_button.setEnabled(False)
         else:
-            self.name.setEnabled(True)
-            self.name_set.setEnabled(True)
-            self.name_edit.setEnabled(True)
-            self.name_button.setEnabled(True)
-            self.elements.setEnabled(True)
-            self.elements_button.setEnabled(True)
-
-            self.add.setEnabled(True)
-            self.add_button.setEnabled(True)
-            self.add_edit.setEnabled(True)
-            self.remove.setEnabled(True)
-            self.remove_button.setEnabled(True)
-            self.remove_edit.setEnabled(True)
-            self.delete_group_button.setEnabled(True)
+            enabled = True
+            self.elements_highlight_button.setEnabled(True)
+            self.add_label.setEnabled(True)
+            self.add_highlight_button.setEnabled(True)
+            self.remove_highlight_button.setEnabled(True)
             #self.apply_button.setEnabled(True)
             #self.ok_button.setEnabled(True)
+
+        self.name_label.setEnabled(enabled)
+        self.name_set.setEnabled(enabled)
+        self.name_edit.setEnabled(enabled)
+        self.name_button.setEnabled(enabled)
+        self.elements_label.setEnabled(enabled)
+        self.elements_button.setEnabled(enabled)
+        self.add_button.setEnabled(enabled)
+        self.add_edit.setEnabled(enabled)
+
+        self.remove_label.setEnabled(enabled)
+        self.remove_button.setEnabled(enabled)
+        self.remove_edit.setEnabled(enabled)
+        self.delete_group_button.setEnabled(enabled)
+
         # TODO: call default
         #self.elements_edit # obj.eids
 
@@ -506,6 +617,9 @@ def main(): # pragma: no cover
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    import os
+    os.environ['QT_API'] = 'pyside'
+    #os.environ['QT_API'] = 'pyqt5'
 
     import sys
     # Someone is launching this directly
@@ -514,6 +628,7 @@ def main(): # pragma: no cover
     #The Main window
 
     data = {
+        'font_size' : 8,
         0 : Group(name='main', element_str='1:#', elements_pound='103', editable=False),
         1 : Group(name='wing', element_str='1:10', elements_pound='103', editable=True),
         2 : Group(name='fuselage1', element_str='50:60', elements_pound='103', editable=True),
@@ -531,7 +646,7 @@ def main(): # pragma: no cover
         14 : Group(name='fuselage13', element_str='50:60', elements_pound='103', editable=True),
         15 : Group(name='fuselage14', element_str='50:60', elements_pound='103', editable=True),
     }
-    main_window = GroupsModify(data)
+    main_window = GroupsModify(data, win_parent=None, group_active='main')
     main_window.show()
     # Enter the main loop
     app.exec_()

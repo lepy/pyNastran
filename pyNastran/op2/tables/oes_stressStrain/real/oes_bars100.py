@@ -1,16 +1,12 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from itertools import count
-from six import iteritems, integer_types
+from typing import List
 
 import numpy as np
 from numpy import zeros, searchsorted
+from pyNastran.utils.numpy_utils import integer_types
+
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
 
 class RealBar10NodesArray(OES_Object):
@@ -24,24 +20,12 @@ class RealBar10NodesArray(OES_Object):
         self.nelements = 0  # result specific
         self.nnodes = None
 
-        if is_sort1:
-            if dt is not None:
-                #self.add = self.add_sort1
-                self.add_new_eid = self.add_new_eid_sort1
-                #self.addNewNode = self.addNewNodeSort1
-        else:
-            raise NotImplementedError('SORT2')
-            #assert dt is not None
-            #self.add = self.add_sort2
-            #self.add_new_eid = self.add_new_eid_sort2
-            #self.addNewNode = self.addNewNodeSort2
-
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
     def _reset_indices(self):
@@ -57,11 +41,8 @@ class RealBar10NodesArray(OES_Object):
     def build(self):
         """sizes the vectorized attributes of the RealBar10NodesArray"""
         #print("self.ielement =", self.ielement)
-        # print('RealBar10NodesArray isubcase=%s ntimes=%s nelements=%s ntotal=%s' % (
+         #print('RealBar10NodesArray isubcase=%s ntimes=%s nelements=%s ntotal=%s' % (
             # self.isubcase, self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -87,27 +68,83 @@ class RealBar10NodesArray(OES_Object):
         dtype = 'float32'
         if isinstance(self.nonlinear_factor, integer_types):
             dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.ntotal, dtype='int32')
+
+        _times = zeros(self.ntimes, dtype=dtype)
+        element = zeros(self.ntotal, dtype='int32')
 
         #[sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS]
-        self.data = zeros((self.ntimes, self.ntotal, 9), dtype='float32')
+        data = zeros((self.ntimes, self.ntotal, 9), dtype='float32')
+
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element = group.create_dataset('element', data=element)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element = element
+            self.data = data
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
         headers = self.get_headers()
-        if self.nonlinear_factor is not None:
+        if self.nonlinear_factor not in (None, np.nan):
+            #Time                      0.0           0.5           1.0
+            #ElementID Item
+            #11        sd     0.000000e+00  0.000000e+00  0.000000e+00
+            #          sxc    0.000000e+00  1.000876e-01  2.200609e-01
+            #          sxd    0.000000e+00 -1.000876e-01 -2.200609e-01
+            #          sxe    0.000000e+00  1.000876e-01  2.200609e-01
+            #          sxf    0.000000e+00 -1.000876e-01 -2.200609e-01
+            #          axial  1.000000e-03 -5.566661e-05  4.833280e-05
+            #          smax   1.000000e-03  1.000319e-01  2.201092e-01
+            #          smin   1.000000e-03 -1.001432e-01 -2.200126e-01
+            #          MS     1.401298e-45  1.401298e-45  1.401298e-45
+            #          sd     5.000000e-01  5.000000e-01  5.000000e-01
             column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values,
-                                       major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'Item']
+            data_frame = self._build_pandas_transient_elements(
+                column_values, column_names,
+                headers, self.element, self.data)
         else:
-            self.data_frame = pd.Panel(self.data, major_axis=self.element,
-                                       minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'Item']
+            # >=25.0
+            #Static      sd  sxc  sxd  sxe  sxf     axial      smax      smin            MS
+            #ElementID
+            #10         0.0  0.0  0.0  0.0  0.0  0.003300  0.003300  0.003300  1.401298e-45
+            #10         1.0  0.0  0.0  0.0  0.0 -0.000033 -0.000033 -0.000033  1.401298e-45
+            #
+            # <=24.2
+            #ElementID Item
+            #10        sd     0.000000e+00
+                #sxc    0.000000e+00
+                #sxd    0.000000e+00
+                #sxe    0.000000e+00
+                #sxf    0.000000e+00
+                #axial  3.300000e-03
+                #smax   3.300000e-03
+                #smin   3.300000e-03
+                #MS     1.401298e-45
+                #sd     1.000000e+00
+                #sxc    0.000000e+00
+                #sxd    0.000000e+00
+                #sxe    0.000000e+00
+                #sxf    0.000000e+00
+                #axial -3.333333e-05
+                #smax  -3.333333e-05
+                #smin  -3.333333e-05
+                #MS     1.401298e-45
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=self.element)
+            data_frame.index.name = 'ElementID'
+            data_frame.columns.names = ['Static']
+            #data_frame = pd.Panel(self.data, major_axis=self.element,
+                                  #minor_axis=headers).to_frame()
+            #data_frame.columns.names = ['Static']
+            #data_frame.index.names = ['ElementID', 'Item']
+        self.data_frame = data_frame
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -140,20 +177,16 @@ class RealBar10NodesArray(OES_Object):
                 raise ValueError(msg)
         return True
 
-    def add_new_eid(self, eType, dt, eid, sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS):
-        self.add_new_eid_sort1(eType, dt, eid,
-                               sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS)
-
-    def add_new_eid_sort1(self, eType, dt, eid,
+    def add_new_eid_sort1(self, etype, dt, eid,
                           sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS):
         self._times[self.itime] = dt
-        # print('isubcase=%s itotal=%s ieid=%s eid=%s' % (self.isubcase, self.itotal, self.ielement, eid))
+        #print('isubcase=%s itotal=%s ieid=%s eid=%s' % (self.isubcase, self.itotal, self.ielement, eid))
         self.element[self.itotal] = eid
         self.data[self.itime, self.itotal, :] = [sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS]
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -169,7 +202,7 @@ class RealBar10NodesArray(OES_Object):
         nelements = self.ntotal // self.nnodes  # // 2
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i nnodes_per_element=%i ntotal=%i\n'
                        % (self.__class__.__name__, ntimes, nelements, nnodes, ntotal))
             ntimes_word = 'ntimes'
@@ -241,7 +274,7 @@ class RealBar10NodesArray(OES_Object):
             f06_file.write(page_stamp % page_num)
             page_num += 1
 
-        if self.nonlinear_factor is None:
+        if self.nonlinear_factor in (None, np.nan):
             page_num -= 1
         return page_num
 
@@ -250,7 +283,7 @@ class RealBar10NodesStressArray(RealBar10NodesArray, StressObject):
         RealBar10NodesArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         #if self.is_fiber_distance:
             #fiber_dist = 'fiber_distance'
         #else:
@@ -278,7 +311,7 @@ class RealBar10NodesStrainArray(RealBar10NodesArray, StrainObject):
         RealBar10NodesArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         #if self.is_fiber_distance:
             #fiber_dist = 'fiber_distance'
         #else:

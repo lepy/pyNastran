@@ -22,18 +22,15 @@ All aero cards are defined in this file.  This includes:
  * MNTPNT1
 
 All cards are BaseCard objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from itertools import count
 import math
 from typing import List, Any
-from six.moves import zip, range
-from six import string_types
 
 import numpy as np
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8, print_float_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.cards.base_card import BaseCard, expand_thru
@@ -42,6 +39,8 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     string_or_blank, integer_or_string, double_string_or_blank,
     interpret_value, parse_components)
 from pyNastran.bdf.cards.utils import wipe_empty_fields
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class AECOMP(BaseCard):
@@ -53,7 +52,7 @@ class AECOMP(BaseCard):
     +========+=======+==========+=======+=======+=======+=======+=======+=======+
     | AECOMP | NAME  | LISTTYPE | LIST1 | LIST2 | LIST3 | LIST4 | LIST5 | LIST6 |
     +--------+-------+----------+-------+-------+-------+-------+-------+-------+
-    |        | LIST7 |  -etc.-  |       |       |       |       |       |       |
+    |        | LIST7 |   etc.   |       |       |       |       |       |       |
     +--------+-------+----------+-------+-------+-------+-------+-------+-------+
 
     +--------+-------+----------+-------+-------+-------+-------+-------+-------+
@@ -152,8 +151,7 @@ class AECOMP(BaseCard):
         list_fields = ['AECOMP', self.name, self.list_type] + self.lists
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
-        # (int, bool) -> str
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -166,7 +164,7 @@ class AEFACT(BaseCard):
     +========+=====+====+========+=====+====+====+====+====+
     | AEFACT | SID | D1 |   D2   | D3  | D4 | D5 | D6 | D7 |
     +--------+-----+----+--------+-----+----+----+----+----+
-    |        | D8  | D9 | -etc.- |     |    |    |    |    |
+    |        | D8  | D9 |  etc.  |     |    |    |    |    |
     +--------+-----+----+--------+-----+----+----+----+----+
     | AEFACT | 97  |.3  |  0.7   | 1.0 |    |    |    |    |
     +--------+-----+----+--------+-----+----+----+----+----+
@@ -235,8 +233,7 @@ class AEFACT(BaseCard):
         list_fields = ['AEFACT', self.sid] + list(self.factors)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
-        # (int, bool) -> str
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         The writer method used by BDF.write_card()
 
@@ -297,7 +294,7 @@ class AELINK(BaseCard):
         #: linking coefficient (real)
         self.Cis = Cis
 
-        if isinstance(aelink_id, string_types):
+        if isinstance(aelink_id, str):
             if aelink_id != 'ALWAYS':
                 raise RuntimeError("The only valid ID that is a string is 'ALWAYS'")
             aelink_id = 0
@@ -351,8 +348,7 @@ class AELINK(BaseCard):
             list_fields += [ivar, ival]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
-        # (int, bool) -> str
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         The writer method used by BDF.write_card()
 
@@ -382,8 +378,8 @@ class AELIST(BaseCard):
     |         | 1202 |      |      |      |      |      |      |      |
     +---------+------+------+------+------+------+------+------+------+
 
-    Remarks
-    -------
+    Notes
+    -----
     1. These entries are referenced by the AESURF entry.
     2. When the THRU option is used, all intermediate grid points must exist.
        The word THRU may not appear in field 3 or 9 (2 or 9 for continuations).
@@ -446,7 +442,7 @@ class AELIST(BaseCard):
         list_fields = ['AELIST', self.sid] + self.elements
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -487,7 +483,7 @@ class AEPARM(BaseCard):
         """
         if comment:
             self.comment = comment
-        self.id = aeparm_id
+        self.aeparm_id = aeparm_id
         self.label = label
         self.units = units
 
@@ -538,10 +534,10 @@ class AEPARM(BaseCard):
         fields : List[int/float/str]
             the fields that define the card
         """
-        list_fields = ['AEPARM', self.id, self.label, self.units]
+        list_fields = ['AEPARM', self.aeparm_id, self.label, self.units]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -618,7 +614,7 @@ class AESTAT(BaseCard):
         list_fields = ['AESTAT', self.aestat_id, self.label]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -771,7 +767,7 @@ class AESURF(BaseCard):
                       crefc, crefs, pllim, pulim, hmllim, hmulim,
                       tqllim, tqulim, comment=comment)
 
-#    def cross_reference(self, model):
+#    def cross_reference(self, model: BDF) -> None:
 #        """
 #        Cross links the card so referenced cards can be extracted directly
 #
@@ -836,7 +832,7 @@ class AESURF(BaseCard):
                        self.tqulim]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         Writes the card with the specified width and precision
 
@@ -939,7 +935,7 @@ class AESURFS(BaseCard):  # not integrated
                        self.list2]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -1152,7 +1148,7 @@ class AERO(Aero):
                        self.rho_ref, sym_xz, sym_xy]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         Writes the card with the specified width and precision
 
@@ -1338,7 +1334,7 @@ class AEROS(Aero):
                        self.bref, self.sref, sym_xz, sym_xy]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -1446,7 +1442,7 @@ class CSSCHD(Aero):
                        self.lmach, self.lschd]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -1981,7 +1977,7 @@ class CAERO1(BaseCard):
                        [self.x12] + list(self.p4) + [self.x43])
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -2395,7 +2391,7 @@ class CAERO2(BaseCard):
                        [self.x12])
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -2481,7 +2477,7 @@ class CAERO3(BaseCard):
         return CAERO3(eid, pid, list_w, p1, x12, p4, x43,
                       cp=cp, list_c1=list_c1, list_c2=list_c2, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -2499,7 +2495,7 @@ class CAERO3(BaseCard):
         #self.list_c1 = model.AEFact(self.list_c1, msg=msg) # not added
         #self.list_c2 = model.AEFact(self.list_c2, msg=msg) # not added
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.pid = self.Pid()
         self.cp = self.Cp()
         self.pid_ref = None
@@ -2544,7 +2540,7 @@ class CAERO3(BaseCard):
                        list(self.p4) + [self.x43])
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -2701,7 +2697,7 @@ class CAERO4(BaseCard):
                        list(self.p4) + [self.x43])
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -2925,7 +2921,7 @@ class CAERO5(BaseCard):
                        list(self.p4) + [self.x43])
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -3084,7 +3080,7 @@ class PAERO5(BaseCard):
     def ltaus_id(self):
         return self.ltaus if isinstance(self.ltaus, integer_types) else self.ltaus_ref.aid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -3099,7 +3095,7 @@ class PAERO5(BaseCard):
         self.ltaus_ref = self.ltaus
         self.lxis_ref = self.lxis
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.lxis = self.lxis_id
         self.ltaus = self.ltaus_id
         del self.ltaus_ref, self.lxis_ref
@@ -3109,7 +3105,7 @@ class PAERO5(BaseCard):
                        self.lxis_id, self.ntaus, self.ltaus_id] + list(self.caoci)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -3204,17 +3200,17 @@ class DIVERG(BaseCard):
             j += 1
         return DIVERG(sid, nroots, machs, comment=comment)
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #pass
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
         list_fields = ['DIVERG', self.sid, self.nroots] + list(self.machs)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -3284,8 +3280,8 @@ class FLFACT(BaseCard):
         #self.nf = nf
         #self.fmid = fmid
 
-        # the dumb string_types thing is because we also get floats
-        if len(factors) > 1 and isinstance(factors[1], string_types) and factors[1] == 'THRU':
+        # the dumb str check is because we also get floats
+        if len(factors) > 1 and isinstance(factors[1], str) and factors[1] == 'THRU':
             msg = 'embedded THRUs not supported yet on FLFACT card\n'
             nfactors = len(factors)
             if nfactors == 4:
@@ -3328,7 +3324,7 @@ class FLFACT(BaseCard):
             assert len(card) == 3, 'len(FLFACT card)=%s; card=%s' % (len(card), card)
         elif isinstance(field3, float):
             factors = fields(double, card, 'factors', i=2, j=len(card))
-        elif isinstance(field3, string_types) and field3 == 'THRU':
+        elif isinstance(field3, str) and field3 == 'THRU':
             f1 = double(card, 2, 'f1')
             fnf = double(card, 4, 'fnf')
             nf = integer(card, 5, 'nf')
@@ -3352,7 +3348,7 @@ class FLFACT(BaseCard):
     def min(self):
         return self.factors.min()
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
@@ -3367,7 +3363,7 @@ class FLFACT(BaseCard):
         list_fields = ['FLFACT', self.sid] + list(self.factors)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -3582,7 +3578,7 @@ class FLUTTER(BaseCard):
                        imethod, nvalue, omax,
                        epsilon, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -3636,7 +3632,7 @@ class FLUTTER(BaseCard):
         #          self.reduced_freq_velocity, imethod, nvalue, self.epsilon]
         #return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -3726,7 +3722,7 @@ class GUST(BaseCard):
         #angle = self.wg*self.t*(t-(x-self.x0)/self.V) # T is the tabular
         #return angle
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
     def raw_fields(self):
@@ -3741,7 +3737,7 @@ class GUST(BaseCard):
         list_fields = ['GUST', self.sid, self.dload, self.wg, self.x0, self.V]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -3811,7 +3807,7 @@ class MKAERO1(BaseCard):
         reduced_freqs = wipe_empty_fields(reduced_freqs)
         return MKAERO1(machs, reduced_freqs, comment=comment)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
     def addFreqs(self, mkaero):
@@ -3845,7 +3841,7 @@ class MKAERO1(BaseCard):
         list_fields = ['MKAERO1'] + machs + freqs
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         nmachs = len(self.machs)
         nreduced_freqs = len(self.reduced_freqs)
         if nmachs > 8 or nreduced_freqs > 8:
@@ -3950,7 +3946,7 @@ class MKAERO2(BaseCard):
             reduced_freqs.append(double(card, i + 1, 'rFreq'))
         return MKAERO2(machs, reduced_freqs, comment=comment)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
     def addFreqs(self, mkaero):
@@ -3974,7 +3970,7 @@ class MKAERO2(BaseCard):
             list_fields += [mach, rfreq]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         cards = []
         list_fields = ['MKAERO2']
         nvalues = 0
@@ -4073,7 +4069,7 @@ class MONPNT1(BaseCard):
         cd = integer_or_blank(card, 15, 'cd', cp)
         return MONPNT1(name, label, axes, comp, xyz, cp=cp, cd=cd, comment=comment)
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
@@ -4082,7 +4078,7 @@ class MONPNT1(BaseCard):
             self.cp,] + list(self.xyz) + [self.cd]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         cp = self.cp
         x, y, z = self.xyz
         cd = self.cd
@@ -4129,7 +4125,7 @@ class MONPNT2(BaseCard):
         eid = integer_or_blank(card, 12, 'eid')
         return MONPNT2(name, label, table, Type, nddl_item, eid, comment=comment)
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
@@ -4138,7 +4134,7 @@ class MONPNT2(BaseCard):
             self.table, self.Type, self.nddl_item, self.eid]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = 'MONPNT2 %-8s%s\n' % (self.name, self.label)
         msg += ('        %-8s%-8s%-8s%-8s\n' % (
             self.table, self.Type, self.nddl_item, self.eid
@@ -4194,7 +4190,7 @@ class MONPNT3(BaseCard):
         return MONPNT3(name, label, axes, grid_set, elem_set, xyz,
                        cp=cp, cd=cd, xflag=xflag, comment=comment)
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
@@ -4204,7 +4200,7 @@ class MONPNT3(BaseCard):
             ] + list(self.xyz) + [self.xflag, self.cd]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         cp = self.cp
         cd = self.cd
         if cp == cd:
@@ -4316,13 +4312,13 @@ class PAERO1(BaseCard):
                 #pass
         return PAERO1(pid, Bi, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def safe_cross_reference(self, model):
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
     def Bodies(self):
@@ -4340,7 +4336,7 @@ class PAERO1(BaseCard):
         list_fields = ['PAERO1', self.pid] + self.Bi
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -4547,7 +4543,7 @@ class PAERO2(BaseCard):
             list_fields += [thi, thn]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -4690,10 +4686,10 @@ class PAERO3(BaseCard):
             j += 1
         return PAERO3(pid, nbox, ncontrol_surfaces, x, y, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
     def raw_fields(self):
@@ -4710,7 +4706,7 @@ class PAERO3(BaseCard):
             list_fields += [x, y]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -4834,10 +4830,10 @@ class PAERO4(BaseCard):
         return PAERO4(pid, docs, caocs, gapocs,
                       cla=cla, lcla=lcla, circ=circ, lcirc=lcirc, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
     def raw_fields(self):
@@ -4854,7 +4850,7 @@ class PAERO4(BaseCard):
             list_fields += [doc, caoc, gapoc]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -5050,7 +5046,7 @@ class SPLINE1(Spline):
         list_fields = wipe_empty_fields(list_fields)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -5219,7 +5215,7 @@ class SPLINE2(Spline):
                        None, usage]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -5409,7 +5405,7 @@ class SPLINE3(Spline):
             return self.setg
         return self.setg_ref.sid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         msg = ' which is required by SPLINE3 eid=%s' % self.eid
         self.caero = model.CAero(self.CAero(), msg=msg)
         self.caero_ref = self.caero
@@ -5424,7 +5420,7 @@ class SPLINE3(Spline):
             msg += str(self.setg_ref)
             raise RuntimeError(msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.caero = self.CAero()
         self.setg = self.Set()
         del self.caero_ref, self.setg_ref
@@ -5592,7 +5588,7 @@ class SPLINE4(Spline):
     def aero_element_ids(self):
         return self.aelist_ref.elements
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -5618,7 +5614,7 @@ class SPLINE4(Spline):
             msg += str(self.setg_ref)
             raise RuntimeError(msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.caero = self.CAero()
         self.setg = self.Set()
         self.aelist = self.AEList()
@@ -5650,7 +5646,7 @@ class SPLINE4(Spline):
         list_fields = wipe_empty_fields(list_fields)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -5762,7 +5758,7 @@ class SPLINE5(Spline):
             return self.setg
         return self.setg_ref.sid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -5789,7 +5785,7 @@ class SPLINE5(Spline):
             msg += str(self.setg_ref)
             raise RuntimeError(msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.cid = self.Cid()
         self.caero = self.CAero()
         self.setg = self.Set()
@@ -5818,7 +5814,7 @@ class SPLINE5(Spline):
                        None, usage, self.method, None, self.ftype, self.rcore]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -5954,15 +5950,15 @@ class TRIM(BaseCard):
 
         .. warning ::  This probably gets AELINKs/AEPARMs/AESURFSs wrong.
 
-        The TRIM equality
-        -----------------
+        Notes
+        -----
+        **The TRIM equality**
         ndelta = (naestat + naesurf + naeparm) - (
                - (ntrim + ntrim_aesurf? + naelink + nsuport_dofs + nsuport1_dofs)
         ndelta = 0
         ntrim_aesurf is not included, but it might exist...
 
-        Steps to a TRIM analysis
-        ------------------------
+        **Steps to a TRIM analysis**
         1.  Define the number of independent control surfaces (naesurf)
             Make an AESURF for each.  Dual link the AESURFs if you can
             to avoid needing an AELINK (e.g., +roll is left aileron down,
@@ -6007,8 +6003,7 @@ class TRIM(BaseCard):
             certain DOFs (e.g., z-motion).  Add enough to satisfy the TRIM
             equality.
 
-        Doesn't Consider
-        ----------------
+        **Doesn't Consider**
          - AELINK
          - AEPARM
          - AESURFS
@@ -6111,7 +6106,7 @@ class TRIM(BaseCard):
                     naestat, naesurf, naeparm, ntrim, ntrim_aesurf, naelink, nsuport_dofs, nsuport1_dofs)
                 raise RuntimeError(msg)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
         #self.suport = model.suport
         #self.suport1 = model.suport1
@@ -6183,6 +6178,6 @@ class TRIM(BaseCard):
             list_fields += [None, None, self.aeqr]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)

@@ -1,18 +1,13 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types
-from six.moves import range, zip
+from itertools import count
+from typing import List
+
 import numpy as np
 from numpy import zeros
-ints = (int, np.int32)
 
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
 
 class RealBeamArray(OES_Object):
@@ -21,7 +16,7 @@ class RealBeamArray(OES_Object):
      - RealBeamStressArray
      - RealBeamStrainArray
     """
-    def __init__(self, data_code, is_sort1, isubcase, dt):
+    def __init__(self, data_code, is_sort1, isubcase, unused_dt):
         OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
@@ -31,14 +26,12 @@ class RealBeamArray(OES_Object):
         self.nelements = 0  # result specific
         self.nnodes = None
 
-        if is_sort1:
-            pass
-            #if dt is not None:
-                #self.add = self.add_sort1
-                #self.add_new_eid = self.add_new_eid_sort1
-                #self.addNewNode = self.addNewNodeSort1
-        else:
-            raise NotImplementedError('SORT2')
+        self.data = None
+        self.element_node = None
+        self.xxb = None
+
+        #if not is_sort1:
+            #raise NotImplementedError('SORT2')
             #assert dt is not None
             #self.add = self.add_sort2
             #self.add_new_eid = self.add_new_eid_sort2
@@ -66,9 +59,6 @@ class RealBeamArray(OES_Object):
         """sizes the vectorized attributes of the RealBeamArray"""
         #print("self.ielement =", self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -95,13 +85,27 @@ class RealBeamArray(OES_Object):
         dtype = 'float32'
         if isinstance(self.nonlinear_factor, integer_types):
             dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element_node = zeros((self.ntotal, 2), dtype='int32')
+        _times = zeros(self.ntimes, dtype=dtype)
+        element_node = zeros((self.ntotal, 2), dtype='int32')
 
         # sxc, sxd, sxe, sxf
         # smax, smin, MSt, MSc
-        self.xxb = zeros(self.ntotal, dtype='float32')
-        self.data = zeros((self.ntimes, self.ntotal, 8), dtype='float32')
+        xxb = zeros(self.ntotal, dtype='float32')
+        data = zeros((self.ntimes, self.ntotal, 8), dtype='float32')
+
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element_node = group.create_dataset('element_node', data=element_node)
+            self.xxb = group.create_dataset('xxb', data=xxb)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element_node = element_node
+            self.xxb = xxb
+            self.data = data
 
     def finalize(self):
         sd = self.data[0, :, 0].real
@@ -112,23 +116,34 @@ class RealBeamArray(OES_Object):
         #self.element = self.element[i]
         self.element_node = self.element_node[i, :]
         self.data = self.data[:, i, :]
+        self.xxb = self.xxb[i]
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+
         headers = self.get_headers()
         element_node = [self.element_node[:, 0], self.element_node[:, 1]]
-        if self.nonlinear_factor is not None:
+        if self.nonlinear_factor not in (None, np.nan):
             column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values,
-                                       major_axis=element_node, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+            data_frame = self._build_pandas_transient_element_node(
+                column_values, column_names,
+                headers, self.element_node, self.data)
+            #data_frame = pd.Panel(self.data, items=column_values,
+                                  #major_axis=element_node, minor_axis=headers).to_frame()
+            #data_frame.columns.names = column_names
+            #data_frame.index.names = ['ElementID', 'NodeID', 'Item']
         else:
-            self.data_frame = pd.Panel(self.data, major_axis=element_node,
-                                       minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+            # Static            sxc  sxd  sxe  sxf  smax  smin    MS_tension  MS_compression
+            # ElementID NodeID
+            # 12        22      0.0  0.0  0.0  0.0   0.0   0.0  1.401298e-45    1.401298e-45
+            #           26      0.0  0.0  0.0  0.0   0.0   0.0  1.401298e-45    1.401298e-45
+            index = pd.MultiIndex.from_arrays(self.element_node.T, names=['ElementID', 'NodeID'])
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=index)
+            data_frame.columns.names = ['Static']
+        self.data_frame = data_frame
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -139,7 +154,7 @@ class RealBeamArray(OES_Object):
             i = 0
             if self.is_sort1:
                 for itime in range(ntimes):
-                    for ieid, (eid, nid) in enumerate(self.element_node):
+                    for ieid, (eid, unused_nid) in enumerate(self.element_node):
                         t1 = self.data[itime, ieid, :]
                         t2 = table.data[itime, ieid, :]
                         (axial_stress1, equiv_stress1, total_strain1, eff_plastic_creep_strain1,
@@ -168,12 +183,11 @@ class RealBeamArray(OES_Object):
                 raise ValueError(msg)
         return True
 
-    def add_new_eid(self, dt, eid, out):
-        self.add_new_eid_sort1(dt, eid, out)
+    #def add_new_eid(self, dt, eid, grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc):
+        #self.add_new_eid_sort1(dt, eid, grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc)
 
-    def add_new_eid_sort1(self, dt, eid, out):
-        (grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc) = out
-        assert isinstance(eid, ints), eid
+    def add_new_eid_sort1(self, dt, eid, grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc):
+        assert isinstance(eid, integer_types), eid
         assert eid >= 0, eid
         self._times[self.itime] = dt
         self.element_node[self.itotal] = [eid, grid]
@@ -183,9 +197,9 @@ class RealBeamArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def add_sort1(self, dt, eid, out):
+    def add_sort1(self, unused_dt, eid, grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc):
         """unvectorized method for adding SORT1 transient data"""
-        (grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc) = out
+        #(grid, sd, sxc, sxd, sxe, sxf, smax, smin, mst, msc) = out
 
         self.element_node[self.itotal, :] = [eid, grid]
         self.xxb[self.itotal] = sd
@@ -193,7 +207,7 @@ class RealBeamArray(OES_Object):
                                                  smax, smin, mst, msc]
         self.itotal += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -209,7 +223,7 @@ class RealBeamArray(OES_Object):
         nelements = self.ntotal // self.nnodes  # // 2
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i nnodes_per_element=%i ntotal=%i\n'
                        % (self.__class__.__name__, ntimes, nelements, nnodes, ntotal))
             ntimes_word = 'ntimes'
@@ -252,6 +266,8 @@ class RealBeamArray(OES_Object):
         eids = self.element_node[:, 0]
         nids = self.element_node[:, 1]
         xxbs = self.xxb
+        assert len(eids) == len(nids)
+        assert len(eids) == len(xxbs)
         #print('CBEAM ntimes=%s ntotal=%s' % (ntimes, ntotal))
         for itime in range(ntimes):
             dt = self._times[itime]
@@ -266,11 +282,12 @@ class RealBeamArray(OES_Object):
             smins = self.data[itime, :, 5]
             smts = self.data[itime, :, 6]
             smcs = self.data[itime, :, 7]
+            assert len(eids) == len(sxcs)
 
             eid_old = None
             xxb_old = None
             for (eid, nid, xxb, sxc, sxd, sxe, sxf, smax, smin, smt, smc) in zip(
-                eids, nids, xxbs, sxcs, sxds, sxes, sxfs, smaxs, smins, smts, smcs):
+                    eids, nids, xxbs, sxcs, sxds, sxes, sxfs, smaxs, smins, smts, smcs):
                 if eid != eid_old:
                     f06_file.write('0  %8i\n' % eid)
                 if xxb == xxb_old:
@@ -289,9 +306,139 @@ class RealBeamArray(OES_Object):
             f06_file.write(page_stamp % page_num)
             page_num += 1
 
-        if self.nonlinear_factor is None:
+        if self.nonlinear_factor in (None, np.nan):
             page_num -= 1
         return page_num
+
+    def write_op2(self, op2, op2_ascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if itable == -1:
+            self._write_table_header(op2, op2_ascii, date)
+            itable = -3
+
+        #if isinstance(self.nonlinear_factor, float):
+            #op2_format = '%sif' % (7 * self.ntimes)
+            #raise NotImplementedError()
+        #else:
+            #op2_format = 'i21f'
+        #s = Struct(op2_format)
+
+        eids = self.element_node[:, 0]
+        nids = self.element_node[:, 1]
+        xxbs = self.xxb
+        #print(xxbs)
+
+        eids_device = eids * 10 + self.device_code
+        ueids = np.unique(eids)
+        #ieid = np.searchsorted(eids, ueids)
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        nelements = len(ueids)
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert self.ntimes == 1, self.ntimes
+
+        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+        #assert ntotal == 193, ntotal
+
+        if self.is_sort1:
+            struct1 = Struct(endian + b'2i 9f')
+            struct2 = Struct(endian + b'i 9f')
+        else:
+            raise NotImplementedError('SORT2')
+
+        op2_ascii.write('nelements=%i\n' % nelements)
+        for itime in range(self.ntimes):
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            #print('stress itable = %s' % itable)
+            itable -= 1
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+
+            sxcs = self.data[itime, :, 0]
+            sxds = self.data[itime, :, 1]
+            sxes = self.data[itime, :, 2]
+            sxfs = self.data[itime, :, 3]
+            smaxs = self.data[itime, :, 4]
+            smins = self.data[itime, :, 5]
+            smts = self.data[itime, :, 6]
+            smcs = self.data[itime, :, 7]
+
+            #eid_old = None
+            #xxb_old = None
+            icount = 0
+            nwide = 0
+            ielement = 0
+            #print('------------')
+            #print(self.element_node.shape, self.data.shape)
+            for (unused_i, xxb, sxc, sxd, sxe, sxf, smax, smin, smt, smc) in zip(
+                    count(), xxbs, sxcs, sxds, sxes, sxfs, smaxs, smins, smts, smcs):
+
+                if icount == 0:
+                    eid_device = eids_device[ielement]
+                    nid = nids[ielement]
+                    data = [eid_device, nid, xxb, sxc, sxd, sxe, sxf, smax, smin, smt, smc] # 11
+                    op2.write(struct1.pack(*data))
+                    ielement += 1
+                    icount = 1
+                elif xxb == 1.0:
+                    # 11 total nodes, with 1, 11 getting an nid; the other 9 being
+                    # xxb sections
+                    data = [0, 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+                    #print('***adding %s\n' % (10-icount))
+                    for unused_j in range(10 - icount):
+                        op2.write(struct2.pack(*data))
+                        nwide += len(data)
+
+                    eid_device2 = eids_device[ielement]
+                    assert eid_device == eid_device2
+                    nid = nids[ielement]
+                    data = [nid, xxb, sxc, sxd, sxe, sxf, smax, smin, smt, smc] # 11
+                    op2.write(struct2.pack(*data))
+                    ielement += 1
+                    icount = 0
+                else:
+                    data = [0, xxb, sxc, sxd, sxe, sxf, smax, smin, smt, smc]  # 10
+                    op2.write(struct2.pack(*data))
+                    icount += 1
+
+                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, str(data)))
+                nwide += len(data)
+
+            assert ntotal == nwide, 'ntotal=%s nwide=%s' % (ntotal, nwide)
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
 
 
 class RealNonlinearBeamArray(OES_Object):
@@ -333,9 +480,6 @@ class RealNonlinearBeamArray(OES_Object):
         """sizes the vectorized attributes of the RealNonlinearBeamArray"""
         #print("self.ielement =", self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -376,7 +520,7 @@ class RealNonlinearBeamArray(OES_Object):
         #self.xxb = zeros(self.ntotal, dtype='float32')
         self.data = zeros((self.ntimes, self.ntotal, 5), dtype='float32')
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -392,7 +536,7 @@ class RealNonlinearBeamArray(OES_Object):
         nelements = self.ntotal // self.nnodes  # // 2
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i nnodes_per_element=%i ntotal=%i\n'
                        % (self.__class__.__name__, ntimes, nelements, nnodes, ntotal))
             ntimes_word = 'ntimes'
@@ -411,20 +555,29 @@ class RealNonlinearBeamArray(OES_Object):
         msg += self.get_data_code()
         return msg
 
-    def add_new_eid_sort1(self, dt, eid, out):
-        assert isinstance(eid, ints), eid
-        assert eid >= 0, eid
+    def add_new_eid_sort1(self, dt, eid, grid_a,
+                          unused_ca, long_ca, eqs_ca, te_ca, eps_ca, ecs_ca,
+                          unused_da, long_da, eqs_da, te_da, eps_da, ecs_da,
+                          unused_ea, long_ea, eqs_ea, te_ea, eps_ea, ecs_ea,
+                          unused_fa, long_fa, eqs_fa, te_fa, eps_fa, ecs_fa,
+                          grid_b,
+                          unused_cb, long_cb, eqs_cb, te_cb, eps_cb, ecs_cb,
+                          unused_db, long_db, eqs_db, te_db, eps_db, ecs_db,
+                          unused_eb, long_eb, eqs_eb, te_eb, eps_eb, ecs_eb,
+                          unused_fb, long_fb, eqs_fb, te_fb, eps_fb, ecs_fb):
+        #assert eid >= 0, eid
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
-        (grid_a,
-         ca, long_ca, eqs_ca, te_ca, eps_ca, ecs_ca,
-         da, long_da, eqs_da, te_da, eps_da, ecs_da,
-         ea, long_ea, eqs_ea, te_ea, eps_ea, ecs_ea,
-         fa, long_fa, eqs_fa, te_fa, eps_fa, ecs_fa,
-         grid_b,
-         cb, long_cb, eqs_cb, te_cb, eps_cb, ecs_cb,
-         db, long_db, eqs_db, te_db, eps_db, ecs_db,
-         eb, long_eb, eqs_eb, te_eb, eps_eb, ecs_eb,
-         fb, long_fb, eqs_fb, te_fb, eps_fb, ecs_fb,) = out[1:]
+        #(grid_a,
+         #unused_ca, long_ca, eqs_ca, te_ca, eps_ca, ecs_ca,
+         #unused_da, long_da, eqs_da, te_da, eps_da, ecs_da,
+         #unused_ea, long_ea, eqs_ea, te_ea, eps_ea, ecs_ea,
+         #unused_fa, long_fa, eqs_fa, te_fa, eps_fa, ecs_fa,
+         #grid_b,
+         #unused_cb, long_cb, eqs_cb, te_cb, eps_cb, ecs_cb,
+         #unused_db, long_db, eqs_db, te_db, eps_db, ecs_db,
+         #unused_eb, long_eb, eqs_eb, te_eb, eps_eb, ecs_eb,
+         #unused_fb, long_fb, eqs_fb, te_fb, eps_fb, ecs_fb,) = out[1:]
 
         self.element_node[self.itotal] = [eid, grid_a, 0]
         self.element_node[self.itotal + 1] = [eid, grid_a, 1]
@@ -459,7 +612,7 @@ class RealNonlinearBeamArray(OES_Object):
         #ind.sort()
         #return ind
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -523,7 +676,6 @@ class RealNonlinearBeamArray(OES_Object):
             #'             ID       ID                                     STRESS                          PLASTIC/NLELAST       STRAIN\n',]
             #'0               1         1     C        1.738817E+03      1.738817E+03      5.796055E-05      0.0               0.0\n',
             #'                                D        1.229523E+03      1.229523E+03      4.098411E-05      0.0               0.0\n',
-            #eid_old = None
             for (eid, nid, loc, longi, eqs, te, eps, ecs) in zip(
                 eids, nids, locs, longs, eqss, tes, epss, ecss):
 
@@ -543,7 +695,7 @@ class RealNonlinearBeamArray(OES_Object):
             f06_file.write(page_stamp % page_num)
             page_num += 1
 
-        if self.nonlinear_factor is None:
+        if self.nonlinear_factor in (None, np.nan):
             page_num -= 1
         return page_num
 
@@ -554,7 +706,7 @@ class RealBeamStressArray(RealBeamArray, StressObject):
         RealBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = [
             #'grid', 'xxb',
             'sxc', 'sxd', 'sxe', 'sxf',
@@ -581,7 +733,7 @@ class RealBeamStrainArray(RealBeamArray, StrainObject):
         RealBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = [
             #'grid', 'xxb',
             'sxc', 'sxd', 'sxe', 'sxf',
@@ -608,7 +760,7 @@ class RealNonlinearBeamStressArray(RealNonlinearBeamArray, StressObject):
         RealNonlinearBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = [
             'longitudinal_stress', 'equivalent_stress',
             'total_strain', 'equivalent_plastic_strain', 'equivalent_creep_strain'

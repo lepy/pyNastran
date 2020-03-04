@@ -4,10 +4,7 @@ Defines the DEQATN class and sub-functions.
 
 The capitalization of the sub-functions is important.
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from copy import deepcopy
-from six import exec_
 
 import numpy as np
 from numpy import (
@@ -19,6 +16,8 @@ from numpy.linalg import norm  # type: ignore
 
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.cards.deqatn import lines_to_eqs
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 def pi(num):
     """weird way to multiply p by a number"""
@@ -223,7 +222,7 @@ class DEQATN(BaseCard):  # needs work...
             self.eqs, default_values, str(self))
         self.func_str = func_str
         self.func_name = func_name
-        exec_(func_str)
+        exec(func_str)
         #print(locals().keys())
         func = locals()[func_name]
         setattr(self, func_name, func)
@@ -231,7 +230,7 @@ class DEQATN(BaseCard):  # needs work...
         self.func = func
         self.nargs = nargs
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -247,7 +246,7 @@ class DEQATN(BaseCard):  # needs work...
         #self.dtable_ref = self.dtable
         self._setup_equation()
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         del self.model
         del self.func
         del self.f
@@ -274,7 +273,7 @@ class DEQATN(BaseCard):  # needs work...
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         #self.evaluate(1, 2)
         eqs = split_equations(self.eqs)
         equation_line0 = eqs[0]
@@ -369,7 +368,7 @@ def fortran_to_python_short(line, default_values):
     func_str = 'def func(args):\n'
     func_str += '    return %s(args)\n' % line.strip()
     d = {}
-    exec_(func_str, globals(), d)
+    exec(func_str, globals(), d)
     return d['func']
 
 def fortran_to_python(lines, default_values, comment=''):

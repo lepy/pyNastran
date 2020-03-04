@@ -1,6 +1,3 @@
-from __future__ import print_function
-from six import iteritems
-from six.moves import zip, range
 from itertools import count
 
 from pyNastran.bdf.bdf_interface.assign_type import (integer, integer_or_double, components_or_blank)
@@ -16,7 +13,7 @@ from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from numpy import array, zeros, unique, searchsorted, asarray, int64, where
 
 #RigidElement
-class RBE2(object):
+class RBE2:
     type = 'RBE2'
 
     def __init__(self, model):
@@ -78,7 +75,7 @@ class RBE2(object):
 
         Gmi = {}
         j = 0
-        for ii, gmi in iteritems(self.gmi):
+        for ii, gmi in self.gmi.items():
             #print(gmi)
             if ii in i:
                 Gmi[j] = gmi
@@ -104,7 +101,7 @@ class RBE2(object):
         #: Component numbers of the dependent degrees-of-freedom in the
         #: global coordinate system at grid points GMi. (Integers 1 through
         #: 6 with no embedded blanks.)
-        self.cm = zeros(ncards, '|S6')
+        self.cm = zeros(ncards, '|U6')
 
         #: Grid point identification numbers at which dependent
         #: degrees-of-freedom are assigned. (Integer > 0)

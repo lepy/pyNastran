@@ -1,5 +1,4 @@
-from six import iteritems
-from six.moves import StringIO
+from io import StringIO
 from collections import defaultdict
 #from itertools import count
 
@@ -23,12 +22,12 @@ def get_spc1_constraint(card):
     return constraint_id, dofs, node_ids
 
 
-class SPC1(object):
+class SPC1:
     """
     +------+-----+------+--------+--------+--------+--------+--------+-----+
     | SPC1 | SID |  C   |   G1   | G2     |   G3   |   G4   |   G5   | G6  |
     +------+-----+------+--------+--------+--------+--------+--------+-----+
-    |      | G7  |  G8  |   G9   | -etc.- |        |        |        |     |
+    |      | G7  |  G8  |   G9   |  etc.  |        |        |        |     |
     +------+-----+------+--------+--------+--------+--------+--------+-----+
 
     +------+-----+------+--------+--------+--------+--------+--------+-----+
@@ -74,7 +73,7 @@ class SPC1(object):
         #pass
 
     def build(self):
-        for comp, nodes_lists in iteritems(self.components):
+        for comp, nodes_lists in self.components.items():
             nodes2 = []
             for nodes in nodes_lists:
                 nodes2 += nodes
@@ -92,13 +91,13 @@ class SPC1(object):
         """
         nid_map = maps['node']
         components = {}
-        for dof, nids in iteritems(self.components):
+        for dof, nids in self.components.items():
             components[dof] = [nid_map[nid] for nid in nids]
         self.components = components
         # TODO: constraint_map...
 
     def write_card(self, bdf_file, size=8):
-        for comp, nodes in iteritems(self.components):
+        for comp, nodes in self.components.items():
             nodes = np.array(nodes, dtype='int32')
             nodes = np.unique(nodes)
             dnid = nodes.max() - nodes.min() + 1

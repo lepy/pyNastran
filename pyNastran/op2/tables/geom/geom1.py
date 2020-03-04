@@ -3,41 +3,39 @@ defines readers for BDF objects in the OP2 GEOM1/GEOM1S table
 """
 #pylint: disable=C0301,C0103,W0612,R0914,C0326
 from struct import Struct
-from six.moves import range
 import numpy as np
 
 from pyNastran.bdf.cards.nodes import GRID, POINT, SEQGP
+#from pyNastran.bdf.cards.parametric.geometry import FEFACE
+
 from pyNastran.bdf.cards.coordinate_systems import (
     CORD1R, CORD1C, CORD1S,
     CORD2R, CORD2C, CORD2S,
     CORD3G)
 from pyNastran.bdf.cards.elements.damper import CVISC
-from pyNastran.bdf.cards.elements.mass import CMASS2
+#from pyNastran.bdf.cards.elements.mass import CMASS2
 from pyNastran.op2.tables.geom.geom_common import GeomCommon
 
 class GEOM1(GeomCommon):
     """defines methods for reading op2 nodes/coords"""
 
-    def _add_node_object(self, node, allow_overwrites=False):
-        """GRDSET creates duplicate nodes...what about duplicate nodes?"""
-        key = node.nid
-        assert key > 0, 'nid=%s node=%s' % (key, node)
-        if key in self.nodes:
-            fields1 = self.nodes[key].raw_fields()
-            fields2 = node.raw_fields()
-            #grid, nid, cp, x1, x2, x3, cd, ps, seid
-            for i, (v1, v2) in enumerate(zip(fields1, fields2)):
-                if v1 != v2:
-                    self.log.info('i=%s v1=%r v2=%r fields1=%s\nfields2=%s' % (
-                        i, v1, v2, fields1, fields2))
-        else:
-            self._type_to_id_map[node.type].append(key)
-        self.nodes[key] = node
+    #def _add_node_object(self, node, allow_overwrites=False):
+        #"""GRDSET creates duplicate nodes...what about duplicate nodes?"""
+        #key = node.nid
+        #assert key > 0, 'nid=%s node=%s' % (key, node)
+        #if key in self.nodes:
+            #fields1 = self.nodes[key].raw_fields()
+            #fields2 = node.raw_fields()
+            ##grid, nid, cp, x1, x2, x3, cd, ps, seid
+            #for i, (v1, v2) in enumerate(zip(fields1, fields2)):
+                #if v1 != v2:
+                    #self.log.info('i=%s v1=%r v2=%r fields1=%s\nfields2=%s' % (
+                        #i, v1, v2, fields1, fields2))
+        #else:
+            #self._type_to_id_map[node.type].append(key)
+        #self.nodes[key] = node
 
     def _read_geom1_4(self, data, ndata):
-        #if data is None:
-            #return ndata
-        #self.show_ndata(140)
         return self._read_geom_4(self._geom1_map, data, ndata)
 
     def __init__(self):
@@ -62,21 +60,21 @@ class GEOM1(GeomCommon):
             (5501,  55, 297): ['CSUPEXT', self._read_fake],  # record 9
             (1627,  16, 463): ['EXTRN',   self._read_extrn],  # record 10
             (6101,  61, 388): ['FEEDGE',  self._read_feedge],  # record 11
-            (6601,  66, 392): ['GMCURVE', self._read_gmcurve],  # record 12
+            (6601,  66, 392): ['GMCURVE', self._read_gmcurv],  # record 12
             (6201,  62, 389): ['FEFACE',  self._read_feface],  # record 13
             (6001,  60, 377): ['POINT',   self._read_point],  # record 14
             (10101,101, 394): ['GMSURF',  self._read_gmsurf],  # record 15
             (6401,  64, 402): ['GMCORD',  self._read_gmcord],  # record 16
             # 17 - GRID  (above)
             (1527, 15, 466): ['SEBNDRY', self._read_fake],  # record 18
-            (1427, 14, 465): ['SEBULK',  self._read_fake],  # record 19
+            (1427, 14, 465): ['SEBULK',  self._read_sebulk],  # record 19 - superelements/see103q4.op2
             (427,   4, 453): ['SECONCT', self._read_fake],  # record 20
 
             (7902, 79, 302): ['SEELT',   self._read_fake],  # record 21
             (527,  72, 454): ['SEEXCLD', self._read_fake],  # record 22
-            (1027, 10, 459): ['SELABEL', self._read_fake],  # record 23
-            (827,   8, 457): ['SELOC',   self._read_fake],  # record 24
-            (927,   9, 458): ['SEMPLN',  self._read_fake],  # record 25
+            (1027, 10, 459): ['SELABEL', self._read_selabel],  # record 23 - superelements/see103q4.op2
+            (827,   8, 457): ['SELOC',   self._read_seloc],  # record 24 - superelements/see103q4.op2
+            (927,   9, 458): ['SEMPLN',  self._read_sempln],  # record 25 - superelements/see103q4.op2
             (1327, 13, 464): ['SENQSET', self._read_fake],  # record 26
             # 27 - SEQGP (above)
             (5401, 54, 305): ['SEQSEP',  self._read_fake],  # record 28
@@ -107,7 +105,7 @@ class GEOM1(GeomCommon):
         """
         struct_6i = Struct(self._endian + b'6i')
         nentries = (len(data) - n) // 24
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 24]  # 6*4
             out = struct_6i.unpack(edata)
             (cid, one, two, g1, g2, g3) = out
@@ -128,7 +126,7 @@ class GEOM1(GeomCommon):
         """
         struct_6i = Struct(self._endian + b'6i')
         nentries = (len(data) - n) // 24
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 24]  # 6*4
             out = struct_6i.unpack(edata)
             (cid, one1, one2, g1, g2, g3) = out
@@ -149,7 +147,7 @@ class GEOM1(GeomCommon):
         """
         struct_6i = Struct(self._endian + b'6i')
         nentries = (len(data) - n) // 24
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 24]  # 6*4
             out = struct_6i.unpack(edata)
             (cid, three, one, g1, g2, g3) = out
@@ -159,7 +157,7 @@ class GEOM1(GeomCommon):
             assert one == 1, one
             data_in = [cid, g1, g2, g3]
             coord = CORD1S.add_op2_data(data_in)
-            self._add_coord_object(coord, allow_overwrites=True)
+            self._add_coord_object(coord, allow_overwrites=False)
             n += 24
         self.increase_card_count('CORD1S', nentries)
         return n
@@ -170,7 +168,7 @@ class GEOM1(GeomCommon):
         """
         s = Struct(self._endian + b'4i9f')
         nentries = (len(data) - n) // 52
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 52]  # 13*4
             out = s.unpack(edata)
             (cid, two1, two2, rid, a1, a2, a3, b1, b2, b3, c1, c2, c3) = out
@@ -180,7 +178,7 @@ class GEOM1(GeomCommon):
             coord = CORD2C.add_op2_data(data_in)
             if self.is_debug_file:
                 self.binary_debug.write('  CORD2C=%s\n' % str(out))
-            self._add_coord_object(coord, allow_overwrites=True)
+            self._add_coord_object(coord, allow_overwrites=False)
             n += 52
         self.increase_card_count('CORD2C', nentries)
         return n
@@ -191,7 +189,7 @@ class GEOM1(GeomCommon):
         """
         nentries = (len(data) - n) // 52
         s = Struct(self._endian + b'4i9f')
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 52]  # 13*4
             (cid, one, two, rid, a1, a2, a3, b1, b2, b3, c1,
              c2, c3) = s.unpack(edata)
@@ -203,7 +201,7 @@ class GEOM1(GeomCommon):
             if self.is_debug_file:
                 self.binary_debug.write('  CORD2R=%s\n' % data_in)
             coord = CORD2R.add_op2_data(data_in)
-            self._add_coord_object(coord, allow_overwrites=True)
+            self._add_coord_object(coord, allow_overwrites=False)
             n += 52
         self.increase_card_count('CORD2R', nentries)
         return n
@@ -214,7 +212,7 @@ class GEOM1(GeomCommon):
         """
         s = Struct(self._endian + b'4i9f')
         nentries = (len(data) - n) // 52
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 52]  # 13*4
             out = s.unpack(edata)
             (cid, sixty5, eight, rid, a1, a2, a3, b1, b2, b3, c1, c2, c3) = out
@@ -222,7 +220,7 @@ class GEOM1(GeomCommon):
             if self.is_debug_file:
                 self.binary_debug.write('  CORD2S=%s\n' % str(out))
             coord = CORD2S.add_op2_data(data_in)
-            self._add_coord_object(coord, allow_overwrites=True)
+            self._add_coord_object(coord, allow_overwrites=False)
             n += 52
         self.increase_card_count('CORD2S', nentries)
         return n
@@ -234,27 +232,27 @@ class GEOM1(GeomCommon):
         """
         struct_4i = Struct(self._endian + b'4i')
         nentries = (len(data) - n) // 16
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 16]  # 4*4
             out = struct_4i.unpack(edata)
-            (cid, n1, n2, n3) = out
+            #(cid, n1, n2, n3) = out
             coord = CORD3G.add_op2_data(out)
             if self.is_debug_file:
                 self.binary_debug.write('  CORD3G=%s\n' % str(out))
-            self._add_coord_object(coord, allow_overwrites=True)
+            self._add_coord_object(coord, allow_overwrites=False)
             n += 16
         self.increase_card_count('CORD3G', nentries)
         return n
 
     def _read_grid(self, data, n):  # 21.8 sec, 18.9
         """(4501,45,1) - the marker for Record 17"""
-        s = Struct(self._endian + b'ii3f3i')
+        structi = Struct(self._endian + b'ii3f3i')
         ntotal = 32
         nentries = (len(data) - n) // ntotal
         nfailed = 0
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 32]
-            out = s.unpack(edata)
+            out = structi.unpack(edata)
             (nid, cp, x1, x2, x3, cd, ps, seid) = out
             if self.is_debug_file:
                 self.binary_debug.write('  GRID=%s\n' % str(out))
@@ -263,6 +261,7 @@ class GEOM1(GeomCommon):
                 if ps == 0:
                     ps = ''
                 node = GRID(nid, np.array([x1, x2, x3]), cp, cd, ps, seid)
+                self._type_to_id_map['GRID'].append(nid)
                 self.nodes[nid] = node
                 #if nid in self.nodes:
                     #self.reject_lines.append(str(node))
@@ -283,7 +282,7 @@ class GEOM1(GeomCommon):
         """(5301,53,4) - the marker for Record 27"""
         struct_2i = Struct(self._endian + b'2i')
         nentries = (len(data) - n) // 8
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 8]  # 2*4
             out = struct_2i.unpack(edata)
             # (nid, seid) = out
@@ -301,7 +300,7 @@ class GEOM1(GeomCommon):
         """
         s = Struct(self._endian + b'2i3f')
         nentries = (len(data) - n) // 20
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 20]  # 5*4
             out = s.unpack(edata)
             # (nid, cid, x1, x2, x3) = out
@@ -313,31 +312,35 @@ class GEOM1(GeomCommon):
         self.increase_card_count('POINT', nentries)
         return n
 
-    def _read_cmass2(self, data, n):
-        struct_i4fi = Struct(self._endian + b'if4i')
-        nentries = (len(data) - n) // 24
-        for i in range(nentries):
-            edata = data[n:n + 24]  # 6*4
-            out = struct_i4fi.unpack(edata)
-            # (eid, mass, g1, g2, c1, c2) = out
-            if self.is_debug_file:
-                self.binary_debug.write('  CMASS2=%s\n' % str(out))
-            element = CMASS2.add_op2_data(out)
-            self.add_op2_element(element)
-            n += 24
-        self.increase_card_count('CMASS2', nentries)
-        return n
+    #def _read_cmass2(self, data, n):
+        #struct_i4fi = Struct(self._endian + b'if4i')
+        #nentries = (len(data) - n) // 24
+        #for unused_i in range(nentries):
+            #edata = data[n:n + 24]  # 6*4
+            #out = struct_i4fi.unpack(edata)
+            ## (eid, mass, g1, g2, c1, c2) = out
+            #if self.is_debug_file:
+                #self.binary_debug.write('  CMASS2=%s\n' % str(out))
+            #self.log.debug('  CMASS2=%s\n' % str(out))
+            #element = CMASS2.add_op2_data(out)
+            #print(element)
+            #self.add_op2_mass(element)
+            #n += 24
+        #print(self.elements)
+        #self.increase_card_count('CMASS2', nentries)
+        #return n
         #return len(data)
 
     def _read_cvisc(self, data, n):
+        """CVISC(3901,39,50) - the marker for Record 105"""
         struct_4i = Struct(self._endian + b'4i')
         nentries = (len(data) - n) // 16
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 16]  # 4*4
             out = struct_4i.unpack(edata)
-            # (eid, pid, n1, n2) = out
             if self.is_debug_file:
                 self.binary_debug.write('  CVISC=%s\n' % str(out))
+            # (eid, pid, n1, n2) = out
             element = CVISC.add_op2_data(out)
             self.add_op2_element(element)
             n += 16
@@ -346,25 +349,289 @@ class GEOM1(GeomCommon):
 
 
     def _read_extrn(self, data, n):
-        self.log.info('skipping EXTRN in GEOM1\n')
+        self.log.info('skipping EXTRN in GEOM1')
         return len(data)
 
     def _read_feedge(self, data, n):
-        self.log.info('skipping FEEDGE in GEOM1\n')
-        return len(data)
+        """
+        (2901, 29, 9601)
 
-    def _read_gmcurve(self, data, n):
-        self.log.info('skipping GMCURVE in GEOM1\n')
-        return len(data)
+        Word Name Type Description
+        1 EDGEID     I Edge identification number
+        2 GRID1      I Identification number of end GRID 1
+        3 GRID2      I Identification number of end GRID 2
+        4 CID        I Coordinate system identification number
+        5 GEOMIN CHAR4 Type of referencing entry: "GMCURV" or "POINT"
+        6 GEOMID1    I Identification number of a POINT or GMCURV entry
+        7 GEOMID2    I Identification number of a POINT or GMCURV entry
+        """
+        # C:\NASA\m4\formats\git\examples\move_tpl\phsflux4.op2
+        #(200000002, 3, 1002, 6, 12, 0, 0)
+        # FEEDGE EDGEID GRID1 GRID2 CIDBC GEOMIN ID1 ID2
+        #FEEDGE    1002    6     12
+        #self.show_data(data[12:])
+        ntotal = 28  # 7*4
+        s = Struct(self._endian + b'4i 4s 2i') #expected
+        #s = Struct(self._endian + b'7i')
+        nelements = (len(data) - n)// 28  # 7*4
+        for unused_i in range(nelements):
+            edata = data[n:n+28]
+            out = s.unpack(edata)
+            #print(out)
+            edge_id, n1, n2, cid, geomin, geom1, geom2 = out # expected
+
+            if self.is_debug_file:
+                self.binary_debug.write('  FEEDGE=%s\n' % str(out))
+
+            if geomin == b'POIN':
+                geomin_str = 'POINT'
+            elif geomin == b'GMCU':
+                geomin_str = 'GMCURV'
+            else:  # pragma: no cover
+                raise RuntimeError(geomin)
+
+            if cid == -1:
+                cid = None
+            unused_elem = self.add_feedge(edge_id, [n1, n2], cid, [geom1, geom2], geomin=geomin_str)
+            n += ntotal
+        self.card_count['FEEDGE'] = nelements
+        return n
+
+    def _read_gmcurv(self, data, n):
+        """
+        Word Name Type Description
+        1 CURVID       I Curve identification number
+        2 GROUP(2) CHAR4 Group of curves/surfaces to which this curve belongs
+        4 CIDIN        I Coordinate system identification number for the geometry
+        5 CIDBC        I Coordinate system identification number for the constraints
+        6 DATA     CHAR4 Geometry evaluator specific data
+        """
+        structi = Struct(b'i 8s ii')
+        struct_i = self.struct_i
+        while n < len(data):
+            datab = data[n:n+20]
+            curve_id, group_bytes, cid_in, cid_bc = structi.unpack(datab)
+            group = group_bytes.decode('latin1').rstrip()
+            #print(curve_id, group, cid_in, cid_bc)
+            assert group in ['MSCGRP0', 'MSCGRP1', 'MSCGRP2'], f'GMCURV: curve_id={curve_id} group={repr(group)} cid_in={cid_in} cid_bc={cid_bc}'
+            n += 20
+
+            databi_bytes = data[n:n+4]
+            n += 4
+            databi = data[n:n+4]
+            datab_int, = struct_i.unpack(databi)
+            n += 4
+            while datab_int != -1:
+                databi_bytes += databi
+                databi = data[n:n+4]
+                datab_int, = struct_i.unpack(databi)
+                n += 4
+            datai = databi_bytes.decode('latin1').rstrip()
+
+            data_split = ['        %s\n' % datai[i:i+64].strip() for i in range(0, len(datai), 64)]
+            self.add_gmcurv(curve_id, group, data_split, cid_in=cid_in, cid_bc=cid_bc)
+            #print(datai)
+
+        #ints = np.frombuffer(data[n:], dtype=self.idtype).copy()
+        #iminus1 = np.where(ints == -1)[0].tolist()
+        #i0 = 0
+        #for iminus1i in iminus1:
+            #curve_id = ints[i0]
+            #cid_in, cid_bc = ints[i0+3:i0+5]
+            #s0 = n + 4
+            #s1 = s0 + 8
+            #group = data[s0:s1].decode('latin1').rstrip()
+            #print(curve_id, group, cid_in, cid_bc)
+            #assert group in ['MSCGRP1', 'MSCGRP2'], f'GMCURV: curve_id={curve_id} group={repr(group)} cid_in={cid_in} cid_bc={cid_bc}'
+
+            #s2 = s1 + 8
+            #s3 = 12 + iminus1i * 4
+            #datai = data[s2:s3].decode('latin1').rstrip()
+            #print('datai = %r' % datai)
+            #i0 = iminus1i + 1
+            ## n = s3 + 4
+            #n = 12+(iminus1i + 1)*4
+            #print('-----------------')
+        #return len(data)
+        return n
 
     def _read_feface(self, data, n):
-        self.log.info('skipping FEFACE in GEOM1\n')
-        return len(data)
+        """
+        Word Name Type Description
+        1 FACEID    I Face identification number
+        2 GRID1     I Identification number of end GRID 1
+        3 GRID2     I Identification number of end GRID 2
+        4 GRID3     I Identification number of end GRID 3
+        5 GRID4     I Identification number of end GRID 4
+        6 CIDBC     I Coordinate system identification number for the constraints
+        7 SURFID(2) I Alternate method used to specify the geometry
+        """
+        structi = Struct(self._endian + b'8i')
+        nentries = (len(data) - n) // 32
+        for unused_i in range(nentries):
+            edata = data[n:n + 32]
+            out = structi.unpack(edata)
+            (face_id, n1, n2, n3, n4, cid, surf_id1, surf_id2) = out
+            if self.is_debug_file:
+                self.binary_debug.write('  FEFACE=%s\n' % str(out))
+
+            nodes = [n1, n2, n3, n4]
+            surf_ids = [surf_id1, surf_id2]
+            feface = self.add_feface(face_id, nodes, cid, surf_ids)
+            n += 32
+        self.increase_card_count('FEFACE', nentries)
+        return n
 
     def _read_gmsurf(self, data, n):
-        self.log.info('skipping GMSURF in GEOM1\n')
+        self.log.info('skipping GMSURF in GEOM1')
         return len(data)
 
     def _read_gmcord(self, data, n):
-        self.log.info('skipping GMCORD in GEOM1\n')
+        self.log.info('skipping GMCORD in GEOM1')
         return len(data)
+
+    def _read_sebulk(self, data, n):
+        """
+        Record 18 -- SEBULK(1427,14,465)
+
+        Word Name Type Description
+        1 SEID    I Superelement identification number
+        2 TYPE    I Superelement type
+        3 RSEID   I Reference superelement identification number
+        4 METHOD  I Boundary point search method: 1=automatic or 2=manual
+        5 TOL    RS Location tolerance
+        6 LOC     I Coincident location check option: yes=1 or no=2
+        7 MEDIA   I Media format of boundary data of external SE
+        8 UNIT    I FORTRAN unit number of OP2 and OP4 input of external SE
+        """
+        structi = Struct(self._endian + b'4if3i')
+        nentries = (len(data) - n) // 32 # 4*8
+        for unused_i in range(nentries):
+            edata = data[n:n + 32]  # 4*8
+            out = structi.unpack(edata)
+            (seid, superelement_type, rseid, method, tol, loc, media, unit) = out
+            if superelement_type == 1:
+                superelement_type = 'PRIMARY'
+            elif superelement_type == 5:
+                superelement_type = 'EXTOP2'
+            elif superelement_type == 6:
+                superelement_type = 'MIRROR'
+            elif superelement_type == 7:
+                superelement_type = 'FRFOP2'
+            else:  # pragma: no cover
+                raise NotImplementedError(f'superelement_type={superelement_type} not in [PRIMARY, EXTOP2, MIRROR, FRFOP2]')
+
+            if loc == 1:
+                loc = 'YES'
+            elif loc == 2:
+                loc = 'NO'
+            else:  # pragma: no cover
+                raise NotImplementedError(f'loc={loc} not in [YES, NO]')
+
+            if method == 1:
+                method = 'AUTO'
+            elif method == 2:
+                method = 'MANUAL'
+            else:  # pragma: no cover
+                raise NotImplementedError(f'method={method} not in [AUTO, MANUAL]')
+
+            if self.is_debug_file:
+                self.binary_debug.write('  SEBULK=%s\n' % str(out))
+            #media,
+            sebulk = self.add_sebulk(seid, superelement_type, rseid,
+                                     method=method, tol=tol, loc=loc, unitno=unit)
+            sebulk.validate()
+            n += 32
+        self.increase_card_count('SEBULK', nentries)
+        return n
+
+    def _read_seloc(self, data, n):
+        """
+        Record 23 -- SELOC(827,8,457)
+
+        Word Name Type Description
+        1 SEID I Superelement identification number
+        2 GA1  I Grid point 1 identification number in SEID
+        3 GA2  I Grid point 2 identification number in SEID
+        4 GA3  I Grid point 3 identification number in SEID
+        5 GB1  I Grid point 1 identification number in the main Bulk Data
+        6 GB2  I Grid point 2 identification number in the main Bulk Data
+        7 GB3  I Grid point 3 identification number in the main Bulk Data
+        """
+        structi = Struct(self._endian + b'7i')
+        nentries = (len(data) - n) // 28 # 4*7
+        for unused_i in range(nentries):
+            edata = data[n:n + 28]
+            out = structi.unpack(edata)
+            (seid, ga1, ga2, ga3, gb1, gb2, gb3) = out
+            if self.is_debug_file:
+                self.binary_debug.write('  SELOC=%s\n' % str(out))
+            self.add_seloc(seid, [ga1, ga2, ga3], [gb1, gb2, gb3])
+            n += 28
+        self.increase_card_count('SELOC', nentries)
+        return n
+
+    def _read_sempln(self, data, n):
+        """
+        Record 24 -- SEMPLN(927,9,458)
+
+        1 SEID     I Superelement identification number
+        2 MIRRTYPE I Mirror type
+
+        MIRRTYPE=1 Plane
+        3 G1       I    Grid point 1 identification number in the main Bulk Data
+        4 G2       I    Grid point 2 identification number in the main Bulk Data
+        5 G3       I    Grid point 3 identification number in the main Bulk Data
+        6 UNDEF(2) none Not Defined
+
+        MIRRTYPE=2 Normal
+        3 G    I Grid point identification number in the main Bulk Data
+        4 CID  I Coordinate system identification number
+        5 N1  RS Normal component in direction 1 of CID
+        6 N2  RS Normal component in direction 2 of CID
+        7 N3  RS Normal component in direction 3 of CID
+        """
+        struct2i = Struct(self._endian + b'2i') # 8
+        struct5i = Struct(self._endian + b'5i') # 20
+        #struct2i_3f = Struct(self._endian + b'2i3f') # 20
+
+        nentries = (len(data) - n) // 28 # 4*7
+        for unused_i in range(nentries):
+            edata1 = data[n:n + 8]  # 4*2
+            edata2 = data[n+8:n + 28]  # 4*7
+            out = struct2i.unpack(edata1)
+            (seid, mirror_type) = out
+            if mirror_type == 1:
+                g1, g2, g3, unused_junk1, unused_junk2 = struct5i.unpack(edata2)
+                self.add_sempln(seid, g1, g2, g3)
+            else:
+                raise NotImplementedError(mirror_type)
+            if self.is_debug_file:
+                self.binary_debug.write('  SEMPLN=%s\n' % str(out))
+            n += 28
+        self.increase_card_count('SEMPLN', nentries)
+        return n
+
+    def _read_selabel(self, data, n):
+        """
+        Record 22 -- SELABEL(1027,10,459)
+
+        Word Name Type Description
+        1 SEID I Superelement identification number
+        2 LABEL(14) CHAR4 Label associated with superelement SEID
+        """
+        structi = Struct(self._endian + b'i14s') # 18
+        structi = Struct(self._endian + b'i56s') # 60
+        nentries = (len(data) - n) // 60 # 4+18
+        for unused_i in range(nentries):
+            edata = data[n:n + 60]
+            out = structi.unpack(edata)
+            (seid, label) = out
+            label = label.decode(self._encoding).rstrip()
+            if self.is_debug_file:
+                self.binary_debug.write('  SELABEL=%s\n' % str(out))
+            selabel = self.add_selabel(seid, label)
+            selabel.validate()
+            n += 60
+        self.increase_card_count('SELABEL', nentries)
+        return n

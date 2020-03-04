@@ -15,14 +15,14 @@ All material cards are defined in this file.  This includes:
  * MATHE (hyperelastic)
 
 All cards are Material objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import iteritems
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import numpy as np
 from numpy import zeros, array
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Material, BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -30,7 +30,23 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     string, string_or_blank, integer_or_double, blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
+#from functools import wraps
+#def unicode_check(func):
+    #@wraps(func)
+    #def wrapper(self, **kwargs):
+        #try:
+            #func(self, **kwargs)
+        #except UnicodeEncodeError:
+            #print('removing comment')
+            #comment = self.comment
+            #self.comment = ''
+            #out = func(self, **kwargs)
+            #self.comment = comment
+            #return out
+    #return wrapper
 
 class IsotropicMaterial(Material):
     """Isotropic Material Class"""
@@ -63,6 +79,27 @@ class HyperelasticMaterial(Material):
 
 class CREEP(Material):
     type = 'CREEP'
+
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        T0 = 42.
+        exp = 1.
+        form = 'cat'
+        tidkp = 42
+        tidcp = 43
+        tidcs = 44
+        thresh = 6.
+        Type = 7
+        a = 8.
+        b = 9.
+        c = 10.
+        d = 11.
+        e = 12.
+        f = 13.
+        g = 14.
+        return CREEP(mid, T0, exp, form, tidkp, tidcp, tidcs, thresh, Type,
+                     a, b, c, d, e, f, g, comment='')
 
     def __init__(self, mid, T0, exp, form, tidkp, tidcp, tidcs, thresh, Type,
                  a, b, c, d, e, f, g, comment=''):
@@ -98,6 +135,7 @@ class CREEP(Material):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         T0 = double_or_blank(card, 2, 'T0', 0.0)
@@ -131,11 +169,19 @@ class CREEP(Material):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         T0 = data[1]
         exp = data[2]
         form = data[3]
+        if form == 0:
+            form = 'CRLAW'
+        elif form == 1:
+            form = 'TABLE'
+        else:
+            raise NotImplementedError('CREEP: mid=%s, form=%s, not form: 0=CRLAW, 1=TABLE' % (
+                mid, form))
         tidkp = data[4]
         tidcp = data[5]
         tidcs = data[6]
@@ -151,7 +197,7 @@ class CREEP(Material):
         return CREEP(mid, T0, exp, form, tidkp, tidcp, tidcs, thresh, Type,
                      a, b, c, d, e, f, g, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -159,11 +205,13 @@ class CREEP(Material):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by CREEP pid=%s' % self.mid
+        msg = ', which is required by CREEP pid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 
@@ -186,6 +234,7 @@ class CREEP(Material):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         thresh = set_blank_if_default(self.thresh, 1e-5)
         exp = set_blank_if_default(self.exp, 4.1e-9)
@@ -195,7 +244,7 @@ class CREEP(Material):
                        self.a, self.b, self.c, self.d, self.e, self.f, self.g]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -220,9 +269,23 @@ class NXSTRAT(BaseCard):
     +---------+---------+--------+--------+--------+--------+--------+--------+
     |         | ATSNEXT |    3   |        |        |        |        |        |
     +---------+---------+--------+--------+--------+--------+--------+--------+
+
     """
     type = 'NXSTRAT'
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        params = {'AUTO' : 1}
+        return NXSTRAT(sid, params, comment='')
+
+    def _finalize_hdf5(self, encoding):
+        """hdf5 helper function"""
+        keys, values = self.params
+        self.params = dict(zip(keys, values))
+
     def __init__(self, sid, params, comment=''):
+        if comment:
+            self.comment = comment
         self.sid = sid
         self.params = params
 
@@ -237,28 +300,41 @@ class NXSTRAT(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         nfields = len(card)
         iparam = 1
         params = {}
-        for ifield in range(2, nfields, 2):
+        min_nfields = min(8, nfields)
+        for ifield in range(2, min_nfields, 2):
             param_name = string(card, ifield, 'param_%i' % iparam)
             value = integer_or_double(card, ifield+1, 'value_%i' % iparam)
             params[param_name] = value
             iparam += 1
 
-        nparams = (nfields - 2) // 2
-        nleftover = (nfields - 2) % 2
-        assert nleftover == 0, 'nparams=%s nleftover=%s card=%s' % (nparams, nleftover, card)
+        if nfields > 9:
+            for ifield in range(9, nfields, 2):
+                param_name = string(card, ifield, 'param_%i' % iparam)
+                value = integer_or_double(card, ifield+1, 'value_%i' % iparam)
+                params[param_name] = value
+                iparam += 1
+
+        #nparams = (nfields - 2) // 2
+        #nleftover = (nfields - 2) % 2
+        #assert nleftover == ileftover, 'nparams=%s nleftover=%s card=%s' % (nparams, nleftover, card)
 
         #assert len(card) <= 13, 'len(NXSTRAT card) = %i\ncard=%s' % (len(card), card)
         return NXSTRAT(sid, params, comment=comment)
 
     def raw_fields(self):
         list_fields = ['NXSTRAT', self.sid]
-        for key, value in sorted(iteritems(self.params)):
+        i = 0
+        for key, value in sorted(self.params.items()):
             list_fields += [key, value]
+            i += 1
+            if i == 3:
+                list_fields.append(None)
         return list_fields
 
     def repr_fields(self):
@@ -269,10 +345,11 @@ class NXSTRAT(BaseCard):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -290,6 +367,7 @@ class MAT1(IsotropicMaterial):
     +------+-----+-----+-----+-------+-----+------+------+-----+
     |      | ST  | SC  | SS  | MCSID |     |      |      |     |
     +------+-----+-----+-----+-------+-----+------+------+-----+
+
     """
     type = 'MAT1'
     _field_map = {
@@ -308,6 +386,7 @@ class MAT1(IsotropicMaterial):
         'SC' : 'sc', #11 : 'sc',
         'SS' : 'ss', #12 : 'ss',
     }
+    _properties = ['_field_map', 'mp_name_map']
 
     def __init__(self, mid, E, G, nu,
                  rho=0.0, a=0.0, tref=0.0, ge=0.0,
@@ -342,6 +421,7 @@ class MAT1(IsotropicMaterial):
             a comment for the card
 
         If E, G, or nu is None (only 1), it will be calculated
+
         """
         IsotropicMaterial.__init__(self)
         self.mats1_ref = None
@@ -364,6 +444,62 @@ class MAT1(IsotropicMaterial):
         self.mcsid = mcsid
 
     @classmethod
+    def export_to_hdf5(cls, h5_file, model, mids):
+        """exports the materials in a vectorized way"""
+        #comments = []
+        e = []
+        g = []
+        nu = []
+        rho = []
+        a = []
+        tref = []
+        ge = []
+        St = []
+        Sc = []
+        Ss = []
+        mcsid = []
+        for mid in mids:
+            material = model.materials[mid]
+            #comments.append(element.comment)
+
+            if material.e is None:
+                e.append(np.nan)
+            else:
+                e.append(material.e)
+
+            if material.g is None:
+                e.append(np.nan)
+            else:
+                g.append(material.g)
+
+            if material.nu is None:
+                nu.append(np.nan)
+            else:
+                nu.append(material.nu)
+
+            rho.append(material.rho)
+            a.append(material.a)
+            tref.append(material.tref)
+            ge.append(material.ge)
+            St.append(material.St)
+            Sc.append(material.Sc)
+            Ss.append(material.Ss)
+            mcsid.append(material.mcsid)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('E', data=e)
+        h5_file.create_dataset('G', data=g)
+        h5_file.create_dataset('nu', data=nu)
+        h5_file.create_dataset('A', data=a)
+        h5_file.create_dataset('rho', data=rho)
+        h5_file.create_dataset('tref', data=tref)
+        h5_file.create_dataset('ge', data=ge)
+        h5_file.create_dataset('St', data=St)
+        h5_file.create_dataset('Sc', data=Sc)
+        h5_file.create_dataset('Ss', data=Ss)
+        h5_file.create_dataset('mcsid', data=mcsid)
+
+    @classmethod
     def add_card(cls, card, comment=''):
         """
         Adds a MAT1 card from ``BDF.add_card(...)``
@@ -374,6 +510,7 @@ class MAT1(IsotropicMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         E = double_or_blank(card, 2, 'E')
@@ -403,6 +540,7 @@ class MAT1(IsotropicMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         e = data[1]
@@ -427,6 +565,7 @@ class MAT1(IsotropicMaterial):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         mid = self.Mid()
         E = self.E()
@@ -470,9 +609,7 @@ class MAT1(IsotropicMaterial):
 
     @classmethod
     def set_E_G_nu(cls, E, G, nu):
-        r"""
-        \f[ G = \frac{E}{2 (1+\nu)} \f]
-        """
+        r"""\f[ G = \frac{E}{2 (1+\nu)} \f]"""
         if G is None and E is None:  # no E,G
             raise ValueError('G=%s E=%s cannot both be None' % (G, E))
         elif E is not None and G is not None and nu is not None:
@@ -494,7 +631,7 @@ class MAT1(IsotropicMaterial):
             raise ValueError(msg)
         return E, G, nu
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -502,15 +639,17 @@ class MAT1(IsotropicMaterial):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by MAT1 mid=%s' % self.mid
+        #msg = ', which is required by MAT1 mid=%s' % self.mid
         #self.mcsid = model.Coord(self.mcsid, msg=msg)  # used only for PARAM,CURVPLOT
         if self.mid in model.MATS1:
             self.mats1_ref = model.MATS1[self.mid]  # not using a method...
         if self.mid in model.MATT1:
             self.matt1_ref = model.MATT1[self.mid]  # not using a method...
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mats1_ref = None
         self.matt1_ref = None
 
@@ -546,6 +685,7 @@ class MAT1(IsotropicMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         Gdefault = self.getG_default()
         G = set_blank_if_default(self.g, Gdefault)
@@ -566,7 +706,7 @@ class MAT1(IsotropicMaterial):
                            St, Sc, Ss, mcsid]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -590,9 +730,7 @@ class MAT1(IsotropicMaterial):
         return D
 
     def compliance(self):
-        """
-        per AeroComBAT
-        """
+        """per AeroComBAT"""
         # Initialize the compliance matrix in the local fiber 123 CSYS:
         #self.Smat = np.array([
             #[1./self.E1, -nu_12/E1, -nu_13/E1, 0., 0., 0.],
@@ -658,6 +796,7 @@ class MAT2(AnisotropicMaterial):
     +------+-------+-----+-----+------+-----+------+-----+-----+
     |      | MCSID |     |     |      |     |      |     |     |
     +------+-------+-----+-----+------+-----+------+-----+-----+
+
     """
     type = 'MAT2'
     _field_map = {
@@ -683,6 +822,7 @@ class MAT2(AnisotropicMaterial):
         'TREF' : 'tref', #8 : 'tref',
         #'GE' : 'ge', #9 : 'ge',
     }
+    _properties = ['_field_map', 'mp_name_map']
 
     def __init__(self, mid, G11, G12, G13, G22, G23, G33,
                  rho=0., a1=None, a2=None, a3=None, tref=0., ge=0.,
@@ -710,6 +850,60 @@ class MAT2(AnisotropicMaterial):
         self.mcsid = mcsid
 
     @classmethod
+    def export_to_hdf5(cls, h5_file, model, mids):
+        """exports the materials in a vectorized way"""
+        #comments = []
+        G = []
+        rho = []
+        a = []
+        tref = []
+        ge = []
+
+        St = []
+        Sc = []
+        Ss = []
+        mcsid = []
+        for mid in mids:
+            material = model.materials[mid]
+            #comments.append(element.comment)
+            Gi = [
+                material.G11, material.G22, material.G33,
+                material.G12, material.G13, material.G23,
+            ]
+            G.append(Gi)
+            rho.append(material.rho)
+
+            ai = [ai if ai is not None else np.nan
+                  for ai in [material.a1, material.a2, material.a3]]
+            a.append(ai)
+            tref.append(material.tref)
+            ge.append(material.ge)
+
+            St.append(material.St)
+            Sc.append(material.Sc)
+            Ss.append(material.Ss)
+            if material.mcsid is None:
+                mcsid.append(-1)
+            else:
+                mcsid.append(material.mcsid)
+        #h5_file.create_dataset('_comment', data=comments)
+        St = [value if value is not None else np.nan for value in St]
+        Sc = [value if value is not None else np.nan for value in Sc]
+        Ss = [value if value is not None else np.nan for value in Ss]
+
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('G', data=G)
+        h5_file.create_dataset('A', data=a)
+        h5_file.create_dataset('rho', data=rho)
+        h5_file.create_dataset('tref', data=tref)
+        h5_file.create_dataset('ge', data=ge)
+
+        h5_file.create_dataset('St', data=St)
+        h5_file.create_dataset('Sc', data=Sc)
+        h5_file.create_dataset('Ss', data=Ss)
+        h5_file.create_dataset('mcsid', data=mcsid)
+
+    @classmethod
     def add_card(cls, card, comment=''):
         """
         Adds a MAT2 card from ``BDF.add_card(...)``
@@ -720,6 +914,7 @@ class MAT2(AnisotropicMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         G11 = double_or_blank(card, 2, 'G11', 0.0)
@@ -755,6 +950,7 @@ class MAT2(AnisotropicMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         G11 = data[1]
@@ -784,7 +980,7 @@ class MAT2(AnisotropicMaterial):
     def Rho(self):
         return self.rho
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -792,12 +988,14 @@ class MAT2(AnisotropicMaterial):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by MAT2 mid=%s' % self.mid
+        #msg = ', which is required by MAT2 mid=%s' % self.mid
         if self.mid in model.MATT2:
             self.matt2_ref = model.MATT2[self.mid]  # not using a method...
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.matt2_ref = None
 
     def _verify(self, xref):
@@ -808,13 +1006,12 @@ class MAT2(AnisotropicMaterial):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         pass
 
     def Dsolid(self):
-        """
-        Eq 9.4.7 in Finite Element Method using Matlab
-        """
+        """Eq 9.4.7 in Finite Element Method using Matlab """
         D = zeros((6, 6))
         E = self.E()
         nu12 = self.nu12
@@ -837,9 +1034,7 @@ class MAT2(AnisotropicMaterial):
         D[5, 5] = D[4, 4] = D[3, 3]
 
     def Dplate(self):
-        """
-        Eq 9.1.6 in Finite Element Method using Matlab
-        """
+        """Eq 9.1.6 in Finite Element Method using Matlab"""
         E = self.E()
         nu12 = self.Nu()
         nu = nu12
@@ -873,6 +1068,7 @@ class MAT2(AnisotropicMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         G11 = set_blank_if_default(self.G11, 0.0)
         G12 = set_blank_if_default(self.G12, 0.0)
@@ -888,7 +1084,7 @@ class MAT2(AnisotropicMaterial):
                        self.St, self.Sc, self.Ss, self.mcsid]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -907,6 +1103,7 @@ class MAT3(OrthotropicMaterial):
     +------+-----+----+-----+----+-------+-------+------+-----+
     |      |     |    | GZX | AX |  ATH  |  AZ   | TREF | GE  |
     +------+-----+----+-----+----+-------+-------+------+-----+
+
     """
     type = 'MAT3'
     _field_map = {
@@ -938,6 +1135,66 @@ class MAT3(OrthotropicMaterial):
         self.matt3_ref = None
 
     @classmethod
+    def export_to_hdf5(cls, h5_file, model, mids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        ex = []
+        eth = []
+        ez = []
+
+        nuxth = []
+        nuthz = []
+        nuzx = []
+        gzx = []
+
+        ax = []
+        ath = []
+        az = []
+
+        rho = []
+        tref = []
+        ge = []
+        for mid in mids:
+            material = model.materials[mid]
+            #comments.append(element.comment)
+            ex.append(material.ex)
+            eth.append(material.eth)
+            ez.append(material.ez)
+
+            nuxth.append(material.nuxth)
+            nuthz.append(material.nuthz)
+            nuzx.append(material.nuzx)
+            gzx.append(material.gzx)
+
+            ax.append(material.ax)
+            ath.append(material.ath)
+            az.append(material.az)
+
+            rho.append(material.rho)
+            tref.append(material.tref)
+            ge.append(material.ge)
+        gzx = [value if value is not None else np.nan for value in gzx]
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('mid', data=mids)
+
+        h5_file.create_dataset('Ex', data=ex)
+        h5_file.create_dataset('Eth', data=eth)
+        h5_file.create_dataset('Ez', data=az)
+
+        h5_file.create_dataset('Nuxth', data=nuxth)
+        h5_file.create_dataset('Nuzx', data=nuzx)
+        h5_file.create_dataset('Nuthz', data=nuthz)
+        h5_file.create_dataset('Gzx', data=gzx)
+
+        h5_file.create_dataset('Ax', data=ax)
+        h5_file.create_dataset('Ath', data=ath)
+        h5_file.create_dataset('Az', data=az)
+
+        h5_file.create_dataset('rho', data=rho)
+        h5_file.create_dataset('tref', data=tref)
+        h5_file.create_dataset('ge', data=ge)
+
+    @classmethod
     def add_card(cls, card, comment=''):
         """
         Adds a MAT3 card from ``BDF.add_card(...)``
@@ -948,6 +1205,7 @@ class MAT3(OrthotropicMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         ex = double(card, 2, 'ex')
@@ -979,6 +1237,7 @@ class MAT3(OrthotropicMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         ex = data[1]
@@ -998,6 +1257,9 @@ class MAT3(OrthotropicMaterial):
         return MAT3(mid, ex, eth, ez, nuxth, nuthz, nuzx, rho, gzx,
                     ax, ath, az, tref, ge, comment=comment)
 
+    def Rho(self):
+        return self.rho
+
     def get_density(self):
         return self.rho
 
@@ -1009,14 +1271,15 @@ class MAT3(OrthotropicMaterial):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         mid = self.Mid()
         assert isinstance(mid, integer_types), 'mid=%r' % mid
         if xref:
-            if [self.mats3, self.matt3] == [None, None]:
+            if [self.mats3_ref, self.matt3_ref] == [None, None]:
                 pass
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1024,12 +1287,14 @@ class MAT3(OrthotropicMaterial):
         ----------
         model : BDF()
             the BDF object
+
         """
-        #msg = ' which is required by MAT3 mid=%s' % self.mid
+        #msg = ', which is required by MAT3 mid=%s' % self.mid
         if self.mid in model.MATT3:
             self.matt3_ref = model.MATT3[self.mid]  # TODO: not using a method...
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         #self.matt3 = self.Mid()
         self.matt3_ref = None
 
@@ -1047,6 +1312,7 @@ class MAT3(OrthotropicMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         ax = set_blank_if_default(self.ax, 0.0)
         ath = set_blank_if_default(self.ath, 0.0)
@@ -1059,7 +1325,7 @@ class MAT3(OrthotropicMaterial):
                        ax, ath, az, tref, ge]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1080,12 +1346,20 @@ class MAT4(ThermalMaterial):
     +------+-----+--------+------+-----+----+-----+------+---------+
     |      | TCH | TDELTA | QLAT |     |    |     |      |         |
     +------+-----+--------+------+-----+----+-----+------+---------+
+
     """
     type = 'MAT4'
     _field_map = {
         1: 'mid', 2:'k', 3:'cp', 4:'rho', 5: 'mu', 6:'H', 7:'hgen',
         8:'ref_enthalpy', 9:'tch', 10:'tdelta', 11:'qlat',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        k = 100.
+        return MAT4(mid, k, cp=0.0, rho=1.0, H=None, mu=None, hgen=1.0,
+                    ref_enthalpy=None, tch=None, tdelta=None, qlat=None, comment='')
 
     def __init__(self, mid, k, cp=0.0, rho=1.0, H=None, mu=None,
                  hgen=1.0, ref_enthalpy=None, tch=None, tdelta=None, qlat=None, comment=''):
@@ -1116,6 +1390,7 @@ class MAT4(ThermalMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         k = double_or_blank(card, 2, 'k')
@@ -1144,6 +1419,7 @@ class MAT4(ThermalMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         k = data[1]
@@ -1165,7 +1441,7 @@ class MAT4(ThermalMaterial):
     def Rho(self):
         return self.get_density()
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1173,8 +1449,9 @@ class MAT4(ThermalMaterial):
         ----------
         model : BDF()
             the BDF object
+
         """
-        #msg = ' which is required by MAT4 mid=%s' % self.mid
+        #msg = ', which is required by MAT4 mid=%s' % self.mid
         if self.mid in model.MATT4:
             self.matt4 = model.MATT4[self.mid]  # not using a method...
             self.matt4_ref = self.matt4
@@ -1192,7 +1469,8 @@ class MAT4(ThermalMaterial):
         Returns
         -------
         fields : List[varies]
-          the fields that define the card
+            the fields that define the card
+
         """
         rho = set_blank_if_default(self.rho, 1.0)
         hgen = set_blank_if_default(self.hgen, 1.0)
@@ -1201,7 +1479,7 @@ class MAT4(ThermalMaterial):
                        self.ref_enthalpy, self.tch, self.tdelta, self.qlat]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1219,11 +1497,18 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
     +------+-----+-------+-----+-----+-----+-----+-----+----+
     |      | RHO |  HGEN |     |     |     |     |     |    |
     +------+-----+-------+-----+-----+-----+-----+-----+----+
+
     """
     type = 'MAT5'
     _field_map = {
         1: 'mid', 2:'kxx', 3:'kxy', 4:'kxz', 5: 'kyy', 6:'kyz', 7:'kzz',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        return MAT5(mid, kxx=0., kxy=0., kxz=0., kyy=0., kyz=0., kzz=0.,
+                    cp=0., rho=1., hgen=1., comment='')
 
     def __init__(self, mid, kxx=0., kxy=0., kxz=0., kyy=0., kyz=0., kzz=0.,
                  cp=0., rho=1., hgen=1., comment=''):
@@ -1255,6 +1540,7 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
             ???
         comment : str; default=''
             a comment for the card
+
         """
         ThermalMaterial.__init__(self)
         if comment:
@@ -1285,6 +1571,7 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         kxx = double_or_blank(card, 2, 'kxx', 0.0)
@@ -1312,6 +1599,7 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         kxx = data[1]
@@ -1323,10 +1611,10 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
         cp = data[7]
         rho = data[8]
         hgen = data[9]
-        return MAT5(mid, kxx, kxz, kyy, kyz, kzz,
-                    cp, rho, hgen, comment=comment)
+        return MAT5(mid, kxx=kxx, kxy=kxy, kxz=kxz, kyy=kyy, kyz=kyz, kzz=kzz,
+                    cp=cp, rho=rho, hgen=hgen, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1334,22 +1622,26 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
         ----------
         model : BDF()
             the BDF object
+
         """
-        #msg = ' which is required by MAT5 mid=%s' % self.mid
+        #msg = ', which is required by MAT5 mid=%s' % self.mid
         if self.mid in model.MATT5:
             self.matt5_ref = model.MATT5[self.mid]  # not using a method...
 
-    def uncross_reference(self):
-        #self.matt5 = self.Matt5()
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        if self.mid in model.MATT5:
+            self.matt5 = self.Matt5()
         self.matt5_ref = None
+
+    def Rho(self):
+        return self.rho
 
     def get_density(self):
         return self.rho
 
     def K(self):
-        """
-        thermal conductivity matrix
-        """
+        """thermal conductivity matrix"""
         k = array([[self.kxx, self.kxy, self.kxz],
                    [self.kxy, self.kyy, self.kyz],
                    [self.kxz, self.kyz, self.kzz]])
@@ -1368,6 +1660,7 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         kxx = set_blank_if_default(self.kxx, 0.0)
         kyy = set_blank_if_default(self.kyy, 0.0)
@@ -1383,7 +1676,7 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
                        hgen]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1404,6 +1697,7 @@ class MAT8(OrthotropicMaterial):
     +------+-----+-----+------+------+-----+-----+-----+-----+
     |      | GE1 | F12 | STRN |      |     |     |     |     |
     +------+-----+-----+------+------+-----+-----+-----+-----+
+
     """
     type = 'MAT8'
     _field_map = {
@@ -1411,6 +1705,28 @@ class MAT8(OrthotropicMaterial):
         8: 'rho', 9:'a1', 10:'a2', 11:'tref', 12:'Xt', 13:'Xc', 14:'Yt',
         15:'Yc', 16: 'S', 17:'ge', 18:'F12', 19:'strn',
     }
+    mp_name_map = {
+        'E1' : 'e11',
+        'E2' : 'e22',
+        'NU12' : 'nu12',
+        'G12' : 'g12',
+        'G1Z' : 'g1z',
+        'RHO' : 'rho', #6 : 'rho',
+        'A1' : 'a1',
+        'A2' : 'a2',
+        #'A3' : 'a3',
+
+        #'TREF' : 'tref', #8 : 'tref',
+        #'E' : 'e', #3 : 'e',
+        #'G' : 'g', #4 : 'g',
+        #'NU' : 'nu', #5: 'nu',
+        #'A' : 'a', #7 : 'a',
+        #'GE' : 'ge', #9 : 'ge',
+        #'ST' : 'st', #10 : 'st',
+        #'SC' : 'sc', #11 : 'sc',
+        #'SS' : 'ss', #12 : 'ss',
+    }
+    _properties = ['_field_map', 'mp_name_map']
 
     def __init__(self, mid, e11, e22, nu12, g12=0.0, g1z=1e8, g2z=1e8, rho=0.,
                  a1=0., a2=0., tref=0.,
@@ -1452,6 +1768,79 @@ class MAT8(OrthotropicMaterial):
         self.matt8_ref = None
 
     @classmethod
+    def export_to_hdf5(cls, h5_file, model, mids):
+        """exports the materials in a vectorized way"""
+        comments = []
+        e11 = []
+        e22 = []
+        nu12 = []
+        g12 = []
+        g1z = []
+        g2z = []
+        rho = []
+        a1 = []
+        a2 = []
+        tref = []
+        Xt = []
+        Xc = []
+        Yt = []
+        Yc = []
+        S = []
+        ge = []
+        F12 = []
+        strn = []
+        for mid in mids:
+            material = model.materials[mid]
+            #comments.append(element.comment)
+
+            e11.append(material.e11)
+            e22.append(material.e22)
+            nu12.append(material.nu12)
+            g12.append(material.g12)
+            g1z.append(material.g1z)
+            g2z.append(material.g2z)
+
+            rho.append(material.rho)
+            a1.append(material.a1)
+            a2.append(material.a2)
+            tref.append(material.tref)
+            ge.append(material.ge)
+
+            Xt.append(material.Xt)
+            Xc.append(material.Xc)
+            Yt.append(material.Yt)
+            Yc.append(material.Yc)
+
+            S.append(material.S)
+            F12.append(material.F12)
+            strn.append(material.strn)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('mid', data=mids)
+
+        h5_file.create_dataset('E11', data=e11)
+        h5_file.create_dataset('E22', data=e22)
+        h5_file.create_dataset('Nu12', data=nu12)
+        h5_file.create_dataset('G12', data=g12)
+        h5_file.create_dataset('G1z', data=g1z)
+        h5_file.create_dataset('G2z', data=g2z)
+
+        h5_file.create_dataset('A1', data=a1)
+        h5_file.create_dataset('A2', data=a2)
+        h5_file.create_dataset('rho', data=rho)
+        h5_file.create_dataset('tref', data=tref)
+        h5_file.create_dataset('ge', data=ge)
+
+        h5_file.create_dataset('Xt', data=Xt)
+        h5_file.create_dataset('Xc', data=Xc)
+
+        h5_file.create_dataset('Yt', data=Yt)
+        h5_file.create_dataset('Yc', data=Yc)
+
+        h5_file.create_dataset('S', data=S)
+        h5_file.create_dataset('F12', data=F12)
+        h5_file.create_dataset('strn', data=strn)
+
+    @classmethod
     def add_card(cls, card, comment=''):
         """
         Adds a MAT8 card from ``BDF.add_card(...)``
@@ -1462,6 +1851,7 @@ class MAT8(OrthotropicMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         e11 = double(card, 2, 'E11')    #: .. todo:: is this the correct default
@@ -1499,6 +1889,7 @@ class MAT8(OrthotropicMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         e11 = data[1]
@@ -1524,7 +1915,7 @@ class MAT8(OrthotropicMaterial):
                     Xt, Xc, Yt, Yc, S, ge, F12, strn,
                     comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1532,13 +1923,15 @@ class MAT8(OrthotropicMaterial):
         ----------
         model : BDF()
             the BDF object
+
         """
-        #msg = ' which is required by MATT8 mid=%s' % self.mid
+        #msg = ', which is required by MATT8 mid=%s' % self.mid
         if self.mid in model.MATT8:
             self.matt8 = model.MATT8[self.mid]  # not using a method...
             self.matt8_ref = self.matt8
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         #self.matt8 = self.Matt8()
         self.matt8_ref = None
 
@@ -1553,6 +1946,7 @@ class MAT8(OrthotropicMaterial):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         mid = self.Mid()
         E11 = self.E11()
@@ -1578,9 +1972,7 @@ class MAT8(OrthotropicMaterial):
         return self.g12
 
     def D(self):
-        """
-        .. todo:: what about G1z and G2z
-        """
+        """.. todo:: what about G1z and G2z"""
         E11 = self.E11()
         E22 = self.E22()
         nu12 = self.Nu12()
@@ -1616,6 +2008,7 @@ class MAT8(OrthotropicMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         G12 = set_blank_if_default(self.g12, 0.)
         G1z = set_blank_if_default(self.g1z, 1e8)
@@ -1641,7 +2034,7 @@ class MAT8(OrthotropicMaterial):
                        G2z, rho, a1, a2, tref, Xt, Xc, Yt, Yc, S, ge, F12, strn]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1665,6 +2058,7 @@ class MAT9(AnisotropicMaterial):
     +------+-----+-----+-----+-----+-----+------+-----+-----+
     |      | A2  | A3  | A4  | A5  | A6  | TREF | GE  |     |
     +------+-----+-----+-----+-----+-----+------+-----+-----+
+
     """
     type = 'MAT9'
     _field_map = {
@@ -1709,6 +2103,7 @@ class MAT9(AnisotropicMaterial):
         'TREF' : 'tref', #8 : 'tref',
         'GE' : 'ge', #9 : 'ge',
     }
+    _properties = ['_field_map', 'mp_name_map']
 
     def __init__(self, mid,
                  G11=0., G12=0., G13=0., G14=0., G15=0., G16=0.,
@@ -1753,6 +2148,31 @@ class MAT9(AnisotropicMaterial):
         assert len(self.A) == 6, A
 
     @classmethod
+    def export_to_hdf5(cls, h5_file, model, mids):
+        """exports the elements in a vectorized way"""
+        comments = []
+        G = []
+        rho = []
+        a = []
+        tref = []
+        ge = []
+        for mid in mids:
+            material = model.materials[mid]
+            #comments.append(element.comment)
+            G.append(material.D())
+            rho.append(material.rho)
+            a.append(material.A)
+            tref.append(material.tref)
+            ge.append(material.ge)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('G', data=G)
+        h5_file.create_dataset('A', data=a)
+        h5_file.create_dataset('rho', data=rho)
+        h5_file.create_dataset('tref', data=tref)
+        h5_file.create_dataset('ge', data=ge)
+
+    @classmethod
     def add_card(cls, card, comment=''):
         """
         Adds a MAT9 card from ``BDF.add_card(...)``
@@ -1763,6 +2183,7 @@ class MAT9(AnisotropicMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         G11 = double_or_blank(card, 2, 'G11', 0.0)
@@ -1812,6 +2233,7 @@ class MAT9(AnisotropicMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         G11 = data[1][0]
@@ -1851,10 +2273,11 @@ class MAT9(AnisotropicMaterial):
                     G55, G56, G66, rho, A, tref, ge,
                     comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def _verify(self, xref):
@@ -1865,6 +2288,7 @@ class MAT9(AnisotropicMaterial):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         mid = self.Mid()
         #E11 = self.E11()
@@ -1876,6 +2300,9 @@ class MAT9(AnisotropicMaterial):
         #assert isinstance(E22, float), 'E11=%r' % E11
         #assert isinstance(G12, float), 'G12=%r' % G12
         #assert isinstance(nu12, float), 'nu12=%r' % nu12
+
+    def Rho(self):
+        return self.rho
 
     def D(self):
         D = array(
@@ -1903,6 +2330,7 @@ class MAT9(AnisotropicMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         A = []
         for a in self.A:
@@ -1919,7 +2347,7 @@ class MAT9(AnisotropicMaterial):
                        + A + [tref, ge])
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1950,11 +2378,21 @@ class MAT10(Material):
     per NX 10
 
     ..note :: alpha is called gamma
+
     """
     type = 'MAT10'
     _field_map = {
         1: 'mid', 2:'bulk', 3:'rho', 4:'c', 5:'ge', 6:'gamma',
     }
+    mp_name_map = {'RHO' : 'rho',}
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        bulk = 10.
+        c = 20.
+        return MAT10(mid, bulk=bulk, rho=None, c=c, ge=0.0, gamma=None,
+                     table_bulk=None, table_rho=None, table_ge=None,
+                     table_gamma=None, comment='')
 
     def __init__(self, mid, bulk=None, rho=None, c=None, ge=0.0, gamma=None,
                  table_bulk=None, table_rho=None, table_ge=None, table_gamma=None,
@@ -1991,6 +2429,7 @@ class MAT10(Material):
             None for MSC Nastran
         comment : str; default=''
             a comment for the card
+
         """
         Material.__init__(self)
         if comment:
@@ -2007,6 +2446,10 @@ class MAT10(Material):
         self.table_rho = table_rho
         self.table_ge = table_ge
         self.table_gamma = table_gamma
+        self.table_bulk_ref = None
+        self.table_rho_ref = None
+        self.table_gamma_ref = None
+        self.table_ge_ref = None
 
     def validate(self):
         assert self.bulk >= 0., self
@@ -2024,6 +2467,7 @@ class MAT10(Material):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         bulk = double_or_blank(card, 2, 'bulk')
@@ -2052,6 +2496,7 @@ class MAT10(Material):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         bulk = data[1]
@@ -2060,7 +2505,7 @@ class MAT10(Material):
         ge = data[4]
         return MAT10(mid, bulk, rho, c, ge, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         msg = ', which is required by MAT10 mid=%s' % self.mid
         if self.table_bulk is not None:
             self.table_bulk_ref = model.TableD(self.table_bulk, msg)
@@ -2071,7 +2516,8 @@ class MAT10(Material):
         if self.table_gamma is not None:
             self.table_gamma_ref = model.TableD(self.table_gamma, msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         if self.table_bulk is not None:
             del self.table_bulk_ref
         if self.table_rho is not None:
@@ -2081,12 +2527,20 @@ class MAT10(Material):
         if self.table_gamma is not None:
             del self.table_gamma_ref
 
+    def Rho(self):
+        return self.rho
+
+    def get_density(self):
+        return self.rho
+
     def _verify(self, xref):
         """
         Verifies all methods for this object work
 
-        :param xref: has this model been cross referenced
-        :type xref:  bool
+        Parameters
+        ----------
+        xref : bool
+            has this model been cross referenced
         """
         mid = self.Mid()
         bulk = self.bulk
@@ -2116,6 +2570,7 @@ class MAT10(Material):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         ge = set_blank_if_default(self.ge, 0.0)
         list_fields = [
@@ -2125,16 +2580,14 @@ class MAT10(Material):
         ]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
 def _mat10_get_bulk_rho_c(bulk, rho, c):
-    r"""
-    .. math:: bulk = c^2 \rho
-    """
+    r""".. math:: bulk = c^2 \rho"""
     if c is not None:
         if rho is not None:
             bulk = c ** 2. * rho
@@ -2160,14 +2613,13 @@ def _mat10_get_bulk_rho_c(bulk, rho, c):
     return bulk, rho, c
 
 class MATG(Material):
-
     """
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
     |   1  |   2    |   3    |    4    |   5    |   6    |    7    |    8   |   9    |
     +======+========+========+=========+========+========+=========+========+========+
     | MATG |  MID   | IDMEM  |  BEHAV  | TABLD  | TABLU1 | TABLU2  | TABLU3 | TABLU4 |
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
-    |      | TABLU5 | TABLU6 | TABLU7  | TABLU8 | TABLU9 | TABLU10 |  YPRS  | EPL    |
+    |      | TABLU5 | TABLU6 | TABLU7  | TABLU8 | TABLU9 | TABLU10 |  YPRS  |  EPL   |
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
     |      |   GPL  |  GAP   | TABYPRS | TABEPL | TABGPL | TABGAP  |        |        |
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
@@ -2179,16 +2631,21 @@ class MATG(Material):
     +======+========+========+=========+========+========+=========+========+========+
     | MATG |  MID   | IDMEM  |  BEHAV  | TABLD  | TABLU1 | TABLU2  | TABLU3 | TABLU4 |
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
-    |      | TABLU5 | TABLU6 | TABLU7  | TABLU8 | TABLU9 | TABLU10 |  YPRS  | EPL    |
+    |      | TABLU5 | TABLU6 | TABLU7  | TABLU8 | TABLU9 | TABLU10 |  YPRS  |  EPL   |
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
     |      |   GPL  |        |         |        |        |         |        |        |
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
 
     per NX 10
 
-    MATG 100 10 0 1001 1002 1003
-    100. 2500.
-    950. 0.0
+    +------+------+-------+-----+------+------+------+
+    | MATG |  100 |   10  |  0  | 1001 | 1002 | 1003 |
+    +------+------+-------+-----+------+------+------+
+    |      | 100. | 2500. |     |      |      |      |
+    +------+------+-------+-----+------+------+------+
+    |      | 950. |  0.0  |     |      |      |      |
+    +------+------+-------+-----+------+------+------+
+
     """
     type = 'MATG'
 
@@ -2197,6 +2654,18 @@ class MATG(Material):
         #8: 'g12', 9:'g13', 10:'g23', 11:'rho', 12:'a1', 13:'a2', 14:'a3',
         #15:'tref', 16: 'ge',
     #}
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 10
+        idmem = 1
+        behav = 2
+        tabld = 3
+        tablu = [4, 5, 6, 7]
+        yprs = 6.
+        epl = 7.
+        gpl = 8.
+        return MATG(mid, idmem, behav, tabld, tablu, yprs, epl, gpl, comment='')
+
     def __init__(self, mid, idmem, behav, tabld, tablu, yprs, epl, gpl,
                  gap=0., tab_yprs=None, tab_epl=None, tab_gpl=None, tab_gap=None, comment=''):
         Material.__init__(self)
@@ -2221,6 +2690,9 @@ class MATG(Material):
 
         #self._validate_input()
 
+    def validate(self):
+        assert isinstance(self.tablu, list) and len(self.tablu) == 4, self.tablu
+
     @classmethod
     def add_card(cls, card, comment=''):
         """
@@ -2232,6 +2704,7 @@ class MATG(Material):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         idmem = integer(card, 2, 'idmem')
@@ -2259,6 +2732,9 @@ class MATG(Material):
                     tab_yprs, tab_epl, tab_gpl, tab_gap,
                     comment=comment)
 
+    def uncross_reference(self):
+        pass
+
     def raw_fields(self):
         list_fields = [
             'MATG', self.mid, self.idmem, self.behav, self.tabld
@@ -2274,11 +2750,12 @@ class MATG(Material):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         list_fields = self.raw_fields()
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2296,6 +2773,7 @@ class MAT11(Material):
     +-------+-----+-----+-----+----+------+------+------+-----+
     |       | G13 | G23 | RHO | A1 |  A2  |  A3  | TREF | GE  |
     +-------+-----+-----+-----+----+------+------+------+-----+
+
     """
     type = 'MAT11'
 
@@ -2304,6 +2782,38 @@ class MAT11(Material):
         8: 'g12', 9:'g13', 10:'g23', 11:'rho', 12:'a1', 13:'a2', 14:'a3',
         15:'tref', 16: 'ge',
     }
+    mp_name_map = {
+        'E1' : 'e1',
+        'E2' : 'e2',
+        'E3' : 'e3',
+        #'E' : 'e', #3 : 'e',
+        #'G' : 'g', #4 : 'g',
+        #'NU' : 'nu', #5: 'nu',
+        #'RHO' : 'rho', #6 : 'rho',
+        #'A' : 'a', #7 : 'a',
+        #'TREF' : 'tref', #8 : 'tref',
+        #'GE' : 'ge', #9 : 'ge',
+        #'ST' : 'st', #10 : 'st',
+        #'SC' : 'sc', #11 : 'sc',
+        #'SS' : 'ss', #12 : 'ss',
+    }
+    _properties = ['_field_map', 'mp_name_map']
+
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        e1 = 1.
+        e2 = 2.
+        e3 = 3.
+        nu12 = 0.3
+        nu13 = 0.2
+        nu23 = 0.25
+        g12 = 10.
+        g13 = 20.
+        g23 = 30.
+        return MAT11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23,
+                     rho=0.0, a1=0.0, a2=0.0, a3=0.0, tref=0.0, ge=0.0, comment='')
+
     def __init__(self, mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho=0.0,
                  a1=0.0, a2=0.0, a3=0.0, tref=0.0, ge=0.0, comment=''):
         Material.__init__(self)
@@ -2342,6 +2852,7 @@ class MAT11(Material):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         e1 = double(card, 2, 'E1')
@@ -2378,6 +2889,7 @@ class MAT11(Material):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         mid = data[0]
         e1 = data[1]
@@ -2406,10 +2918,12 @@ class MAT11(Material):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def _validate_input(self):
@@ -2438,6 +2952,7 @@ class MAT11(Material):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         a1 = set_blank_if_default(self.a1, 0.0)
         a2 = set_blank_if_default(self.a2, 0.0)
@@ -2452,7 +2967,7 @@ class MAT11(Material):
                        a2, a3, tref, ge]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2472,8 +2987,23 @@ class MAT3D(Material):
     +-------+------+------+------+-----+------+------+------+------+
 
     This is a VABS specific card that is almost identical to the MAT11.
+
     """
     type = 'MAT3D'
+
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        e1 = 1.
+        e2 = 2.
+        e3 = 3.
+        nu12 = 0.3
+        nu13 = 0.2
+        nu23 = 0.25
+        g12 = 10.
+        g13 = 20.
+        g23 = 30.
+        return MAT3D(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho=0.0, comment='')
 
     def __init__(self, mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho=0.0,
                  comment=''):
@@ -2505,6 +3035,7 @@ class MAT3D(Material):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         e1 = double(card, 2, 'E1')
@@ -2520,6 +3051,10 @@ class MAT3D(Material):
         assert len(card) <= 17, 'len(MAT3D card) = %i\ncard=%s' % (len(card), card)
         return MAT3D(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho, comment=comment)
 
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        pass
+
     def _verify(self, xref):
         """
         Verifies all methods for this object work
@@ -2528,6 +3063,7 @@ class MAT3D(Material):
         ----------
         xref : bool
             has this model been cross referenced
+
         """
         pass
 
@@ -2559,6 +3095,7 @@ class MAT3D(Material):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         rho = set_blank_if_default(self.rho, 0.0)
         list_fields = ['MAT3D', self.mid,
@@ -2568,7 +3105,7 @@ class MAT3D(Material):
                        rho]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2577,96 +3114,150 @@ class MAT3D(Material):
 
 class MATHE(HyperelasticMaterial):
     """
-    model = MOONEY (default)
-    ========================
-    +-------+-----+-----+-------+---+-----+------+
-    | MATHE | MID |     | Model | K | RHO | TEXP |
-    |  C10  | C01 |     |       |   |     |      |
-    |  C20  | C11 | C02 |       |   |     |      |
-    |  C30  | C21 | C12 |  C03  |   |     |      |
-    +-------+-----+-----+-------+---+-----+------+
+    Creates a MATHE hyperelastic material
 
-    NX version
+    ``model = MOONEY (default)``
 
-    model = OGDEN, FOAM
-    ===================
-    +-------+-------+--------+-------+-----+--------+-------+
-    | MATHE |  MID  | Model  |       |  K  |  RHO   |  TEXP |
-    |       |  MU1  | ALPHA1 | BETA1 |     |        |       |
-    |       |  MU2  | ALPHA2 | BETA2 | MU3 | ALPHA3 | BETA3 |
-    |       |  MU4  | ALPHA4 | BETA4 | MU5 | ALPHA5 | BETA5 |
-    |       |  MU6  | ALPHA6 | BETA6 | MU7 | ALPHA7 | BETA7 | # NX only line
-    |       |  MU8  | ALPHA8 | BETA8 | MU9 | ALPHA9 | BETA9 | # NX only line
-    +-------+-------+--------+-------+-----+--------+-------+
+    +-------+-------+----------+-------+-----+--------+-------+
+    |   1   |   2   |    3     |   4   |  5  |   6    |   7   |
+    +=======+=======+==========+=======+=====+========+=======+
+    | MATHE |  MID  |          | Model |  K  |  RHO   | TEXP  |
+    +-------+-------+----------+-------+-----+--------+-------+
+    |  C10  |  C01  |          |       |     |        |       |
+    +-------+-------+----------+-------+-----+--------+-------+
+    |  C20  |  C11  |   C02    |       |     |        |       |
+    +-------+-------+----------+-------+-----+--------+-------+
+    |  C30  |  C21  |   C12    |  C03  |     |        |       |
+    +-------+-------+----------+-------+-----+--------+-------+
 
-    NX version
+    ``model (NX) = OGDEN, FOAM``
 
-    model = ABOYCE
-    ==============
-    +-------+-----+-------+----+----+-----+------+
-    | MATHE | MID | Model |    | K  | RHO | TEXP |
-    |       | NKT |   N1  |    |    |     |      |
-    |       |  D1 |   D2  | D3 | D4 | D5  |      |  # MSC only line
-    +-------+-----+-------+----+----+-----+------+
+    +-------+-------+----------+-------+-----+--------+-------+
+    |   1   |   2   |    3     |   4   |  5  |   6    |   7   |
+    +=======+=======+==========+=======+=====+========+=======+
+    | MATHE |  MID  |  Model   |       |  K  |  RHO   |  TEXP |
+    +-------+-------+----------+-------+-----+--------+-------+
+    |       |  MU1  |  ALPHA1  | BETA1 |     |        |       |
+    +-------+------+-----------+-------+-----+--------+-------+
+    |       |  MU2  |  ALPHA2  | BETA2 | MU3 | ALPHA3 | BETA3 |
+    +-------+------+-----------+-------+-----+--------+-------+
+    |       |  MU4  |  ALPHA4  | BETA4 | MU5 | ALPHA5 | BETA5 |
+    +-------+------+-----------+-------+-----+--------+-------+
+    |       |  MU6  |  ALPHA6  | BETA6 | MU7 | ALPHA7 | BETA7 |
+    +-------+------+-----------+-------+-----+--------+-------+
+    |       |  MU8  |  ALPHA8  | BETA8 | MU9 | ALPHA9 | BETA9 |
+    +-------+-------+----------+-------+-----+--------+-------+
 
-    NX version
+    the last two lines are NX only lines
 
-    model = SUSSBAT
-    ===============
-    +-------+------+--------+--------+---+-----+------+
-    | MATHE | MID  | Model  |        | K | RHO | TEXP |
-    |       | TAB1 | SSTYPE | RELERR |   |     |      |
-    +-------+------+--------+--------+---+-----+------+
+    ``model (NX) = ABOYCE``
 
-    NX version
+    +-------+-------+----------+-------+-----+--------+-------+
+    |   1   |   2   |    3     |   4   |  5  |   6    |   7   |
+    +=======+=======+==========+=======+=====+========+=======+
+    | MATHE |  MID  |   Model  |       |  K  |   RHO  |  TEXP |
+    +-------+-------+----------+-------+-----+--------+-------+
+    |       |  NKT  |     N1   |       |     |        |       |
+    +-------+-------+----------+-------+-----+--------+-------+
+    |       |   D1  |     D2   |   D3  |  D4 |   D5   |       |
+    +-------+-------+----------+-------+-----+--------+-------+
 
-    model = MOONEY (default)
-    ========================
-    +-------+-----+-----+-------+------+------+------+------+----+
-    | MATHE | MID |     | Model | K    | RHO  | TEXP | TREF | GE |
-    |  C10  | C01 |  D1 |  TAB1 | TAB2 | TAB3 | TAB4 | TABD |    |
-    |  C20  | C11 | C02 |  D2   | NA   |      |      |      |    |
-    |  C30  | C21 | C12 |  C03  | D3   |      |      |      |    |
-    |  C40  | C31 | C22 |  C13  | C04  |  D4  |      |      |    |
-    |  C50  | C41 | C32 |  C23  | C14  | C05  |  D5  |      |    |
-    +-------+-----+-----+-------+------+------+------+------+----+
+    the last line is an MSC only line
+
+    ``model (NX) = SUSSBAT``
+
+    +-------+-------+----------+--------+-----+--------+-------+
+    |   1   |   2   |    3     |   4    |  5  |   6    |   7   |
+    +=======+=======+==========+========+=====+========+=======+
+    | MATHE |  MID  |  Model   |        |  K  |   RHO  | TEXP  |
+    +-------+-------+----------+--------+-----+--------+-------+
+    |       |  TAB1 |  SSTYPE  | RELERR |     |        |       |
+    +-------+-------+----------+--------+-----+--------+-------+
+
+    ``model (NX) = MOONEY (default)``
+
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+    |   1   |   2   |    3     |   4    |  5   |   6    |   7   |  8   |  9 |
+    +=======+=======+==========+========+======+========+=======+======+====+
+    | MATHE |  MID  |          |  Model | K    |  RHO   |  TEXP | TREF | GE |
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+    |  C10  |  C01  |     D1   |   TAB1 | TAB2 |  TAB3  |  TAB4 | TABD |    |
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+    |  C20  |  C11  |    C02   |   D2   | NA   |        |       |      |    |
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+    |  C30  |  C21  |    C12   |   C03  | D3   |        |       |      |    |
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+    |  C40  |  C31  |    C22   |   C13  | C04  |   D4   |       |      |    |
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+    |  C50  |  C41  |    C32   |   C23  | C14  |  C05   |   D5  |      |    |
+    +-------+-------+----------+--------+------+--------+-------+------+----+
+
+    ``model (MSC) = OGDEN, FOAM``
+
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |   1   |   2   |    3     |   4    |  5   |   6    |   7   |  8 |
+    +=======+=======+==========+========+======+========+=======+====+
+    | MATHE |  MID  |  Model   |   NOT  |   K  |  RHO   |  TEXP |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |       |  MU1  |  ALPHA1  |  BETA1 |      |        |       |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |       |  MU2  |  ALPHA2  |  BETA2 |  MU3 | ALPHA3 | BETA3 |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |       |  MU4  |  ALPHA4  |  BETA4 |  MU5 | ALPHA5 | BETA5 |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |       |  D1   |    D2    |   D3   |   D4 |   D5   |       |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+
+    NOT is an MSC only parameter
+
+    the last line is an MSC only line
+
+    ``model (MSC) = ABOYCE, GENT``
+
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |   1   |   2   |    3     |   4    |  5   |   6    |   7   |  8 |
+    +=======+=======+==========+========+======+========+=======+====+
+    | MATHE |  MID  |   Model  |        |  K   |   RHO  |  TEXP |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |       |  NKT  |    N1    |        |      |        |       |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |       |   D1  |    D2    |   D3   |  D4  |   D5   |       |    |
+    +-------+-------+----------+--------+------+--------+-------+----+
+
+    the last line is an MSC only line
+
+    ``model (MSC) = GHEMi``
+
+    +-------+-------+----------+--------+------+--------+-------+----+
+    |   1   |   2   |    3     |   4    |  5   |   6    |   7   |  8 |
+    +=======+=======+==========+========+======+========+=======+====+
+    | MATHE |  MID  |   Model  |    K   |  RHO |  Texp  |  Tref | GE |
+    +-------+-------+----------+--------+------+--------+-------+----+
 
     MSC version
 
-    model = OGDEN, FOAM
-    ===================
-    +-------+-------+--------+-------+-----+--------+-------+
-    | MATHE |  MID  | Model  |  NOT  |  K  |  RHO   |  TEXP |  # NOT is MSC only
-    |       |  MU1  | ALPHA1 | BETA1 |     |        |       |
-    |       |  MU2  | ALPHA2 | BETA2 | MU3 | ALPHA3 | BETA3 |
-    |       |  MU4  | ALPHA4 | BETA4 | MU5 | ALPHA5 | BETA5 |
-    |       |  D1   |   D2   |  D3   |  D4 |   D5   |       |  # MSC only line
-    +-------+-------+--------+-------+-----+--------+-------+
-
-    MSC version
-
-    model = ABOYCE, GENT
-    ====================
-    +-------+-----+-------+----+----+-----+------+
-    | MATHE | MID | Model |    | K  | RHO | TEXP |
-    |       | NKT | N1    |    |    |     |      |
-    |       |  D1 |   D2  | D3 | D4 | D5  |      |  # MSC only line
-    +-------+-----+-------+----+----+-----+------+
-
-    MSC version
-
-    model = GHEMi
-    =============
-    +-------+-----+-------+---+-----+------+------+----+
-    | MATHE | MID | Model | K | RHO | Texp | Tref | GE |
-    +-------+-----+-------+---+-----+------+------+----+
-
-    MSC version
     """
     type = 'MATHE'
 
-    def __init__(self, mid, model, bulk, rho, texp,
-                 mus, alphas, betas, mooney, sussbat, aboyce, comment=''):
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        model = 'OGDEN'
+        bulk = 3.
+        mus = [6.]
+        alphas = [7.]
+        betas = [8.]
+        mooney = []
+        sussbat = []
+        aboyce = []
+        gent = []
+        return MATHE(mid, model, bulk, mus, alphas, betas,
+                     mooney, sussbat, aboyce, gent,
+                     rho=0., texp=0., tref=0., ge=0., comment='')
+
+    def __init__(self, mid, model, bulk, mus, alphas, betas,
+                 mooney, sussbat, aboyce, gent,
+                 rho=0., texp=0., tref=0., ge=0., comment=''):
         HyperelasticMaterial.__init__(self)
         if comment:
             self.comment = comment
@@ -2675,6 +3266,8 @@ class MATHE(HyperelasticMaterial):
         self.bulk = bulk
         self.rho = rho
         self.texp = texp
+        self.tref = tref  # MSC only
+        self.ge = ge  # MSC only
 
         # OGDEN/FOAM
         self.mus = mus
@@ -2690,10 +3283,21 @@ class MATHE(HyperelasticMaterial):
         # ABOYCE
         self.aboyce = aboyce
 
+        # GENT
+        self.gent = gent
+
     def validate(self):
-        if self.model not in ['MOONEY', 'OGDEN', 'FOAM', 'ABOYCE', 'SUSSBAT', 'ABOYCE']:
-            msg = "model=%r not in [MOONEY, OGDEN, FOAM, ABOYCE, SUSSBAT, ABOYCE]" % self.model
+        #assert model in ['OGDEN', 'FOAM', 'MOONEY', 'SUSSBAT', 'ABOYCE', 'GENT'], f'model={model!r}'
+        if self.model not in ['MOONEY', 'OGDEN', 'FOAM', 'ABOYCE', 'SUSSBAT', 'ABOYCE', 'GENT']:
+            msg = "model=%r not in [MOONEY, OGDEN, FOAM, ABOYCE, SUSSBAT, ABOYCE, GENT]" % self.model
             raise ValueError(msg)
+        if self.model == 'MOONEY':
+            #mooney = [ # floats
+                #c10, c01,
+                #c20, c11, c02,
+                #c30, c21, c12, c03,
+            #]
+            assert len(self.mooney) == 9, self.mooney
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -2706,12 +3310,15 @@ class MATHE(HyperelasticMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         model = string_or_blank(card, 2, 'a10', 'MOONEY')
         bulk = double_or_blank(card, 4, 'bulk, k', None)
         rho = double_or_blank(card, 5, 'rho', 0.)
         texp = double_or_blank(card, 6, 'texp', 0.)
+        tref = double_or_blank(card, 7, 'tref', 0.)  # MSC only
+        ge = double_or_blank(card, 8, 'ge', 0.)  # MSC only
 
         nfields_leftover = card.nfields - 8
         nlines = nfields_leftover // 8
@@ -2725,6 +3332,7 @@ class MATHE(HyperelasticMaterial):
         mooney = []
         sussbat = []
         aboyce = []
+        gent = []
         if model in ['OGDEN', 'FOAM']:
             for iline in range(nlines):
                 ilinei = iline + 1
@@ -2736,7 +3344,6 @@ class MATHE(HyperelasticMaterial):
                 mus.append(mu)
                 alphas.append(alpha)
                 betas.append(beta)
-            #print('nfields =', nfields)
         elif model == 'MOONEY':
             c10 = double(card, 9, 'c10') # 1.0 for NX, 0.0 for MSC
             c01 = double(card, 10, 'c01') # 1.0 for NX, 0.0 for MSC
@@ -2761,32 +3368,48 @@ class MATHE(HyperelasticMaterial):
             relerr = double_or_blank(card, 11, 'relerr', 0.01)
             assert len(card) <= 12, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
             sussbat = [tab1, sstype, relerr]
-        elif model == 'ABOYCE':
+        elif model in ['ABOYCE']:
             # NX version
+            # MSC version not supported (same as GENT)
             nkt = double_or_blank(card, 9, 'NKT', 1.0)
             n = double_or_blank(card, 10, 'N', 1.0)
             assert len(card) <= 11, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
             aboyce = [nkt, n]
-        else:
-            raise NotImplementedError(model)
+        elif model in ['GENT']:
+            # no NX version
+            # MSC version
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            #|   1   |   2   |    3     |   4    |  5   |   6    |   7   |  8 |
+            #+=======+=======+==========+========+======+========+=======+====+
+            #| MATHE |  MID  |   Model  |        |  K   |   RHO  |  TEXP |    |
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            #|       |  NKT  |    N/E   |   Im   |      |        |       |    |
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            #|       |   D1  |    D2    |   D3   |  D4  |   D5   |       |    |
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            # NKT N/E Im
+            nkt = double_or_blank(card, 9, 'NKT', 1.0)
+            n = double_or_blank(card, 10, 'N', 1.0)
+            im = double_or_blank(card, 11, 'Im', 0.)
 
-        return MATHE(mid, model, bulk, rho, texp,
-                     mus, alphas, betas, mooney, sussbat, aboyce,
-                     comment=comment)
+            d1 = double_or_blank(card, 17, 'd1')
+            d2 = double_or_blank(card, 18, 'd2')
+            d3 = double_or_blank(card, 19, 'd3')
+            d4 = double_or_blank(card, 20, 'd4')
+            d5 = double_or_blank(card, 21, 'd5')
+
+            # TODO: should this be 21?
+            assert len(card) <= 22, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
+
+            gent = [nkt, n, im, d1, d2, d3, d4, d5]
+        else:  # pragma: no cover
+            raise NotImplementedError('model=%r' % (model))
+
+        return MATHE(mid, model, bulk, mus, alphas, betas,
+                     mooney, sussbat, aboyce, gent,
+                     rho=rho, texp=texp, tref=tref, ge=ge, comment=comment)
 
     def raw_fields(self):
-        #list_fields = ['MATHP', self.mid, self.a10, self.a01, self.d1, self.rho,
-                       #self.av, self.tref, self.ge,
-                       #None, self.na, self.nd, None, None, None, None, None,
-                       #self.a20, self.a11, self.a02, self.d2, None, None, None,
-                       #None,
-                       #self.a30, self.a21, self.a12, self.a03, self.d3, None,
-                       #None, None,
-                       #self.a40, self.a31, self.a22, self.a13, self.a04, self.d4,
-                       #None, None,
-                       #self.a50, self.a41, self.a32, self.a23, self.a14, self.a05,
-                       #self.d5, None,
-                       #self.tab1, self.tab2, self.tab4, None, None, None, self.tabd]
         list_fields = self.repr_fields()
         return list_fields
 
@@ -2798,6 +3421,7 @@ class MATHE(HyperelasticMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         #av = set_blank_if_default(self.av, 0.0)
         #na = set_blank_if_default(self.na, 0.0)
@@ -2833,10 +3457,10 @@ class MATHE(HyperelasticMaterial):
         #a05 = set_blank_if_default(self.a05, 0.0)
         #d5 = set_blank_if_default(self.d5, 0.0)
 
-        #tref = set_blank_if_default(self.tref, 0.0)
-        #ge = set_blank_if_default(self.ge, 0.0)
+        tref = set_blank_if_default(self.tref, 0.0)
+        ge = set_blank_if_default(self.ge, 0.0)
         list_fields = ['MATHE', self.mid, self.model, None, self.bulk, self.rho, self.texp,
-                       None, None]
+                       tref, ge]
         if self.model in ['OGDEN', 'FOAM']:
             i = 0
             for mu, alpha, beta in zip(self.mus, self.alphas, self.betas):
@@ -2867,9 +3491,27 @@ class MATHE(HyperelasticMaterial):
             list_fields = ['MATHE', self.mid, self.model, None,
                            self.bulk, self.rho, self.texp, None, None,
                            nkt, n]
+        elif self.model == 'GENT':
+            (nkt, n, im, d1, d2, d3, d4, d5) = self.gent
+            #[1.11, 2.22, 3.33, 4, 5.55, 6.66, 7.77, 8.88]
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            #|   1   |   2   |    3     |   4    |  5   |   6    |   7   |  8 |
+            #+=======+=======+==========+========+======+========+=======+====+
+            #| MATHE |  MID  |   Model  |        |  K   |   RHO  |  TEXP |    |
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            #|       |  NKT  |    N1    |        |      |        |       |    |
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            #|       |   D1  |    D2    |   D3   |  D4  |   D5   |       |    |
+            #+-------+-------+----------+--------+------+--------+-------+----+
+            list_fields = ['MATHE', self.mid, self.model, None,
+                           self.bulk, self.rho, self.texp, None, None,
+                           nkt, n, im, None, None, None, None, None,
+                           d1, d2, d3, d4, d5]
+        else:  # pragma: no cover
+            raise NotImplementedError(self.model)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2878,6 +3520,15 @@ class MATHE(HyperelasticMaterial):
 
 class MATHP(HyperelasticMaterial):
     type = 'MATHP'
+
+    @classmethod
+    def _init_from_empty(cls):
+        mid = 1
+        return MATHP(mid, a10=0., a01=0., d1=None, rho=0., av=0., tref=0., ge=0.,
+                     na=1, nd=1, a20=0., a11=0., a02=0., d2=0., a30=0., a21=0., a12=0., a03=0.,
+                     d3=0., a40=0., a31=0., a22=0., a13=0., a04=0., d4=0., a50=0., a41=0.,
+                     a32=0., a23=0., a14=0., a05=0., d5=0.,
+                     tab1=None, tab2=None, tab3=None, tab4=None, tabd=None, comment='')
 
     def __init__(self, mid, a10=0., a01=0., d1=None, rho=0., av=0., tref=0., ge=0., na=1, nd=1,
                  a20=0., a11=0., a02=0., d2=0.,
@@ -2946,6 +3597,7 @@ class MATHP(HyperelasticMaterial):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         a10 = double_or_blank(card, 2, 'a10', 0.)
@@ -3008,6 +3660,7 @@ class MATHP(HyperelasticMaterial):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         main = data[0]
         av = None
@@ -3033,6 +3686,9 @@ class MATHP(HyperelasticMaterial):
                      a32, a23, a14, a05, d5, tab1, tab2,
                      tab3, tab4, tabd, comment=comment)
 
+    def Rho(self):
+        return self.rho
+
     def raw_fields(self):
         list_fields = ['MATHP', self.mid, self.a10, self.a01, self.d1, self.rho,
                        self.av, self.tref, self.ge,
@@ -3056,6 +3712,7 @@ class MATHP(HyperelasticMaterial):
         -------
         fields : [varies, ...]
             the fields that define the card
+
         """
         av = set_blank_if_default(self.av, 0.0)
         na = set_blank_if_default(self.na, 0.0)
@@ -3103,7 +3760,7 @@ class MATHP(HyperelasticMaterial):
                        None, None, None, self.tabd]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -3137,6 +3794,7 @@ class EQUIV(Material):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         mid = integer(card, 1, 'mid')
         field2 = integer(card, 2, 'field2')
@@ -3156,3 +3814,112 @@ class EQUIV(Material):
         list_fields = ['EQUIV', self.Mid(), self.field2, self.field3,
                        self.field4, self.field5, self.field6, self.field7]
         return list_fields
+
+def get_mat_props_S(mid_ref):
+    """
+    Gets the material matrix [S] or [C] for plane strain
+
+    [e] = [S][o]
+    """
+    mtype = mid_ref.type
+    if mtype == 'MAT1':
+        e = mid_ref.e
+        g = mid_ref.g
+        nu = mid_ref.nu
+        # http://web.mit.edu/16.20/homepage/3_Constitutive/Constitutive_files/module_3_with_solutions.pdf
+        # [e11, e22, 2*e12] = ei @  [o11, o22, o12]
+        #[e] = [S][o]
+        #[o] = [C][e]
+        # eq 3.35 (2d)
+        # eq 3.50 (3d)
+        ei2 = np.array([
+            [  1 / e, -nu / e,    0.],
+            [-nu / e,   1 / e,    0.],
+            [     0.,      0., 1 / g],
+        ])
+        #G = E / (2*(1 + nu))
+        #1 / G = (2*(1 + nu)) / E
+        nu2 = 2 * (1 + nu)
+        ei3 = np.array([
+            [1, -nu, -nu, 0., 0., 0.],
+            [-nu, 1, -nu, 0., 0., 0.],
+            [-nu, -nu, 1, 0., 0., 0.],
+            [0., 0., 0., nu2, 0., 0.],
+            [0., 0., 0., 0., nu2, 0.],
+            [0., 0., 0., 0., 0., nu2],
+        ]) / e
+
+        #denom = e / (1 - nu ** 2)
+        #C2 = np.array([
+            #[1., -nu, 0.],
+            #[nu, 1., 0.],
+            #[0., 0., g / denom],
+        #]) * denom
+
+        #lambd = e * nu / (1 + nu) / (1 - 2 * nu)
+        #lambda_2u = lambd + 2 * g
+        #C3 = np.array([
+            #[lambda_2u, lambd, lambd, 0., 0., 0.],
+            #[lambd, lambda_2u, lambd, 0., 0., 0.],
+            #[lambd, lambd, lambda_2u, 0., 0., 0.],
+            #[0., 0., 0., g, 0., 0.],
+            #[0., 0., 0., 0., g, 0.],
+            #[0., 0., 0., 0., 0., g],
+        #])
+
+    elif mtype == 'MAT8':
+        # orthotropic
+        material = mid_ref
+        # http://web.mit.edu/16.20/homepage/3_Constitutive/Constitutive_files/module_3_with_solutions.pdf
+        # [e11, e22, 2*e12] = ei @  [o11, o22, o12]
+        # eq 3.35 (2d)
+        # eq 3.50 (3d)
+        #ei2 = np.array([
+            #[e, -nu / e, 0., ],
+            #[-nu / e, e, 0., ],
+            #[0., 0., 1/g],
+        #])
+        #G = E / (2*(1 + nu))
+        #1 / G = (2*(1 + nu)) / E
+
+        #  https://en.wikipedia.org/wiki/Orthotropic_material
+        e1, e2 = material.e11, material.e22 # , material.e33
+        e3 = 1.
+        nu12 = material.nu12
+        g12, g31, g23 = material.g12, material.g1z, material.g2z
+        if g12 == 0.:
+            g12 = 1.
+        if g31 == 0.:
+            g31 = 1.
+        if g23 == 0.:
+            g23 = 1.
+
+        # nu21 * E1 = nu12 * E2
+        nu13 = nu12 # assume; should fall out in calcs given e3=0
+        nu23 = nu12 # assume; should fall out in calcs given e3=0
+        nu21 = nu12 * e2 / e1
+        nu31 = nu13 * e3 / e1
+        nu32 = nu23 * e3 / e2
+        ei2 = np.array([
+            [    1/e1, -nu21/e2,    0.],
+            [-nu12/e1,     1/e2,    0.],
+            [      0.,       0., 1/g12],
+        ])
+        ei3 = np.array([
+            [    1/e1, -nu21/e2, -nu31/e3,    0.,    0.,    0.],
+            [-nu12/e1,     1/e2, -nu32/e3,    0.,    0.,    0.],
+            [-nu13/e1, -nu23/e2,     1/e3,    0.,    0.,    0.],
+            [      0.,       0.,       0., 1/g23,    0.,    0.],
+            [      0.,       0.,       0.,    0., 1/g31,    0.],
+            [      0.,       0.,       0.,    0.,    0., 1/g12],
+        ])
+        #denom = 1 - nu12 * nu21
+        #C2 = np.array([
+            #[e1, -nu21 * e1, 0.],
+            #[nu12 * e2, e2, 0.],
+            #[0., 0., g12 * denom],
+        #]) / denom
+
+    else:
+        raise NotImplementedError(mid_ref.get_stats())
+    return ei2, ei3

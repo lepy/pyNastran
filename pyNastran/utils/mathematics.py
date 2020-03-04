@@ -2,7 +2,6 @@
 # pylint: disable=C0103
 """
 Various mathematical functions are defined in this file.  This includes:
- - augmented_identity(A)
  - gauss(n)
  - get_abs_index(data, axis=1)
  - get_abs_max(min_values, max_values)
@@ -22,20 +21,17 @@ Various mathematical functions are defined in this file.  This includes:
 
 All beams are LineProperty objects.
 Multi-segment beams are IntegratedLineProperty objects.
+
 """
-from __future__ import print_function
 from math import sqrt, ceil
-from six import string_types
-from six.moves import range
 
 from numpy import (float32, float64, complex64, complex128, array, cross,
-                   allclose, zeros, matrix, insert, diag, eye, argmax, argmin, arange)
+                   allclose, argmax, argmin, arange)
 import numpy as np
 from numpy.linalg import norm  # type: ignore
 
-from scipy.linalg import solve_banded  # type: ignore
+#from scipy.linalg import solve_banded  # type: ignore
 from scipy.integrate import quad  # type: ignore
-
 
 # should future proof this as it handles 1.9.0.dev-d1dbf8e, 1.10.2, and 1.6.2
 #_numpy_version = [int(i) for i in numpy.__version__.split('.') if i.isdigit()]
@@ -52,15 +48,22 @@ from scipy.integrate import quad  # type: ignore
         # i.append(where(eids_all == eid)[0])
     # return hstack(i)
 
-def get_abs_max(min_values, max_values):
+def get_abs_max(min_values, max_values, dtype='float32'):
     """Get return the value with the greatest magnitude, preserving sign."""
-    nvalues = len(min_values)
-    data = array([min_values, max_values], dtype='float32')
-    i = argmax(abs(data), axis=0)
-    assert len(i) == nvalues
-    # return data[i, :]
-    k = arange(nvalues, dtype='int32')
-    return data[i[:], k]
+    min_values = np.asarray(min_values)
+    max_values = np.asarray(max_values)
+    imin = np.abs(min_values) > np.abs(max_values)
+    out = np.zeros(min_values.shape, dtype=dtype)
+    out[imin] = min_values[imin]
+    out[~imin] = max_values[~imin]
+    return out
+
+    #nvalues = len(min_values)
+    #data = array([min_values, max_values], dtype=dtype)
+    #i = argmax(abs(data), axis=0)
+    #assert len(i) == nvalues
+    #k = arange(nvalues, dtype='int32')
+    #return data[i[:], k]
 
 
 def get_abs_index(data, axis=1):
@@ -200,7 +203,7 @@ def reduce_matrix(matrix_a, nids):
     takes a list of ids and removes those rows and cols
     """
     nrows = len(nids)
-    matrix_b = matrix(zeros((nrows, nrows), dtype='float64'))
+    matrix_b = np.zeros((nrows, nrows), dtype='float64')
     for i, irow in enumerate(nids):
         for j, jcol in enumerate(nids):
             matrix_b[i, j] = matrix_a[irow, jcol]
@@ -298,7 +301,7 @@ def list_print(list_a, tol=1e-8, float_fmt='%-3.2g', zero_fmt='    0'):
         return '[]'
 
     def _print(a):
-        if isinstance(a, string_types):
+        if isinstance(a, str):
             return a
         for i, j in ((float, float_fmt), (float32, float_fmt),
                      (float64, float_fmt), (int, '%3i')):
@@ -320,50 +323,34 @@ def list_print(list_a, tol=1e-8, float_fmt='%-3.2g', zero_fmt='    0'):
     return '[ '+ ', '.join([_print(a) for a in list_a])+ ']'
 
 
-def augmented_identity(A):
-    """
-    Creates an Identity Matrix augmented with zeros.
-    The location of the extra zeros depends on A.
+#def solve_tridag(A, D):
+    #"""
+    #Solves a tridagonal matrix [A]{x}={b} for {x}
 
-    .. code-block:: python
+    #Parameters
+    #----------
+    #A : (N,) float ndarray
+        #main diagonal
+    #D : (N-1,) float ndarray)
+        #off diagonal
 
-      [ 1, 0, 0, 0 ]
-      [ 0, 1, 0, 0 ]
-      [ 0, 0, 1, 0 ]
-    """
-    (nx, ny) = A.shape
-    I = eye(max(nx, ny), 'float64')
-    return I[:nx, :ny]
-
-
-def solve_tridag(A, D):
-    """
-    Solves a tridagonal matrix [A]{x}={b} for {x}
-
-    Parameters
-    ----------
-    A : (N,) float ndarray
-        main diagonal
-    D : (N-1,) float ndarray)
-        off diagonal
-
-    Returns
-    -------
-    x : (N, )
-        the result
-    """
-    # Find the diagonals
-    ud = insert(diag(A, 1), 0, 0)  # upper diagonal
-    d = diag(A)  # main diagonal
-    ld = insert(diag(A, -1), len(d) - 1, 0)  # lower diagonal
-    # simplified matrix
-    ab = matrix([ud, d, ld])
-    return solve_banded((1, 1), ab, D, overwrite_ab=True, overwrite_b=True)
+    #Returns
+    #-------
+    #x : (N, )
+        #the result
+    #"""
+    ## Find the diagonals
+    #ud = insert(diag(A, 1), 0, 0)  # upper diagonal
+    #d = diag(A)  # main diagonal
+    #ld = insert(diag(A, -1), len(d) - 1, 0)  # lower diagonal
+    ## simplified matrix
+    #ab = np.matrix([ud, d, ld])
+    #return solve_banded((1, 1), ab, D, overwrite_ab=True, overwrite_b=True)
 
 
 Area = lambda a, b: 0.5 * norm(cross(a, b))
 
-def gauss(n):
+def gauss(n):  # pragma: no cover
     r"""
     A quadrature rule: an approximation of the definite integral of a function.
     Currently implementation supports up to 5 quadrature points.
@@ -400,55 +387,34 @@ def gauss(n):
 
     .. seealso:: http://en.wikipedia.org/wiki/Gaussian_quadrature"""
     if n == 1:
-        return [0.], [2.]
+        points = [0.]
+        weights = [2.]
     elif n == 2:
         p = 1. / sqrt(3)
-        return [-p, p], [1., 1.]
+        points = [-p, p]
+        weights = [1., 1.]
     elif n == 3:
         p = sqrt(3 / 5.)
-        return [-p, 0., p], [5 / 9., 8 / 9., 5 / 9.]
+        points = [-p, 0., p]
+        weights = [5 / 9., 8 / 9., 5 / 9.]
     elif n == 4:
         p1 = (3 - 2. * sqrt(6 / 5)) / 7.
         p2 = (3 + 2. * sqrt(6 / 5)) / 7.
         w1 = (18 + sqrt(30)) / 36.
         w2 = (18 - sqrt(30)) / 36.
-        return [-p2, -p1, p1, p2], [w2, w1, w1, w2]
+        points = [-p2, -p1, p1, p2]
+        weights = [w2, w1, w1, w2]
     elif n == 5:
         p1 = 1 / 3. * sqrt(5 - 2 * sqrt(10. / 7.))
         p2 = 1 / 3. * sqrt(5 + 2 * sqrt(10. / 7.))
         w1 = (322 + 13 * sqrt(70)) / 900.
         w2 = (322 - 13 * sqrt(70)) / 900.
-        return [-p2, -p1, 0, p1, p2], [w2, w1, 128 / 225., w1, w2]
-
-    raise NotImplementedError('The current implementation only supports up to '
-                              '5 quadrature points')
-
-def unique2d(a):
-    """
-    Gets the unique pairs in a 2D vector where the pairs are defined:
-    (column 0, column 1).
-
-    Parameters
-    ----------
-    a : (n,2) ndarray
-        the input data
-
-    Returns
-    -------
-    u : (m,2)
-        the unique values in a
-
-    .. note:: this is intended to be used to find unique rows of
-              element-id/property-id or property-id/material-id pairs
-    .. note:: it works by finding the unique complex numbers and doesn't
-              extend well to a 3 column pair
-    """
-    print(a)
-    x, y = a.T
-    b = x + y*1.0j
-    print(b)
-    idx = np.unique(b, return_index=True)[1]
-    return a[idx]
+        points = [-p2, -p1, 0, p1, p2]
+        weights = [w2, w1, 128 / 225., w1, w2]
+    else:
+        raise NotImplementedError('The current implementation only supports up to '
+                                  '5 quadrature points')
+    return points, weights
 
 def roundup(value, round_increment=100):
     """

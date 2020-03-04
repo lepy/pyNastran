@@ -1,3 +1,16 @@
+"""
+Defines:
+ - read_op2_geom(op2_filename=None, combine=True, subcases=None,
+                 exclude_results=None, include_results=None,
+                 validate=True, xref=True,
+                 build_dataframe=False, skip_undefined_matrices=True,
+                 mode='msc', log=None, debug=True, debug_file=None, encoding=None)
+ - OP2Geom(make_geom=True, debug=False, log=None, debug_file=None, mode='msc')
+   - OP2
+
+"""
+from pickle import dump
+from typing import List, Optional, Any
 from pyNastran.op2.tables.geom.geom1 import GEOM1
 from pyNastran.op2.tables.geom.geom2 import GEOM2
 from pyNastran.op2.tables.geom.geom3 import GEOM3
@@ -5,19 +18,28 @@ from pyNastran.op2.tables.geom.geom4 import GEOM4
 
 from pyNastran.op2.tables.geom.ept import EPT
 from pyNastran.op2.tables.geom.mpt import MPT
+from pyNastran.op2.tables.geom.edt import EDT
+from pyNastran.op2.tables.geom.edom import EDOM
 
 from pyNastran.op2.tables.geom.dit import DIT
 from pyNastran.op2.tables.geom.dynamics import DYNAMICS
+from pyNastran.op2.tables.geom.axic import AXIC
 
 from pyNastran.bdf.bdf import BDF
+from pyNastran.bdf.errors import DuplicateIDsError
 from pyNastran.op2.op2 import OP2, FatalError, SortCodeError, DeviceCodeError, FortranMarkerError
 
 
-def read_op2_geom(op2_filename=None, combine=True, subcases=None,
-                  exclude_results=None, include_results=None,
-                  validate=True, xref=True,
-                  build_dataframe=False, skip_undefined_matrices=True,
-                  mode='msc', log=None, debug=True, debug_file=None, encoding=None):
+def read_op2_geom(op2_filename: Optional[str]=None,
+                  combine: bool=True,
+                  subcases: Optional[List[int]]=None,
+                  exclude_results: Optional[List[str]]=None,
+                  include_results: Optional[List[str]]=None,
+                  validate: bool=True, xref: bool=True,
+                  build_dataframe: bool=False, skip_undefined_matrices: bool=True,
+                  mode: str='msc', log: Any=None, debug: bool=True,
+                  debug_file: Optional[str]=None,
+                  encoding: Optional[str]=None):
     """
     Creates the OP2 object without calling the OP2 class.
 
@@ -61,6 +83,7 @@ def read_op2_geom(op2_filename=None, combine=True, subcases=None,
 
     .. note :: this method will change in order to return an object that
                does not have so many methods
+
     """
     model = OP2Geom(log=log, debug=debug, debug_file=debug_file, mode=mode)
     model.set_subcases(subcases)
@@ -84,10 +107,10 @@ def read_op2_geom(op2_filename=None, combine=True, subcases=None,
     return model
 
 
-class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
+class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, DYNAMICS, AXIC):
     """interface for the OP2Geom class for to loading subclasses"""
-    def __init__(self, make_geom=True,
-                 debug=False, log=None, debug_file=None, mode='msc'):
+    def __init__(self, make_geom: bool=True,
+                 debug: bool=False, log: Any=None, debug_file: Optional[str]=None, mode: Optional[str]=None):
         """
         Initializes the OP2 object
 
@@ -102,8 +125,9 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
             (.. seealso:: import logging)
         debug_file : default=None -> no debug
             sets the filename that will be written to
-        mode : str; default='msc'
+        mode : str; default=None -> 'msc'
             {msc, nx}
+
         """
         GEOM1.__init__(self)
         GEOM2.__init__(self)
@@ -112,68 +136,14 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
 
         EPT.__init__(self)
         MPT.__init__(self)
+        EDT.__init__(self)
+        EDOM.__init__(self)
         DIT.__init__(self)
         DYNAMICS.__init__(self)
+        AXIC.__init__(self)
 
-        OP2.__init__(self, debug, log=log, debug_file=debug_file, mode=mode)
+        OP2.__init__(self, debug=debug, log=log, debug_file=debug_file, mode=mode)
         self.make_geom = True
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_altmdtku4.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_altd200x7.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_mdtku1.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_mcso14.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_ds105.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_altcc574.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_adjoint.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_mcso18.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_cqr4optstdis.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_d200ce12.op2
-        #: Optimization Table (I think this is NX-specifc)
-        self._edom_map = {
-            # are these 3 really EDOM?
-            #MAT1DOM(103,1,9944)
-            #MAT10DOM(2801,28,9945)
-            #MODTRAK(6006,60,477)
-            (103, 1, 9944) : ['???', self._read_fake],
-            (304, 3, 276) : ['???', self._read_fake],
-            (404, 4, 277) : ['???', self._read_fake],
-            (504, 5, 246) : ['???', self._read_fake],
-
-            (5106,51,471) : ['DCONADD', self._read_fake],
-            (4106,41,362) : ['DCONSTR', self._read_fake],
-            #DDVAL(7000,70,563)
-            #DRESP3(6700,67,433)
-
-            (504, 5, 246) : ['???', self._read_fake],
-            (504, 5, 246) : ['???', self._read_fake],
-            (504, 5, 246) : ['???', self._read_fake],
-            (504, 5, 246) : ['???', self._read_fake],
-            (504, 5, 246) : ['???', self._read_fake],
-
-            (3106, 31, 352) : ['DESVAR', self._read_fake],
-            (3206, 32, 353) : ['DLINK', self._read_fake],
-            (3306, 33, 354) : ['DVPREL1', self._read_fake],
-            (3406, 34, 355) : ['DVPREL2', self._read_fake],
-            #DOPTPRM(4306,43,364)
-            (3706, 37, 358) : ['DTABLE', self._read_fake],
-            (3806, 38, 359) : ['DRESP1', self._read_fake],
-            (3906, 39, 360) : ['DRESP2', self._read_fake],
-            (4106, 41, 362) : ['???', self._read_fake],
-            (4206, 42, 363) : ['DSCREEN', self._read_fake],
-            (4306, 43, 364) : ['???', self._read_fake],
-            (4406, 44, 372) : ['DVGRID', self._read_fake],
-            #DVSHAP(5006,50,470)
-            (5106, 51, 471) : ['???', self._read_fake],
-            #DVBSHAP(5806,58,474)
-            #DVGEOM(5906,59,356)
-            (6006, 60, 477) : ['???', self._read_fake],
-            #DRESP3(6700,67,433)
-            (6100, 61, 429) : ['DVCREL1', self._read_fake],
-            (6200, 62, 430) : ['DVCREL2', self._read_fake],
-            (6300, 63, 431) : ['DVMREL1', self._read_fake],
-            (6400, 64, 432) : ['DVMREL2', self._read_fake],
-            (6006, 60, 477) : ['???', self._read_fake],
-            (7000, 70, 563) : ['DCONSTR/DDVAL?', self._read_fake],
-        }
 
         # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_boltsold11b.op2
         # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_conedg01b.op2
@@ -198,75 +168,6 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
             (124, 1, 435) : ['???', self._read_fake],
             (424, 4, 438) : ['???', self._read_fake],
         }
-        # F:\Program Files\Siemens\NXNastran\nxn10p1\nxn10p1\nast\tpl\fsw_eng.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_boltld04i.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_eliter17.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_weld01i.op2
-        # F:\work\pyNastran\examples\Dropbox\move_tpl\ac10901a_new.op2
-        self._edt_map = {
-            (5201, 52, 373) : ['ACMODL', self._read_fake],
-            (6301, 63, 397) : ['ADAPT', self._read_fake],
-            (7801, 78, 582) : ['AECOMP', self._read_fake],
-            (7901, 79, 583) : ['AECOMPL', self._read_fake],
-            (7301, 73, 574) : ['AEDW', self._read_fake],
-            (4002, 40, 273) : ['AEFACT', self._read_fake],
-            (7501, 75, 576) : ['AEFORCE', self._read_fake],
-            (2602, 26, 386) : ['AELINK', self._read_fake],
-            (2302, 23, 341) : ['AELIST', self._read_fake],
-            (7001, 70, 571) : ['AEPARM', self._read_fake],
-            (7401, 74, 575) : ['AEPRESS', self._read_fake],
-            (3202, 32, 265) : ['AERO', self._read_fake],
-            (2202, 22, 340) : ['AEROS', self._read_fake],
-            (2102, 21, 339) : ['AESTAT', self._read_fake],
-            (2002, 20, 338) : ['AESURF', self._read_fake],
-            (7701, 77, 581) : ['AESURFS', self._read_fake],
-            (3002, 30, 263) : ['CAERO1', self._read_fake],
-            (4301, 43, 167) : ['CAERO2', self._read_fake],
-            (4401, 44, 168) : ['CAERO3', self._read_fake],
-            (4501, 45, 169) : ['CAERO4', self._read_fake],
-            (5001, 50, 175) : ['CAERO5', self._read_fake],
-            (6201, 62, 143) : ['CLOAD', self._read_fake],
-            (6401, 64, 307) : ['CSSCHD', self._read_fake],
-            (104, 1, 81) : ['DEFORM', self._read_fake],
-            (2702, 27, 387) : ['DIVERG', self._read_fake],
-            (4102, 41, 274) : ['FLFACT', self._read_fake],
-            (3902, 39, 272) : ['FLUTTER', self._read_fake],
-            (17400, 174, 616) : ['GROUP', self._read_fake],
-            (3802, 38, 271) : ['MKAERO1', self._read_fake],
-            (3702, 37, 270) : ['MKAERO2', self._read_fake],
-            (7601, 76, 577) : ['MONPNT1', self._read_fake],
-            (3102, 31, 264) : ['PAERO1', self._read_fake],
-            (4601, 46, 170) : ['PAERO2', self._read_fake],
-            (4701, 47, 171) : ['PAERO3', self._read_fake],
-            (4801, 48, 172) : ['PAERO4', self._read_fake],
-            (5101, 51, 176) : ['PAERO5', self._read_fake],
-            (5301, 53, 378) : ['PANEL', self._read_fake],
-            (3502, 35, 268) : ['SET1', self._read_fake],
-            (3602, 36, 269) : ['SET2', self._read_fake],
-            (4302, 43, 607) : ['SET3', self._read_fake],
-            (3302, 33, 266) : ['SPLINE1', self._read_fake],
-            (3402, 34, 267) : ['SPLINE2', self._read_fake],
-            (4901, 49, 173) : ['SPLINE3', self._read_fake],
-            (6501, 65, 308) : ['SPLINE4', self._read_fake],
-            (6601, 66, 309) : ['SPLINE5', self._read_fake],
-            (2402, 24, 342) : ['TRIM', self._read_fake],
-            (7201, 72, 573) : ['UXVEC', self._read_fake],
-            (7108, 822,51) : ['BOLT', self._read_fake],
-            (7108, 71, 251) : ['???', self._read_fake],
-            (5808, 58, 220) : ['ITER', self._read_fake],
-            (14000, 140, 568) : ['SWLDPRM', self._read_fake],
-            (11001, 110, 581) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-            #(10500, 105, 14) : ['???', self._read_fake],
-        }
 
         # F:\work\pyNastran\examples\Dropbox\move_tpl\beamp10.op2
         # F:\work\pyNastran\examples\Dropbox\move_tpl\ifsr22r.op2
@@ -277,13 +178,43 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
             (10300, 103, 16) : ['QUADP', self._read_fake],
             (10400, 104, 15) : ['TRIAP', self._read_fake],
             (10500, 105, 14) : ['BEAMP', self._read_fake],
-            (14100, 141, 18) : ['HEXAP', self._read_fake],
+            (14100, 141, 18) : ['HEXAP', self._read_view_hexa],
             (14200, 142, 16) : ['PENTAP', self._read_fake],
             (14300, 143, 14) : ['TETRAP', self._read_fake],
             #(10500, 105, 14) : ['???', self._read_fake],
             #(10500, 105, 14) : ['???', self._read_fake],
 
         }
+    def _read_view_hexa(self, data, n):
+        """
+        Word Name Type Description
+        1 EID         I Element identification number
+        2 CID         I Coordinate system identification number -- from CID field
+        3 NX          I View mesh subdivision -- from VIEW field
+        4 NY          I View mesh subdivision -- from VIEW field
+        5 NZ          I View mesh subdivision -- from VIEW field
+        6 MTH     CHAR4 Method -- 'DIRE' means direct
+        7 MINEID      I Mininum VUHEXA identification number for this element
+        8 MAXEID      I Maximum VUHEXA identification number for this element
+        9 MINGID      I Minimum grid identification number for this element
+        10 MAXGID     I Maximum grid identification number for this element
+        11 G(8)       I Corner grid identification numbers
+        """
+        # C:\NASA\m4\formats\git\examples\move_tpl\ifsv34b.op2
+        import numpy as np
+        ints = np.frombuffer(data[n:], self.idtype) # .tolist()
+        nelements = len(ints) // 18
+        assert len(ints) % 18 == 0
+        #print('nelements =', nelements)
+        ints2 = ints.reshape(nelements, 18)
+
+        for intsi in ints2:
+            eid, cid, nx, ny, nz, junk_imth, mineid, maxeid, mingid, maxgid, *nids = intsi
+            mth = data[n+20:n+24].decode('latin1')
+            #print(eid, cid, [nx, ny, nz], mth, [mineid, maxeid, mingid, maxgid], nids)
+            assert mth in ['DIRE', 'EXTR'], mth
+            n += 72
+        return n
 
     def save(self, obj_filename='model.obj', unxref=True):
         # type: (str, bool) -> None
@@ -337,31 +268,21 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
         table_mapper[b'DYNAMIC'] = [self._read_dynamics_4, self._read_dynamics_4]
         table_mapper[b'DYNAMICS'] = [self._read_dynamics_4, self._read_dynamics_4]
 
+        table_mapper[b'AXIC'] = [self._read_axic_4, self._read_axic_4]
+
         # table objects (e.g. TABLED1)
         table_mapper[b'DIT'] = [self._read_dit_4, self._read_dit_4]
         table_mapper[b'DITS'] = [self._read_dit_4, self._read_dit_4]
         return table_mapper
 
-    def _read_edom4_4(self, data, ndata):
-        """
-        reads the EDOM table
-        SOL 200 design optimization and sensitivity analysis bulk entries.
-        """
-        return self._read_geom_4(self._edom_map, data, ndata)
 
     def _read_contact_4(self, data, ndata):
         """
         reads the CONTACT/CONTACTS table
         Table of Bulk Data entry related to surface contact
+
         """
         return self._read_geom_4(self._contact_map, data, ndata)
-
-    def _read_edt_4(self, data, ndata):
-        """
-        3.21 EDT
-        Aero and element deformations.
-        """
-        return self._read_geom_4(self._edt_map, data, ndata)
 
     def _read_viewtb_4(self, data, ndata):
         """
@@ -373,8 +294,16 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, DIT, DYNAMICS):
 
 class OP2Geom(BDF, OP2GeomCommon):
     """creates an interface for the OP2 and BDF classes"""
-    def __init__(self, make_geom=True,
-                 debug=False, log=None, debug_file=None, mode='msc'):
+    _properties = [
+        'is_bdf_vectorized', 'nid_map', 'wtmass',
+        'is_real', 'is_complex', 'is_random',
+        '_sort_method', 'is_sort1', 'is_sort2',
+        'matrix_tables', 'table_name_str', 'is_geometry',
+        #'dmigs', 'dmijs', 'dmiks', 'dmijis', 'dtis', 'dmis',
+    ]
+    def __init__(self, make_geom: bool=True,
+                 debug: bool=False, log: Any=None,
+                 debug_file: Optional[str]=None, mode: str='msc'):
         """
         Initializes the OP2 object
 
@@ -391,10 +320,46 @@ class OP2Geom(BDF, OP2GeomCommon):
             sets the filename that will be written to
         mode : str; default='msc'
             {msc, nx}
+
         """
         BDF.__init__(self, debug=debug, log=log)
         OP2GeomCommon.__init__(self, make_geom=make_geom,
                                debug=debug, log=log, debug_file=debug_file, mode=mode)
+
+    @property
+    def is_geometry(self):
+        return True
+
+    def read_op2(self, op2_filename=None, combine=True,
+                 build_dataframe=None, skip_undefined_matrices=False, encoding=None):
+        """see ``OP2.read_op2``"""
+        OP2.read_op2(self, op2_filename=op2_filename, combine=combine,
+                     build_dataframe=build_dataframe,
+                     skip_undefined_matrices=skip_undefined_matrices,
+                     encoding=encoding)
+        if len(self.nodes) == 0:
+            self.gpdt_to_nodes()
+
+    def gpdt_to_nodes(self):
+        """converts the GPDT & EQEXIN tables to node ids"""
+        eqexin = self.op2_results.eqexin
+        gpdt = self.op2_results.gpdt
+        msg = ''
+        if eqexin is None:
+            msg += 'eqexin is None; '
+        if gpdt is None:
+            msg += 'gpdt is None'
+            return
+        if msg:
+            self.log.error('Cannot convert EQEXIN/GPDT to nodes because %s' % msg.rstrip('; '))
+            return
+
+        nid_cp_cd_ps = gpdt.nid_cp_cd_ps
+        xyz = gpdt.xyz
+        nids = eqexin.nid
+        for nid, nid_cp_cd_psi, xyzi in zip(nids, nid_cp_cd_ps, xyz):
+            _nid, cp, cd, ps = nid_cp_cd_psi
+            self.add_grid(nid, xyzi, cp=cp, cd=cd, ps=ps, seid=0, comment='')
 
     def __getstate__(self):
         """clears out a few variables in order to pickle the object"""
@@ -403,22 +368,22 @@ class OP2Geom(BDF, OP2GeomCommon):
         # all our instance attributes. Always use the dict.copy()
         # method to avoid modifying the original state.
         #adfasd
-        state = BDF.__getstate__(self)
+        #state = BDF.__getstate__(self)
         #print(state)
         #state = self.__dict__.copy()
 
         # Remove the unpicklable entries.
-        i = 0
-        for key, value in sorted(state.items()):
-            if isinstance(value, dict) and len(value) == 0:
-                continue
-            #if not isinstance(value, (str, int, float)):
-            if i > 5: # 72
-                del state[key]
-            else:
-                print(key, type(value), value)
-                break
-            i += 1
+        #i = 0
+        #for key, value in sorted(state.items()):
+            #if isinstance(value, dict) and len(value) == 0:
+                #continue
+            ##if not isinstance(value, (str, int, float)):
+            #if i > 5: # 72
+                #del state[key]
+            #else:
+                #print(key, type(value), value)
+                #break
+            #i += 1
 
         #i = 0
         #for key, value in sorted(state.items()):
@@ -431,4 +396,79 @@ class OP2Geom(BDF, OP2GeomCommon):
                 #print(key, type(value), value)
                 #break
             #i += 1
-        return state
+        #return state
+
+    def export_hdf5_file(self, hdf5_file, exporter=None):
+        """
+        Converts the OP2 objects into hdf5 object
+
+        Parameters
+        ----------
+        hdf5_file : H5File()
+            an h5py object
+        exporter : HDF5Exporter; default=None
+            unused
+
+        TODO: doesn't support:
+          - BucklingEigenvalues
+
+        """
+        #from pyNastran.op2.op2_interface.hdf5_interface import export_op2_to_hdf5_file
+        #op2_model = self
+        OP2GeomCommon.export_hdf5_file(self, hdf5_file)
+        BDF.export_hdf5_file(self, hdf5_file)
+
+
+def bdf_to_op2_geom(model: BDF, validate: bool=True) -> OP2Geom:
+    """converts a BDF() -> OP2Geom()"""
+    if isinstance(model, OP2Geom):
+        return model
+
+    assert model is not None
+    #assert op2_model is not None
+    #assert model.bdf_filename is not None
+    debug = model.debug
+    if debug is None:
+        debug = True
+    op2_geom_model = OP2Geom(make_geom=True, debug=debug, log=model.log,
+                             debug_file=None,
+                             mode='msc')
+
+    # apply data from our 2 models to the new model
+    _properties = model._properties
+    keys_to_skip = _properties + ['_properties', 'npoints', 'is_geometry']
+    for key in model.object_attributes(mode='both', keys_to_skip=keys_to_skip):
+        value = getattr(model, key)
+        #if isinstance(value, (dict, list)) and len(value) == 0:
+            #continue
+        #print(key, value)
+        try:
+            setattr(op2_geom_model, key, value)
+        except AttributeError:
+            op2_geom_model.log.error('cant set %r to %r' % (key, value))
+            raise
+    #op2_geom_model.nodes = bdf_model.nodes
+    #op2_geom_model.elements = bdf_model.elements
+    return op2_geom_model
+
+def attach_op2_results_to_bdf(bdf_model: BDF, op2_model: Optional[OP2]=None, validate: bool=True) -> OP2Geom:
+    """We're up-coverting a BDF and an OP2 result into an OP2Geom object."""
+    op2_geom_model = bdf_to_op2_geom(bdf_model, validate=validate)
+    if op2_model is None:
+        return op2_geom_model
+
+    variables = [
+        'op2_filename', 'matrices', 'eigenvalues', 'eigenvalues_fluid',
+        'displacements', 'load_vectors', 'eigenvectors',
+    ]
+    for key in variables:
+        if hasattr(op2_model, key):
+            value = getattr(op2_model, key)
+            setattr(op2_geom_model, key, value)
+    #if hasattr(op2_model, 'displacements'):
+        #op2_geom_model.displacements = op2_model.displacements
+
+    if validate:
+        assert len(op2_geom_model.nodes) > 0, op2_geom_model.get_bdf_stats()
+
+    return op2_geom_model

@@ -1,4 +1,3 @@
-from six.moves import zip
 from numpy import zeros, arange, where, argsort, unique, array
 
 from pyNastran.bdf.field_writer_8 import print_card_8, print_float_8
@@ -11,7 +10,7 @@ from pyNastran.dev.bdf_vectorized.cards.vectorized_card import VectorizedCard
 
 
 
-class Nodes(object):
+class Nodes:
     def __init__(self, model):
         self.model = model
         self.spoint = model.spoint
@@ -51,7 +50,7 @@ class Nodes(object):
         return msg
 
 
-class GRDSET(object):
+class GRDSET:
     type = 'GRDSET'
     def __init__(self, model):
         """

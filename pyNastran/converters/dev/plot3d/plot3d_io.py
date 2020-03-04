@@ -1,6 +1,4 @@
-from __future__ import print_function
-from six import iteritems
-from six.moves import range
+from collections import OrderedDict
 import vtk
 from vtk import vtkQuad
 
@@ -12,9 +10,9 @@ from pyNastran.gui.gui_objects.gui_result import GuiResult
 
 raise NotImplementedError()
 
-class Plot3d_io(object):  # pragma: no cover
-    def __init__(self):
-        pass
+class Plot3d_io:  # pragma: no cover
+    def __init__(self, gui):
+        self.gui = gui
 
     def get_plot3d_wildcard_geometry_results_functions(self):
         data = ('Plot3D',
@@ -39,7 +37,7 @@ class Plot3d_io(object):  # pragma: no cover
 
         npoints = 0
         nelements = 0
-        for iblock, shape in sorted(iteritems(model.block_shapes)):
+        for iblock, shape in sorted(model.block_shapes.items()):
             npoints += shape[0] * shape[1] * shape[2]
             nelements += (shape[0] - 1)  * (shape[1] - 1) * (shape[2] - 1)
 
@@ -106,23 +104,23 @@ class Plot3d_io(object):  # pragma: no cover
             break
 
         #print("eid = ", eid)
-        self.grid.SetPoints(points)
-        self.grid.Modified()
-        self.grid.Update()
+        grid = self.gui.grid
+        grid.SetPoints(points)
+        grid.Modified()
+        grid.Update()
         self.log_info("updated grid")
 
         #return
 
         # loadPlot3dResults - regions/loads
-        self.scalarBar.VisibilityOn()
-        self.scalarBar.Modified()
+        self.gui.scalar_bar_actor.VisibilityOn()
+        self.gui.scalar_bar_actor.Modified()
 
-        self.isubcase_name_map = {1: ['Plot3d', '']}
-        cases = {}
+        self.gui.isubcase_name_map = {1: ['Plot3d', '']}
+        cases = OrderedDict()
         ID = 1
 
         #cases = self._fill_stl_case(cases, ID, elements)
-        #self.finish_io()
         self.result_cases = cases
         self.case_keys = sorted(cases.keys())
         #print "case_keys = ",self.case_keys
@@ -194,7 +192,3 @@ class Plot3d_io(object):  # pragma: no cover
                 #nodal_data = loads[key]
                 #cases[(ID, key, 1, 'node', '%.3f')] = nodal_data
         return cases
-
-    #def load_panair_results(self, panairFileName):
-        ##self.result_cases = {}
-        #pass

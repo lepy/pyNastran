@@ -1,12 +1,12 @@
-from __future__ import print_function
 import unittest
-from six.moves import StringIO
+from io import StringIO
 
-from pyNastran.bdf.bdf import BDF, BDFCard, PDAMP, read_bdf#, get_logger2
+from cpylog import get_logger
+from pyNastran.bdf.bdf import BDF, BDFCard, PDAMP, CDAMP1, read_bdf#, get_logger2
 from pyNastran.bdf.cards.test.utils import save_load_deck
 from pyNastran.bdf.cards.test.test_shells import (
     make_dvprel_optimization, make_dvcrel_optimization,
-    make_dvmrel_optimization,
+    #make_dvmrel_optimization,
 )
 
 
@@ -14,8 +14,9 @@ class TestDampers(unittest.TestCase):
     def test_damper_01(self):
         """tests PDAMP"""
         lines = ['pdamp, 201, 1.e+5']
-        model = BDF(debug=False)
-        card = model.process_card(lines)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -30,10 +31,34 @@ class TestDampers(unittest.TestCase):
         model.add_card(fields, card_name, comment='', is_list=True,
                        has_none=True)
         assert len(model.properties) == 2, model.properties
+        save_load_deck(model)
+
+    def test_cdamp1_01(self):
+        """tests a CDAMP1"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        lines = ['CDAMP1, 2001, 20, 1001, 1']
+        card = model._process_card(lines)
+        card = BDFCard(card)
+
+        size = 8
+        elem = CDAMP1.add_card(card)
+        self.assertEqual(elem.eid, 2001)
+        self.assertEqual(elem.Pid(), 20)
+        node_ids = elem.node_ids
+        assert node_ids == [1001, None], node_ids
+        elem.write_card(size, 'dummy')
+        elem.raw_fields()
+
+        pid = 1
+        tbid = 2
+        model.add_pdampt(pid, tbid, comment='pdampt')
+        save_load_deck(model)
 
     def test_damper_02(self):
         """tests CDAMP1, CDAMP2, PDAMP, PDAMPT, GRID"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         eid = 1
         pid = 2
         nids = [3, 4]
@@ -68,11 +93,13 @@ class TestDampers(unittest.TestCase):
         bdf_file = StringIO()
         model.write_bdf(bdf_file, close=False)
         bdf_file.seek(0)
-        model2 = read_bdf(bdf_file, punch=True, debug=False)
+        unused_model2 = read_bdf(bdf_file, punch=True, debug=False)
+        save_load_deck(model)
 
     def test_damper_03(self):
         """tests the CDAMP4, PDAMP, CDAMP4, SPOINT"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         eid = 3
         pid = 2
         s1 = 3
@@ -88,6 +115,11 @@ class TestDampers(unittest.TestCase):
         s1 = 3
         s2 = 4
         cdamp4 = model.add_cdamp4(eid, bdamp, [s1, s2], comment='cdamp4')
+
+        # two new CDAMP4s defined on one line
+        bdamp2 = 3.0e3
+        fields = ['CDAMP4', 104, bdamp, s1, s2, 105, bdamp2, s1, s2]
+        model.add_card(fields, 'CDAMP4')
 
         eid = 5
         pid = 5
@@ -133,10 +165,18 @@ class TestDampers(unittest.TestCase):
         m = 3.
         sa = 4.
         se = 5.
-        optional_vars = None
+        #optional_vars = None
         cbush1d = model.add_cbush1d(eid, pid, nids, cid=None, comment='cbush1d')
         pbush1d = model.add_pbush1d(pid, k=k, c=c, m=m, sa=sa, se=se,
                                     optional_vars=None, comment='pbush1d')
+
+        card_lines = [
+            'pbush1d, 204, 1.e+5, 1000., , , , , , +pb4',
+            '+pb4, shocka, table, 1000., , 1., , 214, , +pb41',
+            '+pb41, spring, table, 205',
+        ]
+        model.add_card_lines(card_lines, 'PBUSH1D', comment='', has_none=True)
+        str(model.properties[204])
 
         E = 3.0e7
         G = None
@@ -172,26 +212,9 @@ class TestDampers(unittest.TestCase):
         pbush1d.write_card(size=8, is_double=False)
 
         params = [
-            ('K1', 1.0),
-            ('K2', 1.0),
-            ('K3', 1.0),
-            ('K4', 1.0),
-            ('K5', 1.0),
-            ('K6', 1.0),
-
-            ('B1', 1.0),
-            ('B2', 1.0),
-            ('B3', 1.0),
-            ('B4', 1.0),
-            ('B5', 1.0),
-            ('B6', 1.0),
-
-            #('M1', 1.0),
-            #('M2', 1.0),
-            #('M3', 1.0),
-            #('M4', 1.0),
-            #('M5', 1.0),
-            #('M6', 1.0),
+            ('K1', 1.0), ('K2', 1.0), ('K3', 1.0), ('K4', 1.0), ('K5', 1.0), ('K6', 1.0),
+            ('B1', 1.0), ('B2', 1.0), ('B3', 1.0), ('B4', 1.0), ('B5', 1.0), ('B6', 1.0),
+            #('M1', 1.0), ('M2', 1.0), ('M3', 1.0), ('M4', 1.0), ('M5', 1.0), ('M6', 1.0),
         ]
         i = make_dvprel_optimization(model, params, 'PBUSH', pbush.pid, i=1)
 
@@ -226,9 +249,62 @@ class TestDampers(unittest.TestCase):
 
         model.cross_reference()
         model.update_model_by_desvars()
+        assert 204 in model.properties, model.properties
 
-        save_load_deck(model, run_convert=True)
+        save_load_deck(model)
 
+    def test_pbusht(self):
+        """tests CBUSH, PBUSH, PBUSHT"""
+        model = BDF(debug=False, log=None, mode='msc')
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [0., 0., 0.])
+
+        eid = 8
+        pid = 8
+        k = [1.0]
+        b = [2.0]
+        ge = [0.01]
+        nids = [10, 11]
+        x = [1., 0., 0.]
+        g0 = None
+        unused_cbush = model.add_cbush(eid, pid, nids, x, g0, cid=None, s=0.5,
+                                       ocid=-1, si=None, comment='cbush')
+        unused_pbush = model.add_pbush(pid, k, b, ge, rcv=None, mass=None,
+                                       comment='pbush')
+
+        k_tables = [2]
+        b_tables = [2]
+        ge_tables = [2]
+        kn_tables = [2]
+        pbusht = model.add_pbusht(pid, k_tables, b_tables, ge_tables, kn_tables,
+                                  comment='')
+        pbusht.raw_fields()
+        model.validate()
+        model._verify_bdf()
+        model.cross_reference()
+        model._verify_bdf()
+        save_load_deck(model, xref='standard', punch=True)
+
+
+    def test_pdamp(self):
+        """PDAMP"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid1 = 10
+        eid2 = 20
+        eid3 = 30
+        eid4 = 40
+        b1 = 1.0
+        b2 = 2.0
+        b3 = 3.0
+        b4 = 4.0
+        #nodes1 = [10, 20]
+        #nodes2 = [20, 30]
+        card_lines = ['PDAMP', eid1, b1, eid2, b2, eid3, b3, eid4, b4]
+        model.add_card(card_lines, 'PDAMP', comment='', is_list=True, has_none=True)
+        model.validate()
+        model._verify_bdf()
+        save_load_deck(model)
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

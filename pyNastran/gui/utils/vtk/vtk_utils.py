@@ -1,51 +1,23 @@
 """
 defines:
  - create_vtk_cells_of_constant_element_type(grid, elements, etype)
+
 """
-import sys
+from collections import defaultdict
 import numpy as np
 import vtk
-from vtk.util.numpy_support import (
-    create_vtk_array, get_numpy_array_type,
-    get_vtk_array_type,
-)
-
-IS_TESTING = 'test' in sys.argv[0]
-VTK_VERSION = [int(val) for val in vtk.VTK_VERSION.split('.')]
-if VTK_VERSION[0] < 7 and not IS_TESTING:
-    msg = 'VTK version=%r is no longer supported (use vtk 7 or 8)' % vtk.VTK_VERSION
-    raise NotImplementedError(msg)
-elif VTK_VERSION[0] in [5, 6, 7, 8]:
-    # should work in 5/6
-    # tested in 7.1.1
-    vtkConstants = vtk
-#elif VTK_VERSION[0] == vtk_9?:
-    #vtkConstants = vtk.vtkConstants
-else:
-    msg = 'VTK version=%r is not supported (use vtk 7 or 8)' % vtk.VTK_VERSION
-    raise NotImplementedError(msg)
-
-
-def get_numpy_idtype_for_vtk():
-    """This gets the numpy dtype that we need to use to make vtk not crash"""
-    isize = vtk.vtkIdTypeArray().GetDataTypeSize()
-    if isize == 4:
-        dtype = 'int32' # TODO: can we include endian?
-    elif isize == 8:
-        dtype = 'int64'
-    else:
-        msg = 'isize=%s' % str(isize)
-        raise NotImplementedError(msg)
-    return dtype
+from vtk.util.numpy_support import numpy_to_vtk # vtk_to_numpy
+from pyNastran.gui.utils.vtk.base_utils import (
+    vtkConstants, numpy_to_vtk, numpy_to_vtkIdTypeArray,
+    get_numpy_idtype_for_vtk)
 
 def numpy_to_vtk_points(nodes, points=None, dtype='<f', deep=1):
-    """
-    common method to account for vtk endian quirks and efficiently adding points
-    """
+    """common method to account for vtk endian quirks and efficiently adding points"""
     assert isinstance(nodes, np.ndarray), type(nodes)
     if points is None:
         points = vtk.vtkPoints()
-        nnodes = nodes.shape[0]
+        nnodes, ndim = nodes.shape
+        assert ndim == 3, nodes.shape
         points.SetNumberOfPoints(nnodes)
 
         # if we're in big endian, VTK won't work, so we byte swap
@@ -86,8 +58,18 @@ def create_vtk_cells_of_constant_element_type(grid, elements, etype):
     #vtkPenta().GetCellType()
     #vtkHexa().GetCellType()
     #vtkPyram().GetCellType()
+
     """
     nelements, nnodes_per_element = elements.shape
+    if etype == 1: # vertex
+        assert nnodes_per_element == 1, elements.shape
+    if etype == 3: # line
+        assert nnodes_per_element == 2, elements.shape
+    elif etype == 5:  # tri
+        assert nnodes_per_element == 3, elements.shape
+    elif etype in [9, 10]:  # quad, tet4
+        assert nnodes_per_element == 4, elements.shape
+
     # We were careful about how we defined the arrays, so the data
     # is contiguous when we ravel it.  Otherwise, you need to
     # deepcopy the arrays (deep=1).  However, numpy_to_vtk isn't so
@@ -123,8 +105,7 @@ def create_vtk_cells_of_constant_element_type(grid, elements, etype):
 
     grid.SetCells(vtk_cell_types, vtk_cell_offsets, vtk_cells)
 
-def create_vtk_cells_of_constant_element_types(grid, elements_list,
-                                               etypes_list):
+def create_vtk_cells_of_constant_element_types(grid, elements_list, etypes_list):
     """
     Adding constant type elements is overly complicated enough as in
     ``create_vtk_cells_of_constant_element_type``.  Now we extend
@@ -139,10 +120,11 @@ def create_vtk_cells_of_constant_element_types(grid, elements_list,
         etype : int
             the VTK flag as defined in
             ``create_vtk_cells_of_constant_element_type``
+
     """
     if isinstance(etypes_list, list) and len(etypes_list) == 1:
-        return create_vtk_cells_of_constant_element_type(
-            grid, elements_list[0], etypes_list[0])
+        create_vtk_cells_of_constant_element_type(grid, elements_list[0], etypes_list[0])
+        return
 
     dtype = get_numpy_idtype_for_vtk()
 
@@ -191,105 +173,191 @@ def create_vtk_cells_of_constant_element_types(grid, elements_list,
 
     grid.SetCells(vtk_cell_types, vtk_cell_offsets, vtk_cells)
 
-def numpy_to_vtk(num_array, deep=0, array_type=None):
-    """Converts a contiguous real numpy Array to a VTK array object.
+def create_unstructured_point_grid(points, npoints):
+    """creates a point grid"""
+    ugrid = vtk.vtkUnstructuredGrid()
+    ugrid.SetPoints(points)
 
-    This function only works for real arrays that are contiguous.
-    Complex arrays are NOT handled.  It also works for multi-component
-    arrays.  However, only 1, and 2 dimensional arrays are supported.
-    This function is very efficient, so large arrays should not be a
-    problem.
+    cell_type_vertex = vtk.vtkVertex().GetCellType()
+    etypes = [cell_type_vertex]
+    elements = [np.arange(npoints, dtype='int32').reshape(npoints, 1)]
+    create_vtk_cells_of_constant_element_types(ugrid, elements, etypes)
+    ugrid.SetPoints(points)
+    ugrid.Modified()
+    return ugrid
 
-    If the second argument is set to 1, the array is deep-copied from
-    from numpy. This is not as efficient as the default behavior
-    (shallow copy) and uses more memory but detaches the two arrays
-    such that the numpy array can be released.
 
-    WARNING: You must maintain a reference to the passed numpy array, if
-    the numpy data is gc'd and VTK will point to garbage which will in
-    the best case give you a segfault.
-
-    Parameters
-    ----------
-    - num_array :  a contiguous 1D or 2D, real numpy array.
-
-    Note
-    ----
-    This was pulled from VTK and modified to eliminate numpy 1.14 warnings.
-    VTK uses a BSD license, so it's OK to do  that.
+def extract_selection_node_from_grid_to_ugrid(grid, selection_node):
     """
-    z = np.asarray(num_array)
-    if not z.flags.contiguous:
-        z = np.ascontiguousarray(z)
+    Creates a sub-UGRID from a UGRID and a vtkSelectionNode.  In other
+    words, we use a selection criteria (a definition of a subset of
+    points or cells) and we create a reduced model.
 
-    shape = z.shape
-    assert z.flags.contiguous, 'Only contiguous arrays are supported.'
-    assert len(shape) < 3, \
-           "Only arrays of dimensionality 2 or lower are allowed!"
-    assert not np.issubdtype(z.dtype, np.complexfloating), \
-           "Complex numpy arrays cannot be converted to vtk arrays."\
-           "Use real() or imag() to get a component of the array before"\
-           " passing it to vtk."
+    """
+    selection = vtk.vtkSelection()
+    selection.AddNode(selection_node)
 
-    # First create an array of the right type by using the typecode.
-    if array_type:
-        vtk_typecode = array_type
-    else:
-        vtk_typecode = get_vtk_array_type(z.dtype)
-    result_array = create_vtk_array(vtk_typecode)
+    extract_selection = vtk.vtkExtractSelection()
+    extract_selection.SetInputData(0, grid)
+    extract_selection.SetInputData(1, selection)
+    extract_selection.Update()
 
-    # Fixup shape in case its empty or scalar.
+    ugrid = extract_selection.GetOutput()
+    return ugrid
+
+
+def create_vtk_selection_node_by_point_ids(point_ids):
+    id_type_array = _convert_ids_to_vtk_idtypearray(point_ids)
+    selection_node = vtk.vtkSelectionNode()
+    #selection_node.SetContainingCellsOn()
+    #selection_node.Initialize()
+    selection_node.SetFieldType(vtk.vtkSelectionNode.POINT)
+    selection_node.SetContentType(vtk.vtkSelectionNode.INDICES)
+    selection_node.SetSelectionList(id_type_array)
+    return selection_node
+
+def create_vtk_selection_node_by_cell_ids(cell_ids):
+    id_type_array = _convert_ids_to_vtk_idtypearray(cell_ids)
+    selection_node = vtk.vtkSelectionNode()
+    selection_node.SetFieldType(vtk.vtkSelectionNode.CELL)
+    selection_node.SetContentType(vtk.vtkSelectionNode.INDICES)
+    selection_node.SetSelectionList(id_type_array)
+    return selection_node
+
+def _convert_ids_to_vtk_idtypearray(ids):
+    if isinstance(ids, int):
+        ids = [ids]
+    #else:
+        #for idi in ids:
+            #assert isinstance(idi, int), type(idi)
+
+    id_type_array = vtk.vtkIdTypeArray()
+    id_type_array.SetNumberOfComponents(1)
+    for idi in ids:
+        id_type_array.InsertNextValue(idi)
+    return id_type_array
+
+def find_point_id_closest_to_xyz(grid, cell_id, node_xyz):
+    cell = grid.GetCell(cell_id)
+    nnodes = cell.GetNumberOfPoints()
+    points = cell.GetPoints()
+
+    point0 = points.GetPoint(0)
+    dist_min = vtk.vtkMath.Distance2BetweenPoints(point0, node_xyz)
+
+    imin = 0
+    #point_min = point0
+    for ipoint in range(1, nnodes):
+        #point = array(points.GetPoint(ipoint), dtype='float32')
+        #dist = norm(point - node_xyz)
+        point = points.GetPoint(ipoint)
+        dist = vtk.vtkMath.Distance2BetweenPoints(point, node_xyz)
+        if dist < dist_min:
+            dist_min = dist
+            imin = ipoint
+            #point_min = point
+    point_id = cell.GetPointId(imin)
+    return point_id
+
+def map_element_centroid_to_node_fringe_result(ugrid, location, log):
+    """
+    Maps elemental fringe results to nodal fringe results.
+
+    If you have a 5-noded CQUAD4 (e.g., centroid + 4 nodes), only the
+    centroidal value will be mapped, even though you could map the
+    average the nodal values instead.  It's not wrong to do it this
+    way, but it could be more accurate.
+
+    If you have CQUAD4 with centroidal only or something like strain
+    energy, this will map properly.
+    """
+    is_passed = False
+    failed_out = (None, None, None, None)
+    if location == 'node':
+        log.error('Not a centroidal result.')
+        return is_passed, failed_out
+    assert location == 'centroid', location
+    #cells = ugrid.GetCells()
+    #ncells = cells.GetNumberOfCells()
+    # points = ugrid.GetPoints()
+
+
+    cell_data = ugrid.GetCellData()
+    point_data = ugrid.GetPointData()
+    # nnodes = point_data.GetNumberOfPoints()  # bad
+    nnodes = ugrid.GetNumberOfPoints()
+
+    #print('get scalars')
+    vtk_cell_results = cell_data.GetScalars()
+    if vtk_cell_results is None:
+        log.error('Expected centroidal results, but found none.  '
+                  'The result has already been mapped.')
+        return is_passed, failed_out
+    cell_results = vtk.util.numpy_support.vtk_to_numpy(vtk_cell_results)
+
+    icells = np.where(np.isfinite(cell_results))[0]
+    if not len(icells):
+        log.error('No cells found with finite results.')
+        return is_passed, failed_out
+    filtered_cell_results = cell_results[icells]
+    out_results_node = defaultdict(list)
+
+    # there are no NaNs in the data
+    for cell_id, res in zip(icells, filtered_cell_results):
+        cell = ugrid.GetCell(int(cell_id))
+        #point_ids = cell.GetPointIds()
+        nnodesi = cell.GetNumberOfPoints()
+        #for point_id in point_ids:
+        for ipoint in range(nnodesi):
+            point_id = cell.GetPointId(ipoint)
+            out_results_node[point_id].append(res)
+
+    #print('averaging')
+    point_results = np.full(nnodes, np.nan, dtype='float32')
+    for point_id, res in out_results_node.items():
+        meani = np.average(res)
+        point_results[point_id] = meani
+    vtk_point_results = numpy_to_vtk(point_results, deep=0, array_type=vtk.VTK_FLOAT)
+    vtk_point_results.SetName('name')
+
+    #points.SetData(points_array)
+    point_data.AddArray(vtk_point_results)
+
     try:
-        test_var = shape[0]
-    except:
-        shape = (0,)
+        imin = np.nanargmin(point_results)
+        imax = np.nanargmax(point_results)
+    except ValueError:
+        # nan; just fake the result
+        imin = 0
+        imax = 0
 
-    # Find the shape and set number of components.
-    if len(shape) == 1:
-        result_array.SetNumberOfComponents(1)
-    else:
-        result_array.SetNumberOfComponents(shape[1])
+    max_value = point_results[imax]
+    min_value = point_results[imin]
 
-    result_array.SetNumberOfTuples(shape[0])
+    #out = obj.get_nlabels_labelsize_ncolors_colormap(i, name)
+    #nlabels, labelsize, ncolors, colormap = out
 
-    # Ravel the array appropriately.
-    arr_dtype = get_numpy_array_type(vtk_typecode)
-    if np.issubdtype(z.dtype, arr_dtype) or \
-       z.dtype == np.dtype(arr_dtype):
-        z_flat = np.ravel(z)
-    else:
-        z_flat = np.ravel(z).astype(arr_dtype)
-        # z_flat is now a standalone object with no references from the caller.
-        # As such, it will drop out of this scope and cause memory issues if we
-        # do not deep copy its data.
-        deep = 1
 
-    # Point the VTK array to the numpy data.  The last argument (1)
-    # tells the array not to deallocate.
-    result_array.SetVoidArray(z_flat, len(z_flat), 1)
-    if deep:
-        copy = result_array.NewInstance()
-        copy.DeepCopy(result_array)
-        result_array = copy
-    else:
-        result_array._numpy_reference = z
-    return result_array
+    cell_data.SetActiveScalars(None)
+    point_data.SetActiveScalars('name')
+    is_passed = True
+    return is_passed, (imin, imax, min_value, max_value)
 
-def numpy_to_vtkIdTypeArray(num_array, deep=0):
-    """
-    Note
-    ----
-    This was pulled from VTK and modified to eliminate numpy 1.14 warnings.
-    VTK uses a BSD license, so it's OK to do  that.
-    """
-    isize = vtk.vtkIdTypeArray().GetDataTypeSize()
-    dtype = num_array.dtype
-    if isize == 4:
-        if dtype != np.int32:
-            raise ValueError(
-             'Expecting a numpy.int32 array, got %s instead.' % (str(dtype)))
-    else:
-        if dtype != np.int64:
-            raise ValueError(
-             'Expecting a numpy.int64 array, got %s instead.' % (str(dtype)))
-    return numpy_to_vtk(num_array, deep, vtkConstants.VTK_ID_TYPE)
+def update_axis_text_size(axis: vtk.vtkAxes,
+                          coord_text_scale: float,
+                          width: float=1.0, height: float=0.25):
+    """updates the coordinate system text size"""
+    # width doesn't set the width
+    # it being very large (old=0.1) makes the width constraint inactive
+
+    texts = [
+        axis.GetXAxisCaptionActor2D(),
+        axis.GetYAxisCaptionActor2D(),
+        axis.GetZAxisCaptionActor2D(),
+    ]
+    # this doesn't set the width
+    # this being very large (old=0.1) makes the width constraint inactive
+    for text in texts:
+        text.SetWidth(coord_text_scale * width)
+        text.SetHeight(coord_text_scale * height)
+

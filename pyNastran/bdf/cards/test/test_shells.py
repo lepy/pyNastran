@@ -1,18 +1,28 @@
 """defines various shell element tests"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+import os
+from io import StringIO
 import unittest
-from six.moves import StringIO
 import numpy as np
 from numpy import array
 
+from cpylog import get_logger
 from pyNastran.bdf.bdf import PCOMP, MAT1, BDF
+from pyNastran.bdf.cards.materials import get_mat_props_S
 from pyNastran.bdf.cards.test.utils import save_load_deck
+from pyNastran.bdf.mesh_utils.mass_properties import mass_properties_nsm
 
+
+try:
+    import matplotlib
+    IS_MATPLOTLIB = True
+    from pyNastran.bdf.cards.elements.plot import plot_equivalent_lamina_vs_theta
+except ImportError:
+    IS_MATPLOTLIB = False
 
 class TestShells(unittest.TestCase):
     def test_pshell(self):
-        model = BDF()
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         pid = 10
         pshell = model.add_pshell(pid, mid1=1, mid2=2, mid3=3, mid4=4, tst=3.14)
         assert ' 3.14' in pshell.rstrip(), pshell.rstrip()
@@ -229,7 +239,8 @@ class TestShells(unittest.TestCase):
         self._make_ctria3(model, rho, nu, G, E, t, nsm)
 
     def test_cquad4_01(self):
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         eid = 10
         pid = 20
         mid = 30
@@ -263,15 +274,15 @@ class TestShells(unittest.TestCase):
         # get node IDs without cross referencing
         eids = [10]
         nids = model.get_node_ids_with_elements(eids)
-        assert nids == set([1, 2, 3, 4]), nids
+        assert nids == {1, 2, 3, 4}, nids
 
         eids = [11]
         nids = model.get_node_ids_with_elements(eids)
-        assert nids == set([3, 4, 5, 6]), nids
+        assert nids == {3, 4, 5, 6}, nids
 
         eids = [10, 11]
         nids = model.get_node_ids_with_elements(eids)
-        assert nids == set([1, 2, 3, 4, 5, 6]), nids
+        assert nids == {1, 2, 3, 4, 5, 6}, nids
 
         params = [
             ('T', 1.0),
@@ -286,23 +297,21 @@ class TestShells(unittest.TestCase):
 
         eids = [10]
         nids = model.get_node_ids_with_elements(eids)
-        assert nids == set([1, 2, 3, 4]), nids
+        assert nids == {1, 2, 3, 4}, nids
 
         eids = [11]
         nids = model.get_node_ids_with_elements(eids)
-        assert nids == set([3, 4, 5, 6]), nids
+        assert nids == {3, 4, 5, 6}, nids
 
         eids = [10, 11]
         nids = model.get_node_ids_with_elements(eids)
-        assert nids == set([1, 2, 3, 4, 5, 6]), nids
+        assert nids == {1, 2, 3, 4, 5, 6}, nids
 
         save_load_deck(model)
 
 
     def test_pcomp_01(self):
-        """
-        asymmetrical, nsm=0.0 and nsm=1.0
-        """
+        """asymmetrical, nsm=0.0 and nsm=1.0"""
         #self.pid = data[0]
         #self.z0 = data[1]
         #self.nsm = data[2]
@@ -331,7 +340,7 @@ class TestShells(unittest.TestCase):
         data = [pid, z0, nsm, sb, ft, tref, ge, lam, Mid, T, theta, sout]
 
         p = PCOMP.add_op2_data(data)
-        self.assertFalse(p.is_symmetrical())
+        self.assertFalse(p.is_symmetrical)
         self.assertEqual(p.nplies, 3)
 
         self.assertAlmostEqual(p.Thickness(), 0.6)
@@ -446,9 +455,7 @@ class TestShells(unittest.TestCase):
             self.assertAlmostEqual(za, ze)
 
     def test_pcomp_02(self):
-        """
-        symmetrical, nsm=0.0 and nsm=1.0
-        """
+        """symmetrical, nsm=0.0 and nsm=1.0"""
         pid = 1
         z0 = 0.
         nsm = 0.
@@ -463,7 +470,7 @@ class TestShells(unittest.TestCase):
         sout = [1, 1, 0]  # 0-NO, 1-YES
         data = [pid, z0, nsm, sb, ft, tref, ge, lam, Mid, T, theta, sout]
         p = PCOMP.add_op2_data(data)
-        self.assertTrue(p.is_symmetrical())
+        self.assertTrue(p.is_symmetrical)
         self.assertEqual(p.nplies, 6)
 
         self.assertAlmostEqual(p.Thickness(), 1.2)
@@ -569,7 +576,8 @@ class TestShells(unittest.TestCase):
 
     def test_cshear(self):
         """tests a PSHEAR/CSHEAR"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -620,7 +628,8 @@ class TestShells(unittest.TestCase):
 
     def test_shells(self):
         """tests a CTRIA3/CQUAD4/PSHELL and CTRIA6/CQUAD8/CQUAD/PCOMP"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -662,10 +671,15 @@ class TestShells(unittest.TestCase):
         pcomp = model.add_pcomp(pid, mids, thicknesses)
 
         assert pcomp.Thickness() == sum(thicknesses), thicknesses
+        assert np.allclose(pcomp.get_thicknesses(), [0.1, 0.2, 0.3]), pcomp.get_thicknesses()
+        assert np.allclose(pcomp.get_thetas(), [0., 0., 0.]), pcomp.get_thetas()
 
         pcomp.lam = 'SYM'
         assert pcomp.Thickness() == sum(thicknesses)*2, thicknesses
 
+        assert np.allclose(pcomp.get_thicknesses(), [0.1, 0.2, 0.3, 0.3, 0.2, 0.1]), pcomp.get_thicknesses()
+        assert np.allclose(pcomp.get_thetas(), [0., 0., 0., 0., 0., 0.]), pcomp.get_thetas()
+        #---------------------------------------------------
         model.validate()
 
         ctria6.raw_fields()
@@ -690,9 +704,13 @@ class TestShells(unittest.TestCase):
         make_dvprel_optimization(model, params, 'PCOMP', pid)
         #--------------------------------
         model.cross_reference()
-        model.update_model_by_desvars(xref=True)
-
         model._verify_bdf(xref=True)
+
+        model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
+        model.update_model_by_desvars(xref=True)
 
         ctria6.raw_fields()
         ctria6.write_card(size=8)
@@ -707,10 +725,12 @@ class TestShells(unittest.TestCase):
         pcomp.write_card(size=8)
         pcomp.write_card(size=16)
         pcomp.write_card(size=16, is_double=True)
+        model._verify_bdf(xref=False)
 
     def test_trax(self):
         """tests a CTRAX3/CTRAX6/???"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -787,7 +807,8 @@ class TestShells(unittest.TestCase):
 
     def test_ctriar_cquadr(self):
         """tests a CTRIAR/PSHELL/MAT8"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -821,11 +842,18 @@ class TestShells(unittest.TestCase):
         model._verify_bdf(xref=True)
         model.uncross_reference()
         model.safe_cross_reference()
+
+        model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
+
         save_load_deck(model)
 
     def test_cplstn34(self):
         """tests a CPLSTN3, CPLSTN4/PSHELL/MAT8"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -872,7 +900,8 @@ class TestShells(unittest.TestCase):
 
     def test_cplstn68(self):
         """tests a CPLSTN6, CPLSTN8/PSHELL/MAT8"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(5, [.5, 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -917,7 +946,8 @@ class TestShells(unittest.TestCase):
 
     def test_ctrishell68(self):
         """tests a CPLSTN6, CPLSTN8/PSHELL/MAT8"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(5, [.5, 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -956,52 +986,84 @@ class TestShells(unittest.TestCase):
 
         model.uncross_reference()
         model.safe_cross_reference()
-        save_load_deck(model)
+        save_load_deck(model, run_test_bdf=False)
         #model.mass_properties()
 
     def test_shear(self):
         """tests a CSHEAR, PSHEAR"""
         pid = 10
+        pid_pshell = 11
+
         mid = 100
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
         model.add_grid(4, [0., 1., 0.])
-        model.add_cquad4(10, pid, [1, 2, 3, 4])
+        nsm = 10.0
+        t = 1.0
+        rho = 1.0
+        cshear = model.add_cshear(10, pid, [1, 2, 3, 4],
+                                  comment='cshear')
 
-        model.add_cshear(14, pid, [1, 2, 3, 4],
-                         comment='cshear')
-        model.add_pshear(pid, mid, t=1., comment='pshear')
+        cquad4 = model.add_cquad4(14, pid_pshell, [1, 2, 3, 4],
+                                  comment='cquad4')
+        model.add_pshear(pid, mid, t=t,
+                         nsm=nsm, f1=0., f2=0., comment='pshear')
+        model.add_pshell(pid_pshell, mid1=mid, t=t, mid2=None, twelveIt3=1.0,
+                         mid3=None, tst=0.833333,
+                         nsm=nsm, z1=None, z2=None,
+                         mid4=None, comment='')
 
         E = 3.0e7
         G = None
         nu = 0.3
-        model.add_mat1(mid, E, G, nu, rho=1.0)
+        model.add_mat1(mid, E, G, nu, rho=rho)
         model.validate()
 
         model.cross_reference()
         model.pop_xref_errors()
 
+        area = 1.0
+        mass_expected = area * (rho * t + nsm)
+        mass = model.mass_properties()[0]
+        assert np.allclose(mass, mass_expected*2), 'mass_properties all: mass=%s mass_expected=%s' % (mass, mass_expected*2)
+
         mass = model.mass_properties(element_ids=10)[0]
+        assert np.allclose(mass, mass_expected), 'mass_properties reduced: mass=%s mass_expected=%s' % (mass, mass_expected)
+
+        mass = mass_properties_nsm(model)[0]
+        assert np.allclose(mass, mass_expected*2), 'mass_properties_nsm all: mass=%s mass_expected=%s' % (mass, mass_expected*2)
+
+        mass = mass_properties_nsm(model, element_ids=10)[0]
+        assert np.allclose(mass, mass_expected), 'mass_properties_nsm reduced: mass=%s mass_expected=%s' % (mass, mass_expected)
+
         bdf_file = StringIO()
         model.write_bdf(bdf_file)
         model.uncross_reference()
         model.cross_reference()
         model.pop_xref_errors()
 
-        assert np.allclose(mass, 1.0), mass
+        model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
+
+        assert np.allclose(cshear.Mass(), mass_expected), cshear.Mass()
 
         model.uncross_reference()
         model.safe_cross_reference()
         model.uncross_reference()
+
         #bdf_file = model.write_bdf(bdf_file)
 
         save_load_deck(model)
 
     def test_cquadx4(self):
         """tests a CQUADX4"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         eid = 1
         pid = 2
         mid = 3
@@ -1032,7 +1094,8 @@ class TestShells(unittest.TestCase):
 
     def test_ctria6_cquad8_cquad9(self):
         """tests a CQUAD8 and CQUAD9"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         eid = 1
         pid = 10
         mid = 100
@@ -1101,11 +1164,17 @@ class TestShells(unittest.TestCase):
         assert np.allclose(cquad.Mass(), 0.1), cquad.Mass()
         assert np.allclose(ctria6.Mass(), 0.05), ctria6.Mass()
 
+        model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
+
         save_load_deck(model)
 
     def test_cquadx8(self):
         """tests a CQUADX, CTRIAX, CTRIAX6"""
-        model = BDF(debug=False)
+        log = get_logger(level='warning')
+        model = BDF(log=log)
         eid = 1
         pid = 10
         mid = 100
@@ -1143,9 +1212,207 @@ class TestShells(unittest.TestCase):
 
         model.cross_reference()
         model.pop_xref_errors()
-        save_load_deck(model)
+        save_load_deck(model, run_test_bdf=False)
+
+    def test_shell_mcid(self):
+        """tests that mcids=0 are correctly identified as not 0.0 and thus not dropped"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+
+        eid = 10
+        pid = 100
+        mid = 1000
+        model.add_ctria3(eid, pid, [1, 2, 3], zoffset=0., theta_mcid=0, tflag=0,
+                         T1=None, T2=None, T3=None,
+                         comment='')
+
+        eid = 11
+        model.add_cquad4(eid, pid, [1, 2,3, 4], theta_mcid=0, zoffset=0., tflag=0,
+                         T1=None, T2=None, T3=None, T4=None, comment='')
+
+        pshell = model.add_pshell(pid, mid1=mid, t=0.1, mid2=mid, twelveIt3=1.0,
+                                  mid3=None, tst=0.833333,
+                                  nsm=0.0, z1=None, z2=None,
+                                  mid4=None, comment='')
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu)
+        #print(model.elements[11])
+        assert model.elements[10].rstrip() == 'CTRIA3        10     100       1       2       3       0'
+        assert model.elements[11].rstrip() == 'CQUAD4        11     100       1       2       3       4       0'
+        assert model.elements[10].write_card().rstrip() == 'CTRIA3        10     100       1       2       3       0'
+
+        model.cross_reference()
+        unused_ABD = pshell.get_ABD_matrices(theta_offset=0.)
+        assert model.elements[10].rstrip() == 'CTRIA3        10     100       1       2       3       0'
+        assert model.elements[11].rstrip() == 'CQUAD4        11     100       1       2       3       4       0'
+
+        model.uncross_reference()
+        assert model.elements[10].rstrip() == 'CTRIA3        10     100       1       2       3       0'
+        assert model.elements[11].rstrip() == 'CQUAD4        11     100       1       2       3       4       0'
+        model.safe_cross_reference()
+        model.uncross_reference()
+        assert model.elements[10].rstrip() == 'CTRIA3        10     100       1       2       3       0'
+        assert model.elements[11].rstrip() == 'CQUAD4        11     100       1       2       3       4       0'
+
+        model2 = save_load_deck(model)
+        model2.elements[10].comment = ''
+        assert model2.elements[10].rstrip() == 'CTRIA3        10     100       1       2       3       0'
+        assert model2.elements[11].rstrip() == 'CQUAD4        11     100       1       2       3       4       0'
+
+    def test_abd_1(self):
+        """tests some ABD matrix functionality for a PCOMP"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+
+        nids = [1, 2, 3, 4]
+        eid = 1
+        pid = 10
+        mid = 20
+        model.add_cquad4(eid, pid, nids, theta_mcid=0.0, zoffset=0.,
+                         tflag=0, T1=None, T2=None, T3=None, T4=None, comment='')
+
+        thetas = [0., 45., 90.]
+        thicknesses = [0.1] * 3
+        mids = len(thicknesses) * [mid]
+        pcomp = model.add_pcomp(pid, mids, thicknesses, thetas=None,
+                                souts=None, nsm=0., sb=0., ft=None, tref=0., ge=0.,
+                                lam=None, z0=0., comment='')
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu)
+
+        #--------------------------
+        #e1_e2 = 40.
+        #g12_e2 = 0.5
+        #nu12 = 0.25
+        #e22 = 30e6
+
+        e1_e2 = 3.
+        g12_e2 = 0.5
+        nu12 = 0.25
+        e22 = 1.
+
+        e11 = e1_e2 * e22
+        g12 = g12_e2 * e22
+
+        mid8 = 8
+        mat8 = model.add_mat8(
+            mid8, e11, e22, nu12, g12=g12, g1z=1e8, g2z=1e8, rho=0.,
+            a1=0., a2=0., tref=0.,
+            Xt=0., Xc=None, Yt=0., Yc=None, S=0., ge=0.,
+            F12=0., strn=0., comment='')
+        S = get_mat_props_S(mat8)
+
+        pid8 = 8
+        pcomp8 = model.add_pcomp(pid8, [mid8], [1.], thetas=[0.],
+                                 souts=None, nsm=0., sb=0., ft=None, tref=0., ge=0.,
+                                 lam=None, z0=0., comment='')
+
+        model.pop_parse_errors()
+        model.cross_reference()
+        model.pop_xref_errors()
+        ABD = pcomp.get_ABD_matrices()
+
+        thetad = np.linspace(0., 90., num=91)
+        if IS_MATPLOTLIB:
+            plot_equivalent_lamina_vs_theta(
+                pcomp8, mat8, thetad, plot=True, show=False, close=True,
+                png_filename='lamina.png')
+            os.remove('lamina_stiffness.png')
+            os.remove('lamina_nu.png')
+
+    def test_abd_2(self):
+        """tests some ABD matrix functionality for a PCOMP"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+
+        #--------------------------
+        #PCOMP*              1601                                                *
+        #*                                                                    SYM
+        #*                      2           0.185            45.0             YES
+        #*                      2           0.185            90.0             YES
+        #*                      2           0.185           -45.0             YES
+        #*                      2           0.185             0.0             YES
+        #*                      2           0.185           -45.0             YES
+        #*                      2           0.185            90.0             YES
+        #*                      2           0.185            45.0             YES
+        #*                      2           0.185             0.0             YES
+        thetas = [45., 90., -45., 0., -45., 90., 45.0, 0.]
+        thicknesses = [0.185] * len(thetas)
+        mids = [2] * len(thetas)
+        pid = 2
+        pcomp_sym = model.add_pcomp(
+            pid, mids, thicknesses, thetas=thetas,
+            souts=None, nsm=0., sb=0., ft=None, tref=0., ge=0.,
+            lam='SYM', z0=None, comment='')
+
+        thetas = [45., 90., -45., 0., -45., 90., 45.0, 0.]
+        thetas += thetas[::-1]
+        #print(f'*****thetas = {thetas}')
+        thicknesses = [0.185] * len(thetas)
+        mids = [2] * len(thetas)
+        pid = 3
+        pcomp_asym = model.add_pcomp(
+            pid, mids, thicknesses, thetas=thetas,
+            souts=None, nsm=0., sb=0., ft=None, tref=0., ge=0.,
+            lam=None, z0=None, comment='')
+        mid = 2
+        #MAT8*                  2        179000.0          8110.0           0.317*
+        #*                 4140.0
+        e11 = 179000.
+        e22 = 8110.
+        nu12 = 0.317
+        g12 = 4140.
+        model.add_mat8(mid, e11, e22, nu12, g12=g12, g1z=1e8, g2z=1e8,
+                       rho=0., a1=0., a2=0., tref=0., Xt=0., Xc=None, Yt=0., Yc=None,
+                       S=0., ge=0., F12=0., strn=0., comment='')
+
+        model.pop_parse_errors()
+        model.cross_reference()
+        model.pop_xref_errors()
+        #ABD = pcomp.get_ABD_matrices()
+
+        #print(f'pcomp_sym:\n{pcomp_sym}')
+        ABD2 = pcomp_sym.get_ABD_matrices()
+        is_balanced, is_symmetric = pcomp_sym.is_balanced_symmetric(debug=False)
+        assert is_symmetric
+        A = ABD2[:3, :3]
+        B = ABD2[-3:, :3]
+        D = ABD2[-3:, -3:]
+        #print(ABD2)
+        #print(f'A:\n{A}\n')
+        #print(f'B:\n{B}\n')
+        #print(f'D:\n{D}\n')
+
+        #print('-------------')
+        #print(f'pcomp_asym:\n{pcomp_asym}')
+        ABD3 = pcomp_asym.get_ABD_matrices()
+        is_balanced, is_symmetric = pcomp_asym.is_balanced_symmetric(debug=False)
+        assert is_symmetric
+        A = ABD3[:3, :3]
+        B = ABD3[-3:, :3]
+        D = ABD3[-3:, -3:]
+        #print(ABD3)
+        #print(f'A:\n{A}\n')
+        #print(f'B:\n{B}\n')
+        #print(f'D:\n{D}\n')
+        B = ABD2[:3, -3:]
+        assert np.allclose(0., B.sum()), B
+        assert np.allclose(ABD2, ABD3), ABD2
 
 def make_dvcrel_optimization(model, params, element_type, eid, i=1):
+    """makes a series of DVCREL1 and a DESVAR"""
     j = i
     for ii, (name, desvar_value) in enumerate(params):
         j = i + ii
@@ -1159,6 +1426,7 @@ def make_dvcrel_optimization(model, params, element_type, eid, i=1):
     return j + 1
 
 def make_dvprel_optimization(model, params, prop_type, pid, i=1):
+    """makes a series of DVPREL1 and a DESVAR"""
     j = i
     for ii, (name, desvar_value) in enumerate(params):
         j = i + ii
@@ -1172,17 +1440,19 @@ def make_dvprel_optimization(model, params, prop_type, pid, i=1):
     return j + 1
 
 def make_dvmrel_optimization(model, params, material_type, mid, i=1):
+    """makes a series of DVMREL1 and a DESVAR"""
     j = i
     for ii, (name, desvar_value) in enumerate(params):
         j = i + ii
         dvids = [j]
         coeffs = [1.0]
-        model.add_dvmrel1(j, material_type, eid, name, dvids, coeffs,
+        model.add_dvmrel1(j, material_type, mid, name, dvids, coeffs,
                           mp_min=None, mp_max=1e20,
                           c0=0.0, validate=True,
                           comment='')
         model.add_desvar(j, 'v%s' % name, desvar_value)
     return j + 1
+
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

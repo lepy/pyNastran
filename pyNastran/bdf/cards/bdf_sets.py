@@ -33,13 +33,13 @@ The superelement sets start with SE:
 +------------+-----------------+
 |  SEBSETi   | BSETi           |
 +------------+-----------------+
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import string_types
-from six.moves import zip, range
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import List, Union, Optional, Any, TYPE_CHECKING
+import numpy as np
+
+from pyNastran.utils.numpy_utils import integer_types, integer_string_types
 from pyNastran.bdf.cards.base_card import (
     BaseCard, _node_ids, expand_thru
 )
@@ -48,38 +48,32 @@ from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, integer_or_string,
     parse_components, components_or_blank as fcomponents_or_blank,
-    fields, string, integer_string_or_blank)
+    fields, string, integer_string_or_blank,
+)
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class Set(BaseCard):
     """Generic Class all SETx cards inherit from"""
 
     def __init__(self):
-        #:  Unique identification number. (Integer > 0)
-        self.sid = None
         #:  list of IDs in the SETx
         self.ids = []
 
-    def clean_ids(self):
+    def clean_ids(self) -> None:
         """eliminates duplicate IDs from self.IDs and sorts self.IDs"""
         self.ids = list(set(self.ids))
         self.ids.sort()
 
-    #def cleanIDs(self):
-        #self.clean_ids()
-
-    #def SetIDs(self):
-        #"""gets the IDs of the SETx"""
-        #return collapse_thru(self.ids)
-
-    def repr_fields(self):
+    def repr_fields(self)-> List[Optional[Union[int, float, str]]]:
         list_fields = self.raw_fields()
         return list_fields
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.comment + print_card_8(self.repr_fields())
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -110,16 +104,26 @@ class ABCQSet(Set):
     +------+-----+----+-----+------+-----+----+-----+----+
     """
     type = 'ABCQSet'
-    def __init__(self, ids, components, comment=''):
+
+    def _finalize_hdf5(self, encoding):
+        """hdf5 helper function"""
+        if isinstance(self.ids, np.ndarray):
+            self.ids = self.ids.tolist()
+        if isinstance(self.components, np.ndarray):
+            self.components = self.components.tolist()
+
+    def __init__(self, ids: List[int], components: List[int], comment: str='') -> None:
         Set.__init__(self)
         if comment:
             self.comment = comment
         #:  Identifiers of grids points. (Integer > 0)
+        if isinstance(ids, int):
+            ids = [ids]
         self.ids = ids
         self.components = components
         self.ids_ref = None
 
-    def validate(self):
+    def validate(self) -> None:
         assert isinstance(self.ids, list), type(self.ids)
         assert isinstance(self.components, list), type(self.components)
         assert len(self.ids) == len(self.components), 'len(ids)=%s len(components)=%s' % (len(self.ids), len(self.components))
@@ -139,12 +143,12 @@ class ABCQSet(Set):
         return cls(ids, components, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data: List[Any], comment: str='') -> ABCQSet:
         ids = [data[0]]
         components = [data[1]]
         return cls(ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -152,11 +156,13 @@ class ABCQSet(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by %s' % self.type
+        msg = ', which is required by %s' % self.type
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -164,7 +170,7 @@ class ABCQSet(Set):
     def node_ids(self):
         if self.ids_ref is None:
             return self.ids
-        msg = ' which is required by %s' % self.type
+        msg = ', which is required by %s' % self.type
         return _node_ids(self, self.ids, allow_empty_nodes=True, msg=msg)
 
     def raw_fields(self):
@@ -194,6 +200,14 @@ class SuperABCQSet(Set):
     +--------+------+-----+----+-----+------+-----+-----+-----+
     """
     type = 'SuperABCQSet'
+
+    def _finalize_hdf5(self, encoding):
+        """hdf5 helper function"""
+        if isinstance(self.ids, np.ndarray):
+            self.ids = self.ids.tolist()
+        if isinstance(self.components, np.ndarray):
+            self.components = self.components.tolist()
+
     def __init__(self, seid, ids, components, comment=''):
         Set.__init__(self)
         if comment:
@@ -228,7 +242,7 @@ class SuperABCQSet(Set):
             components.append(component)
         return cls(seid, ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -236,17 +250,19 @@ class SuperABCQSet(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by %s seid=%s' % (self.type, self.seid)
+        msg = ', which is required by %s seid=%s' % (self.type, self.seid)
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
     @property
     def node_ids(self):
-        msg = ' which is required by %s seid=%s' % (self.type, self.seid)
+        msg = ', which is required by %s seid=%s' % (self.type, self.seid)
         if self.ids_ref is None:
             return self.ids
         return _node_ids(self, self.ids_ref, allow_empty_nodes=True, msg=msg)
@@ -276,6 +292,13 @@ class ASET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     """
     type = 'ASET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = ['123', '456']
+        return ASET(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -292,6 +315,7 @@ class ASET(ABCQSet):
             a comment for the card
 
         ..note :: the length of components and ids must be the same
+
         """
         ABCQSet.__init__(self, ids, components, comment)
 
@@ -310,6 +334,13 @@ class BSET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     """
     type = 'BSET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = ['123', '456']
+        return BSET(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -327,6 +358,7 @@ class BSET(ABCQSet):
             a comment for the card
 
         ..note :: the length of components and ids must be the same
+
         """
         ABCQSet.__init__(self, ids, components, comment)
 
@@ -346,6 +378,13 @@ class CSET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     """
     type = 'CSET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = ['123', '456']
+        return CSET(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -363,6 +402,7 @@ class CSET(ABCQSet):
             a comment for the card
 
         ..note :: the length of components and ids must be the same
+
         """
         ABCQSet.__init__(self, ids, components, comment)
 
@@ -381,6 +421,13 @@ class QSET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     """
     type = 'QSET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = ['123', '456']
+        return QSET(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -396,6 +443,7 @@ class QSET(ABCQSet):
             the degree of freedoms to be created (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         ABCQSet.__init__(self, ids, components, comment)
 
@@ -417,6 +465,12 @@ class ABQSet1(Set):
     +-------+-----+-----+------+-----+-----+-----+-----+-----+
     """
     type = 'ABQSet1'
+
+    def _finalize_hdf5(self, encoding):
+        """hdf5 helper function"""
+        if isinstance(self.ids, np.ndarray):
+            self.ids = self.ids.tolist()
+
     def __init__(self, ids, components, comment=''):
         Set.__init__(self)
         if comment:
@@ -461,7 +515,7 @@ class ABQSet1(Set):
             raise NotImplementedError('thru_flag=%s data=%s' % (thru_flag, data))
         return cls(ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -469,11 +523,13 @@ class ABQSet1(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by %s' % self.type
+        msg = ', which is required by %s' % self.type
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -483,7 +539,7 @@ class ABQSet1(Set):
 
     @property
     def node_ids(self):
-        msg = ' which is required by %s' % self.type
+        msg = ', which is required by %s' % self.type
         if self.ids_ref is None:
             return self.ids
         return _node_ids(self, self.ids_ref, allow_empty_nodes=True, msg=msg)
@@ -519,6 +575,11 @@ class SuperABQSet1(Set):
     +----------+------+-----+------+------+-----+-----+-----+-----+
     """
     type = 'SuperABQSet1'
+    def _finalize_hdf5(self, encoding):
+        """hdf5 helper function"""
+        if isinstance(self.ids, np.ndarray):
+            self.ids = self.ids.tolist()
+
     def __init__(self, seid, ids, components, comment=''):
         Set.__init__(self)
         if comment:
@@ -535,6 +596,12 @@ class SuperABQSet1(Set):
         #print('ids =', self.ids)
         assert None not in self.ids
         self.ids_ref = None
+        self.validate()
+
+    def validate(self):
+        if not isinstance(self.components, integer_string_types):
+            msg = 'type(components)=%s must be an int/string' % type(self.components)
+            raise TypeError(msg)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -559,9 +626,9 @@ class SuperABQSet1(Set):
         assert None not in nids, 'Type=%s nids=%s' % (cls.type, nids)
         assert -1 not in nids, 'nids=%s' % (nids.tolist())
         assert 0 not in nids, 'nids=%s' % (nids.tolist())
-        return cls(seid, components, nids, comment=comment)
+        return cls(seid, nids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -569,17 +636,19 @@ class SuperABQSet1(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by %s seid=%s' % (self.type, self.seid)
+        msg = ', which is required by %s seid=%s' % (self.type, self.seid)
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
     @property
     def node_ids(self):
-        msg = ' which is required by %s seid=%s' % (self.type, self.seid)
+        msg = ', which is required by %s seid=%s' % (self.type, self.seid)
         if self.ids_ref is None:
             return self.ids
         return _node_ids(self, self.ids_ref, allow_empty_nodes=True, msg=msg)
@@ -609,6 +678,13 @@ class ASET1(ABQSet1):
     +-------+-----+-----+------+-----+-----+-----+-----+-----+
     """
     type = 'ASET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = '123'
+        return ASET1(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -623,8 +699,52 @@ class ASET1(ABQSet1):
             the degree of freedoms to be retained (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         ABQSet1.__init__(self, ids, components, comment)
+
+class OMIT(ABCQSet):
+    """
+    Defines analysis set (a-set) degrees-of-freedom to be fixed (b-set)
+    during generalized dynamic reduction or component mode synthesis
+    calculations.
+
+    +------+-----+----+-----+------+-----+----+-----+----+
+    |  1   |  2  | 3  |  4  |  5   |  6  |  7 |  8  | 9  |
+    +======+=====+====+=====+======+=====+====+=====+====+
+    | OMIT | ID1 | C1 | ID2 |  C2  | ID3 | C3 | ID4 | C4 |
+    +------+-----+----+-----+------+-----+----+-----+----+
+    | OMIT | 16  |  2 |  23 | 3516 |  1  | 4  |     |    |
+    +------+-----+----+-----+------+-----+----+-----+----+
+    """
+    type = 'OMIT'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = ['123', '456']
+        return BSET(ids, components, comment='')
+
+    def __init__(self, ids, components, comment=''):
+        """
+        Creates an BSET card, which defines the degree of freedoms that
+        will be fixed during a generalized dynamic reduction or component
+        model synthesis calculation.
+
+        Parameters
+        ----------
+        ids : List[int]
+            the GRID/SPOINT ids
+        components : List[str]
+            the degree of freedoms to be fixed (e.g., '1', '123')
+        comment : str; default=''
+            a comment for the card
+
+        ..note :: the length of components and ids must be the same
+
+        """
+        ABCQSet.__init__(self, ids, components, comment)
 
 
 class OMIT1(ABQSet1):
@@ -642,6 +762,13 @@ class OMIT1(ABQSet1):
     +-------+-----+-----+------+-----+-----+-----+-----+-----+
     """
     type = 'OMIT1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = '123'
+        return OMIT1(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -656,6 +783,7 @@ class OMIT1(ABQSet1):
             the degree of freedoms to be omitted (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         ABQSet1.__init__(self, ids, components, comment)
 
@@ -677,6 +805,13 @@ class BSET1(ABQSet1):
     +-------+-----+-----+------+-----+-----+-----+-----+-----+
     """
     type = 'BSET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = '123'
+        return BSET1(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -692,6 +827,7 @@ class BSET1(ABQSet1):
             the degree of freedoms to be fixed (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         ABQSet1.__init__(self, ids, components, comment)
 
@@ -715,6 +851,13 @@ class CSET1(Set):
     +-------+-----+-----+------+-----+-----+-----+-----+-----+
     """
     type = 'CSET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = '123'
+        return CSET1(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -730,6 +873,7 @@ class CSET1(Set):
             the degree of freedoms to be free (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         Set.__init__(self)
         if comment:
@@ -750,6 +894,7 @@ class CSET1(Set):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         if integer_string_or_blank(card, 2, 'C') == 'ALL':
             components = '123456'
@@ -764,7 +909,7 @@ class CSET1(Set):
             id_count += 1
         return CSET1(ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -772,17 +917,19 @@ class CSET1(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by CSET1'
+        msg = ', which is required by CSET1'
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
     @property
     def node_ids(self):
-        msg = ' which is required by CSET1'
+        msg = ', which is required by CSET1'
         if self.ids_ref is None:
             return self.ids
         return _node_ids(self, self.ids_ref, allow_empty_nodes=True, msg=msg)
@@ -803,6 +950,13 @@ class QSET1(ABQSet1):
     dynamic reduction or component mode synthesis.
     """
     type = 'QSET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        ids = [1, 2]
+        components = '123'
+        return QSET1(ids, components, comment='')
 
     def __init__(self, ids, components, comment=''):
         """
@@ -818,6 +972,7 @@ class QSET1(ABQSet1):
             the degree of freedoms to be created (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         ABQSet1.__init__(self, ids, components, comment)
 
@@ -845,6 +1000,12 @@ class SET1(Set):
     """
     type = 'SET1'
 
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        ids = [1]
+        return SET1(sid, ids, is_skin=False, comment='')
+
     def __init__(self, sid, ids, is_skin=False, comment=''):
         """
         Creates a SET1 card, which defines a list of structural grid
@@ -863,6 +1024,7 @@ class SET1(Set):
             if is_skin is used; ids must be empty
         comment : str; default=''
             a comment for the card
+
         """
         Set.__init__(self)
         if comment:
@@ -873,8 +1035,8 @@ class SET1(Set):
         #:  List of structural grid point or element identification numbers.
         #:  (Integer > 0 or 'THRU'; for the 'THRU' option, ID1 < ID2 or 'SKIN';
         #:  in field 3)
-        self.ids = expand_thru(ids)
-        self.clean_ids()
+        self.ids = expand_thru(ids, set_fields=False, sort_fields=False)
+        #self.clean_ids()
 
         self.is_skin = is_skin
         self.xref_type = None
@@ -891,13 +1053,14 @@ class SET1(Set):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         ids = fields(integer_or_string, card, 'ID', i=2, j=len(card))
         is_skin = False
         i = 0
         if len(ids) > 0:
-            if isinstance(ids[0], string_types) and ids[0] == 'SKIN':
+            if isinstance(ids[0], str) and ids[0] == 'SKIN':
                 is_skin = True
                 i += 1
         else:
@@ -925,7 +1088,6 @@ class SET1(Set):
         skin = []
         if self.is_skin:
             skin = ['SKIN']
-        ids = self.get_ids()
         return ['SET1', self.sid] + skin + self.get_ids()
 
     def cross_reference_set(self, model, xref_type, msg='', allow_empty_nodes=False):
@@ -951,8 +1113,9 @@ class SET1(Set):
           - ACMODL (optional)
         - elements
           - ACMODL (optional)
+
         """
-        msg = ' which is required by SET1 sid=%s%s' % (self.sid, msg)
+        msg = ', which is required by SET1 sid=%s%s' % (self.sid, msg)
         if xref_type == 'Node':
             self.ids_ref = model.Nodes(self.get_ids(), msg=msg)
         elif xref_type == 'Point':
@@ -984,20 +1147,22 @@ class SET1(Set):
           - ACMODL (optional)
         - elements
           - ACMODL (optional)
+
         """
         assert msg != ''
-        msg = ' which is required by SET1 sid=%s%s nid=%%s' % (self.sid, msg)
+        msg = ', which is required by SET1 sid=%s%s' % (self.sid, msg)
         if xref_type == 'Node':
             self.ids_ref, out = model.safe_get_nodes(self.get_ids(), msg=msg)
             if len(out):
                 model.log.warning(out)
         elif xref_type == 'Point':
-            self.ids_ref, out = model.SafePoints(self.get_ids(), msg=msg)
+            self.ids_ref, out = model.safe_points(self.get_ids(), msg=msg)
         else:
             raise NotImplementedError("xref_type=%r and must be ['Node', 'Point']" % xref_type)
         self.xref_type = xref_type
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         if self.xref_type in ['Node', 'Point']:
             self.ids = self.get_ids()
             self.xref_type = None
@@ -1018,7 +1183,7 @@ class SET1(Set):
             raise NotImplementedError("xref_type=%r and must be ['Node']" % self.xref_type)
         return ids
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         skin = []
         if self.is_skin:
             skin = ['SKIN']
@@ -1075,9 +1240,17 @@ class SET3(Set):
     +------+-----+-------+-----+-----+-----+-----+-----+-----+
     | SET3 |  1  | POINT | 11  | 12  |     |     |     |     |
     +------+-----+-------+-----+-----+-----+-----+-----+-----+
+
     """
     type = 'SET3'
     valid_descs = ['GRID', 'POINT', 'ELEMENT', 'PROP', 'RBEIN', 'RBEEX']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        desc = 'ELEM'
+        ids = [1]
+        return SET3(sid, desc, ids, comment='')
 
     def __init__(self, sid, desc, ids, comment=''):
         Set.__init__(self)
@@ -1094,7 +1267,7 @@ class SET3(Set):
 
         #:  Identifiers of grids points, elements, points or properties.
         #:  (Integer > 0)
-        self.ids = expand_thru(ids)
+        self.ids = expand_thru(ids, set_fields=False, sort_fields=False)
         self.ids_ref = None
         self.xref_type = None
 
@@ -1114,13 +1287,17 @@ class SET3(Set):
             ids = [point if isinstance(point, integer_types) else point.nid
                    for point in self.ids_ref]
         else:
-            raise NotImplementedError("xref_type=%r and must be ['Node']" % self.xref_type)
+             # 'Node',
+            raise NotImplementedError("xref_type=%r and must be ['Point']" % self.xref_type)
         return ids
 
     def cross_reference_set(self, model, xref_type, msg=''):
-        msg = ' which is required by SET3 sid=%s%s' % (self.sid, msg)
-        #if xref_type == 'Node':
-            #self.ids = model.Nodes(self.get_ids(), msg=msg)
+        msg = ', which is required by SET3 sid=%s%s' % (self.sid, msg)
+        if xref_type == 'GRID':  # was 'Node'
+            # not tested relative to Nastran, seems obvious though
+            # I'm not sure why Node was here vs. GRID
+            # the block was disabled anyways, so probably doesn't matter
+            self.ids = model.Nodes(self.get_ids(), msg=msg)
         if xref_type == 'Point':
             self.ids_ref = model.Points(self.get_ids(), msg=msg)
         else:
@@ -1144,6 +1321,7 @@ class SET3(Set):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         desc = string(card, 2, 'desc')
@@ -1220,15 +1398,22 @@ class SET3(Set):
             msg += print_card_8(['SET3', self.sid, self.desc] + ids)
         return msg
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         return str(self)
 
 
 class SESET(SetSuper):
     """
     Defines interior grid points for a superelement.
+
     """
     type = 'SESET'
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        return SESET(seid, ids, comment='')
 
     def __init__(self, seid, ids, comment=''):
         SetSuper.__init__(self)
@@ -1251,6 +1436,7 @@ class SESET(SetSuper):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         seid = integer_or_blank(card, 1, 'seid', 0)
         ids = fields(integer_or_string, card, 'ID', i=2, j=len(card))
@@ -1280,10 +1466,11 @@ class SESET(SetSuper):
             cards.append(card)
         return ''.join(cards)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
 
@@ -1299,8 +1486,17 @@ class SEBSET(SuperABCQSet):
     +--------+------+-----+------+-----+----+-----+----+
     | SEBSET |  C   | ID1 | THRU | ID2 |    |     |    |
     +--------+------+-----+------+-----+----+-----+----+
+
     """
     type = 'SEBSET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        components = ['123', '456']
+        return SEBSET(seid, ids, components, comment='')
 
     def __init__(self, seid, ids, components, comment=''):
         SuperABCQSet.__init__(self, seid, ids, components, comment)
@@ -1320,8 +1516,17 @@ class SEBSET1(SuperABQSet1):
     +----------+------+-----+------+------+-----+-----+-----+-----+
     | SEBSET1  | SEID |  C  | ID1  | THRU | ID2 |     |     |     |
     +----------+------+-----+------+------+-----+-----+-----+-----+
+
     """
     type = 'SEBSET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        components = '123'
+        return SEBSET1(seid, ids, components, comment='')
 
     def __init__(self, seid, ids, components, comment=''):
         SuperABQSet1.__init__(self, seid, ids, components, comment)
@@ -1329,6 +1534,14 @@ class SEBSET1(SuperABQSet1):
 
 class SECSET(SuperABCQSet):
     type = 'SECSET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        components = ['123', '456']
+        return SECSET(seid, ids, components, comment='')
 
     def __init__(self, seid, ids, components, comment=''):
         SuperABCQSet.__init__(self, seid, ids, components, comment)
@@ -1346,8 +1559,17 @@ class SECSET1(SuperABQSet1):
     +----------+------+-----+------+------+-----+-----+-----+-----+
     | SECSET1  | SEID |  C  | ID1  | THRU | ID2 |     |     |     |
     +----------+------+-----+------+------+-----+-----+-----+-----+
+
     """
     type = 'SECSET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        components = '123'
+        return SECSET1(seid, ids, components, comment='')
 
     def __init__(self, seid, ids, components, comment=''):
         SuperABQSet1.__init__(self, seid, ids, components, comment)
@@ -1355,12 +1577,28 @@ class SECSET1(SuperABQSet1):
 
 class SEQSET(SuperABCQSet):
     type = 'SEQSET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        components = ['123', '456']
+        return SEQSET(seid, ids, components, comment='')
 
     def __init__(self, seid, ids, components, comment=''):
         SuperABCQSet.__init__(self, seid, ids, components, comment)
 
 class SEQSET1(SuperABQSet1):
     type = 'SEQSET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        seid = 1
+        ids = [1, 2]
+        components = '123'
+        return SEQSET1(seid, ids, components, comment='')
 
     def __init__(self, seid, ids, components, comment=''):
         SuperABQSet1.__init__(self, seid, ids, components, comment)
@@ -1371,6 +1609,7 @@ class SEQSEP(SetSuper):  # not integrated...is this an SESET ???
     Used with the CSUPER entry to define the correspondence of the
     exterior grid points between an identical or mirror-image
     superelement and its primary superelement.
+
     """
     type = 'SEQSEP'
 
@@ -1400,11 +1639,16 @@ class SEQSEP(SetSuper):  # not integrated...is this an SESET ???
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         ssid = integer(card, 1, 'ssid')
         psid = integer(card, 2, 'psid')
         ids = fields(integer_or_string, card, 'ID', i=3, j=len(card))
         return SEQSEP(ssid, psid, ids, comment=comment)
+
+    def get_ids(self)-> List[int]:
+        """gets the ids"""
+        return self.ids
 
     def raw_fields(self):
         """gets the "raw" card without any processing as a list for printing"""
@@ -1412,35 +1656,56 @@ class SEQSEP(SetSuper):  # not integrated...is this an SESET ???
         return list_fields
 
 
-class RADSET(Set):  # not integrated
+class RADSET(ABQSet1):
     """
     Specifies which radiation cavities are to be included for
     radiation enclosure analysis.
 
-    +--------+----------+----------+----------+----------+----------+----------+----------+
-    |   1    |     2    |     3    |     4    |     5    |     6    |     7    |     8    |
-    +========+==========+==========+==========+==========+==========+==========+==========+
-    | RADSET | ICAVITY1 | ICAVITY2 | ICAVITY3 | ICAVITY4 | ICAVITY5 | ICAVITY6 | ICAVITY7 |
-    +--------+----------+----------+----------+----------+----------+----------+----------+
-    |        | ICAVITY8 | ICAVITY9 | -etc.-   |          |          |          |          |
-    +--------+----------+----------+----------+----------+----------+----------+----------+
+    +--------+----------+----------+----------+----------+----------+----------+----------+----------+
+    |    1   |     2    |     3    |     4    |     5    |     6    |     7    |     8    |     9    |
+    +========+==========+==========+==========+==========+==========+==========+==========+==========+
+    | RADSET | ICAVITY1 | ICAVITY2 | ICAVITY3 | ICAVITY4 | ICAVITY5 | ICAVITY6 | ICAVITY7 | ICAVITY8 |
+    +--------+----------+----------+----------+----------+----------+----------+----------+----------+
+    |        | ICAVITY9 |          |          |          |          |          |          |          |
+    +--------+----------+----------+----------+----------+----------+----------+----------+----------+
+    | RADSET |     1    |     2    |     3    |     4    |          |          |          |          |
+    +--------+----------+----------+----------+----------+----------+----------+----------+----------+
     """
     type = 'RADSET'
 
-    def __init__(self, seid, ids, comment=''):
-        Set.__init__(self)
+    @classmethod
+    def _init_from_empty(cls):
+        cavities = [1, 2]
+        return RADSET(cavities, comment='')
+
+    def _finalize_hdf5(self, encoding):
+        """hdf5 helper function"""
+        if isinstance(self.cavities, np.ndarray):
+            self.cavities = self.cavities.tolist()
+
+    def __init__(self, cavities, comment=''):
+        """
+        Creates a RADSET card
+
+        Parameters
+        ----------
+        cavities : List[int]
+            the RADCAV ids
+        comment : str; default=''
+            a comment for the card
+        """
         if comment:
             self.comment = comment
-        self.seid = seid
-        #: Grid or scalar point identification number.
-        #: (0 < Integer < 1000000; G1 < G2)
-        self.ids = expand_thru(ids)
-        self.clean_ids()
+        self.cavities = cavities
+
+        #:  Identifiers of grids points. (Integer > 0)
+        #self.ids = expand_thru(ids)
+        #self.ids_ref = None
 
     @classmethod
     def add_card(cls, card, comment=''):
         """
-        Adds a RADSET card from ``BDF.add_card(...)``
+        Adds a USET1 card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -1448,19 +1713,42 @@ class RADSET(Set):  # not integrated
             a BDFCard object
         comment : str; default=''
             a comment for the card
-        """
-        seid = integer(card, 1, 'seid')
-        ids = fields(integer_or_string, card, 'ID', i=2, j=len(card))
-        return RADSET(seid, ids, comment=comment)
 
-    def add_radset(self, radset):
-        self.ids += radset.ids
-        self.clean_ids()
+        """
+        nfields = len(card)
+        cavities = []
+        i = 1
+        for ifield in range(1, nfields):
+            cavity = integer(card, ifield, 'iCavity%i' % i)
+            if cavity:
+                i += 1
+                cavities.append(cavity)
+        return RADSET(cavities, comment=comment)
+
+    #def cross_reference(self, model: BDF) -> None:
+        #"""
+        #Cross links the card so referenced cards can be extracted directly
+
+        #Parameters
+        #----------
+        #model : BDF()
+            #the BDF object
+        #"""
+        #msg = ', which is required by USET1 name=%s' % (self.name)
+        #self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
+
+    #def uncross_reference(self) -> None:
+        #self.ids = self.node_ids
+        #self.ids_ref = None
 
     def raw_fields(self):
         """gets the "raw" card without any processing as a list for printing"""
-        list_fields = ['RADSET', self.seid] + self.get_ids()
+        list_fields = ['RADSET'] + self.cavities # collapse_thru(self.node_ids)
         return list_fields
+
+    def __repr__(self):
+        list_fields = self.raw_fields()
+        return self.comment + print_card_8(list_fields)
 
 
 class USET(Set):
@@ -1476,6 +1764,15 @@ class USET(Set):
     +------+-------+-----+------+-----+----+-----+----+
     """
     type = 'USET'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        #name = 'SNAME'
+        ids = [1, 2]
+        components = ['123', '456']
+        return QSET(ids, components, comment='')
+
     def __init__(self, name, ids, components, comment=''):
         """
         Creates a USET card, which defines a degrees-of-freedom set.
@@ -1491,6 +1788,7 @@ class USET(Set):
             the degree of freedoms (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         Set.__init__(self)
         if comment:
@@ -1512,6 +1810,7 @@ class USET(Set):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         name = string(card, 1, 'name')
         components = []
@@ -1535,6 +1834,7 @@ class USET(Set):
         that I don't understand like:
           - the setname is 1-4 characters, except if it's 'ZERO%i' % sid
             ummm...odd
+
         """
         sid = data[0]
         nid = data[1]
@@ -1549,7 +1849,7 @@ class USET(Set):
             assert componenti in '0123456', component
         return USET(name, [nid], [component], comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1557,11 +1857,13 @@ class USET(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by USET name=%s' % (self.name)
+        msg = ', which is required by USET name=%s' % (self.name)
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -1569,7 +1871,7 @@ class USET(Set):
     def node_ids(self):
         if self.ids_ref is None:
             return self.ids
-        msg = ' which is required by USET name=%s' % (self.name)
+        msg = ', which is required by USET name=%s' % (self.name)
         return _node_ids(self, self.ids_ref, allow_empty_nodes=True, msg=msg)
 
     def raw_fields(self):
@@ -1595,8 +1897,17 @@ class USET1(ABQSet1):
     +-------+-------+-----+------+------+-----+-----+-----+-----+
     | USET1 | SNAME |  C  | ID1  | THRU | ID2 |     |     |     |
     +-------+-------+-----+------+------+-----+-----+-----+-----+
+
     """
     type = 'USET1'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        name = 'SNAME'
+        ids = [1, 2]
+        components = '123'
+        return USET1(name, ids, components, comment='')
 
     def __init__(self, name, ids, components, comment=''):
         """
@@ -1609,10 +1920,11 @@ class USET1(ABQSet1):
             followed by the set name.)
         ids : List[int]
             the GRID/SPOINT ids
-        components : List[str]
+        components : str
             the degree of freedoms (e.g., '1', '123')
         comment : str; default=''
             a comment for the card
+
         """
         ABQSet1.__init__(self, ids, components, comment=comment)
         #if comment:
@@ -1639,6 +1951,7 @@ class USET1(ABQSet1):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         name = string(card, 1, 'name')
         components = fcomponents_or_blank(card, 2, 'components', 0)
@@ -1653,7 +1966,7 @@ class USET1(ABQSet1):
                 ids.append(idi)
         return USET1(name, ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1661,11 +1974,13 @@ class USET1(ABQSet1):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by USET1 name=%s' % (self.name)
+        msg = ', which is required by USET1 name=%s' % (self.name)
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -1673,7 +1988,7 @@ class USET1(ABQSet1):
     def node_ids(self):
         if self.ids_ref is None:
             return self.ids
-        msg = ' which is required by USET1 name=%s' % (self.name)
+        msg = ', which is required by USET1 name=%s' % (self.name)
         return _node_ids(self, self.ids_ref, allow_empty_nodes=True, msg=msg)
 
     def raw_fields(self):

@@ -9,23 +9,24 @@ All aero cards are defined in this file.  This includes:
  * MKAERO1 / MKAERO2
 
 All cards are BaseCard objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+from __future__ import annotations
 from itertools import count
-from six.moves import range
-from six import string_types
+from typing import TYPE_CHECKING
 import numpy as np
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.cards.base_card import BaseCard
-from pyNastran.utils.atmosphere2 import make_flfacts_alt_sweep, make_flfacts_mach_sweep
+from pyNastran.utils.atmosphere import make_flfacts_alt_sweep, make_flfacts_mach_sweep, atm_density, _velocity_factor
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank, string,
     fields, string_or_blank, double_string_or_blank, interpret_value)
 from pyNastran.bdf.cards.utils import wipe_empty_fields
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class Aero(BaseCard):
@@ -43,6 +44,7 @@ class Aero(BaseCard):
             xz symmetry flag (+1=symmetry; -1=antisymmetric)
         sym_xy : int; default=0
             xy symmetry flag (+1=symmetry; -1=antisymmetric)
+
         """
         BaseCard.__init__(self)
         self.sym_xy = None
@@ -100,10 +102,19 @@ class AERO(Aero):
     +------+-------+----------+------+--------+-------+-------+
     """
     type = 'AERO'
+    _properties = ['is_anti_symmetric_xy', 'is_anti_symmetric_xz',
+                   'is_symmetric_xy', 'is_symmetric_xz']
     _field_map = {
         1: 'acsid', 2:'velocity', 3:'cRef', 4:'rhoRef', 5:'symXZ',
         6:'symXY',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        velocity = 1.
+        cref = 1.
+        rho_ref = 1.
+        return AERO(velocity, cref, rho_ref, acsid=0, sym_xz=0, sym_xy=0, comment='')
 
     def __init__(self, velocity, cref, rho_ref, acsid=0, sym_xz=0, sym_xy=0, comment=''):
         """
@@ -126,6 +137,7 @@ class AERO(Aero):
             xy symmetry flag (+1=symmetry; -1=antisymmetric)
         comment : str; default=''
             a comment for the card
+
         """
         Aero.__init__(self)
         if comment:
@@ -170,7 +182,7 @@ class AERO(Aero):
         if msg:
             raise TypeError(msg + str(self))
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross refernece aerodynamic coordinate system.
 
@@ -178,11 +190,12 @@ class AERO(Aero):
         ----------
         model : BDF
             The BDF object.
+
         """
-        msg = ' which is required by AERO'
+        msg = ', which is required by AERO'
         self.acsid_ref = model.Coord(self.acsid, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         """
         Safe cross refernece aerodynamic coordinate system.
 
@@ -190,9 +203,10 @@ class AERO(Aero):
         ----------
         model : BDF
             The BDF object.
+
         """
-        msg = ' which is required by AERO'
-        self.acsid_ref = model.Coord(self.acsid, msg=msg)
+        msg = ', which is required by AERO'
+        self.acsid_ref = model.safe_coord(self.acsid, None, xref_errors, msg=msg)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -205,6 +219,7 @@ class AERO(Aero):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         acsid = integer_or_blank(card, 1, 'acsid', 0)
         velocity = double_or_blank(card, 2, 'velocity')
@@ -231,7 +246,8 @@ class AERO(Aero):
         # T is the tabular function
         #angle = self.wg*self.t*(t-(x-self.x0)/self.V)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.acsid_ref = None
 
     def update(self, maps):
@@ -239,6 +255,7 @@ class AERO(Aero):
         maps = {
             'coord' : cid_map,
         }
+
         """
         cid_map = maps['coord']
         self.acsid = cid_map[self.acsid]
@@ -251,6 +268,7 @@ class AERO(Aero):
         -------
         fields : List[int/float/str]
            the fields that define the card
+
         """
         list_fields = ['AERO', self.Acsid(), self.velocity, self.cref,
                        self.rho_ref, self.sym_xz, self.sym_xy]
@@ -264,6 +282,7 @@ class AERO(Aero):
         -------
         fields : List[varies]
           the fields that define the card
+
         """
         sym_xz = set_blank_if_default(self.sym_xz, 0)
         sym_xy = set_blank_if_default(self.sym_xy, 0)
@@ -271,7 +290,7 @@ class AERO(Aero):
                        self.rho_ref, sym_xz, sym_xy]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         Writes the card with the specified width and precision
 
@@ -286,6 +305,7 @@ class AERO(Aero):
         -------
         msg : str
             the string representation of the card
+
         """
         card = self.repr_fields()
         return self.comment + print_card_8(card)
@@ -314,6 +334,12 @@ class FLFACT(BaseCard):
     +--------+-----+-------+------+-------+----+--------+
     """
     type = 'FLFACT'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        factors = [1.]
+        return FLFACT(sid, factors, comment='')
 
     def __init__(self, sid, factors, comment=''):
         """
@@ -347,6 +373,7 @@ class FLFACT(BaseCard):
                 TODO: does f1 need be be greater than f2/fnf???
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -358,7 +385,7 @@ class FLFACT(BaseCard):
         #self.fmid = fmid
 
         # the dumb string_types thing is because we also get floats
-        if len(factors) > 1 and isinstance(factors[1], string_types) and factors[1] == 'THRU':
+        if len(factors) > 1 and isinstance(factors[1], str) and factors[1] == 'THRU':
             #msg = 'embedded THRUs not supported yet on FLFACT card\n'
             nfactors = len(factors)
             if nfactors == 4:
@@ -391,6 +418,7 @@ class FLFACT(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         assert len(card) > 2, 'len(FLFACT card)=%s; card=%s' % (len(card), card)
@@ -401,7 +429,7 @@ class FLFACT(BaseCard):
             assert len(card) == 3, 'len(FLFACT card)=%s; card=%s' % (len(card), card)
         elif isinstance(field3, float):
             factors = fields(double, card, 'factors', i=2, j=len(card))
-        elif isinstance(field3, string_types) and field3 == 'THRU':
+        elif isinstance(field3, str) and field3 == 'THRU':
             f1 = double(card, 2, 'f1')
             fnf = double(card, 4, 'fnf')
             nf = integer(card, 5, 'nf')
@@ -425,7 +453,7 @@ class FLFACT(BaseCard):
     def min(self):
         return self.factors.min()
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
@@ -436,11 +464,12 @@ class FLFACT(BaseCard):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         list_fields = ['FLFACT', self.sid] + list(self.factors)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -464,6 +493,18 @@ class FLUTTER(BaseCard):
         1: 'sid', 2:'method', 3:'density', 4:'mach', 5:'reduced_freq_velocity', 6:'imethod',
         8:'epsilon',
     }
+    _properties = ['_field_map', 'headers', ]
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        method = 'PKNL'
+        density = 1
+        mach = 1
+        reduced_freq_velocity = 1
+        return FLUTTER(sid, method, density, mach, reduced_freq_velocity,
+                       imethod='L', nvalue=None, omax=None, epsilon=1.0e-3, comment='')
+
     def _get_field_helper(self, n):
         """
         Gets complicated parameters on the FLUTTER card
@@ -477,6 +518,7 @@ class FLUTTER(BaseCard):
         -------
         value : int/float/str
             the value for the appropriate field
+
         """
         if n == 7:
             if self.method in ['K', 'KE']:
@@ -499,6 +541,7 @@ class FLUTTER(BaseCard):
             the field number to update
         value : int/float/str
             the value for the appropriate field
+
         """
         if n == 7:
             if self.method in ['K', 'KE']:
@@ -554,6 +597,7 @@ class FLUTTER(BaseCard):
             Convergence parameter for k. Used in the PK and PKNL methods only
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -600,6 +644,7 @@ class FLUTTER(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         method = string(card, 2, 'method (K, KE, PKS, PKNLS, PKNL, PK)')
@@ -634,12 +679,14 @@ class FLUTTER(BaseCard):
                        imethod=imethod, nvalue=nvalue, omax=omax,
                        epsilon=epsilon, comment=comment)
 
-    def make_flfacts_alt_sweep(self, mach, alts, eas_limit=1000.,
+    def make_flfacts_alt_sweep(self, model, mach, alts, eas_limit=1000.,
                                alt_units='m',
                                velocity_units='m/s',
                                density_units='kg/m^3',
                                eas_units='m/s'):
         """makes an altitude sweep"""
+        alts.sort()
+        alts = alts[::-1]
         rho, mach, velocity = make_flfacts_alt_sweep(
             mach, alts, eas_limit=eas_limit,
             alt_units=alt_units,
@@ -649,27 +696,76 @@ class FLUTTER(BaseCard):
         flfact_rho = self.sid + 1
         flfact_mach = self.sid + 2
         flfact_velocity = self.sid + 3
-        model.add_flfact(flfact_rho, rho, msg=' ' + density_units)
-        model.add_flfact(flfact_mach, mach)
-        model.add_flfact(flfact_velocity, velocity, msg=' ' + velocity_units)
+        flfact_eas = self.sid + 4
+        flfact_alt = self.sid + 5
 
-    def make_flfacts_mach_sweep(self, alt, machs, eas_limit=1000., alt_units='m',
+        alts2 = alts[:len(rho)]
+        assert len(rho) == len(alts2)
+        comment = ' density: min=%.3e max=%.3e %s; alt min=%.0f max=%.0f %s' % (
+            rho.min(), rho.max(), density_units,
+            alts2.min(), alts2.max(), alt_units,
+        )
+        model.add_flfact(flfact_rho, rho, comment=comment)
+        model.add_flfact(flfact_mach, mach, comment=' Mach: %s' % mach.min())
+        comment = ' velocity: min=%.3f max=%.3f %s' % (
+            velocity.min(), velocity.max(), velocity_units)
+        model.add_flfact(flfact_velocity, velocity, comment=comment)
+
+        # eas in velocity units
+        rho0 = atm_density(0., alt_units=alt_units, density_units=density_units)
+        eas = velocity * np.sqrt(rho / rho0)
+        kvel = _velocity_factor(velocity_units, eas_units)
+
+        eas_in_eas_units = eas * kvel
+        comment = ' EAS: min=%.3f max=%.3f %s' % (
+            eas_in_eas_units.min(), eas_in_eas_units.max(), eas_units)
+        model.add_flfact(flfact_eas, eas_in_eas_units, comment=comment)
+
+        comment = ' Alt: min=%.3f max=%.3f %s' % (alts2.min(), alts2.max(), alt_units)
+        model.add_flfact(flfact_alt, alts2, comment=comment)
+
+    def make_flfacts_mach_sweep(self, model, alt, machs, eas_limit=1000., alt_units='m',
                                 velocity_units='m/s',
                                 density_units='kg/m^3',
                                 eas_units='m/s'):
         """makes a mach sweep"""
+        machs.sort()
+        machs = machs[::-1]
         rho, mach, velocity = make_flfacts_mach_sweep(
             alt, machs, eas_limit=eas_limit,
             alt_units=alt_units,
             velocity_units=velocity_units,
             density_units=density_units,
             eas_units=eas_units)
+
+        machs2 = machs[:len(rho)]
+        assert len(rho) == len(machs2)
+
         flfact_rho = self.sid + 1
         flfact_mach = self.sid + 2
         flfact_velocity = self.sid + 3
-        model.add_flfact(flfact_rho, rho, msg=' ' + density_units)
-        model.add_flfact(flfact_mach, mach)
-        model.add_flfact(flfact_velocity, velocity, msg=' ' + velocity_units)
+        flfact_eas = self.sid + 4
+
+        comment = ' density: min=%.3e max=%.3e %s; alt %.0f %s' % (
+            rho.min(), rho.max(), density_units,
+            alt, alt_units,
+        )
+        model.add_flfact(flfact_rho, rho, comment=comment)
+        comment = ' Mach: min=%s max=%s' % (mach.min(), mach.max())
+        model.add_flfact(flfact_mach, mach, comment=comment)
+        comment = ' velocity: min=%.3f max=%.3f %s' % (
+            velocity.min(), velocity.max(), velocity_units)
+        model.add_flfact(flfact_velocity, velocity, comment=comment)
+
+        # eas in velocity units
+        rho0 = atm_density(0., alt_units=alt_units, density_units=density_units)
+        eas = velocity * np.sqrt(rho / rho0)
+        kvel = _velocity_factor(velocity_units, eas_units)
+
+        eas_in_eas_units = eas * kvel
+        comment = ' EAS: min=%.3f max=%.3f %s' % (
+            eas_in_eas_units.min(), eas_in_eas_units.max(), eas_units)
+        model.add_flfact(flfact_eas, eas_in_eas_units, comment=comment)
 
     @property
     def headers(self):
@@ -699,7 +795,7 @@ class FLUTTER(BaseCard):
                        imethod, nvalue, omax,
                        epsilon, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -707,14 +803,15 @@ class FLUTTER(BaseCard):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by FLUTTER sid=%s' % self.sid
+        msg = ', which is required by FLUTTER sid=%s' % self.sid
         self.density_ref = model.FLFACT(self.density, msg=msg)
         self.mach_ref = model.FLFACT(self.mach, msg=msg)
         self.reduced_freq_velocity_ref = model.FLFACT(self.reduced_freq_velocity, msg=msg)
 
     def safe_cross_reference(self, model):
-        msg = ' which is required by FLUTTER sid=%s' % self.sid
+        msg = ', which is required by FLUTTER sid=%s' % self.sid
         try:
             self.density_ref = model.FLFACT(self.density, msg=msg)
         except KeyError:
@@ -728,7 +825,8 @@ class FLUTTER(BaseCard):
         except KeyError:
             pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.density = self.get_density()
         self.mach = self.get_mach()
         self.reduced_freq_velocity = self.get_rfreq_vel()
@@ -754,19 +852,21 @@ class FLUTTER(BaseCard):
     def _get_raw_nvalue_omax(self):
         if self.method in ['K', 'KE']:
             #assert self.imethod in ['L', 'S'], 'imethod = %s' % self.imethod
-            return(self.imethod, self.nvalue)
+            return self.imethod, self.nvalue
         elif self.method in ['PKS', 'PKNLS']:
-            return(self.imethod, self.omax)
-        return(self.imethod, self.nvalue)
+            return self.imethod, self.omax
+        # PK, PKNL
+        return self.imethod, self.nvalue
 
     def _get_repr_nvalue_omax(self):
         if self.method in ['K', 'KE']:
             imethod = set_blank_if_default(self.imethod, 'L')
             #assert self.imethod in ['L', 'S'], 'imethod = %s' % self.imethods
-            return (imethod, self.nvalue)
+            return imethod, self.nvalue
         elif self.method in ['PKS', 'PKNLS']:
-            return(self.imethod, self.omax)
-        return(self.imethod, self.nvalue)
+            return self.imethod, self.omax
+        # PK, PKNL
+        return self.imethod, self.nvalue
 
     def raw_fields(self):
         """
@@ -776,6 +876,7 @@ class FLUTTER(BaseCard):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         (imethod, nvalue) = self._get_raw_nvalue_omax()
         list_fields = ['FLUTTER', self.sid, self.method, self.get_density(),
@@ -789,7 +890,7 @@ class FLUTTER(BaseCard):
                        self.get_rfreq_vel(), imethod, nvalue, epsilon]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -811,6 +912,14 @@ class GUST(BaseCard):
     _field_map = {
         1: 'sid', 2:'dload', 3:'wg', 4:'x0', 5:'V',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        dload = 1
+        wg = 1.
+        x0 = 0.
+        return GUST(sid, dload, wg, x0, V=None, comment='')
 
     def __init__(self, sid, dload, wg, x0, V=None, comment=''):
         """
@@ -836,6 +945,7 @@ class GUST(BaseCard):
             None : ???
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -857,6 +967,7 @@ class GUST(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         dload = integer(card, 2, 'dload')
@@ -880,7 +991,7 @@ class GUST(BaseCard):
         #angle = self.wg * self.t * (t-(x-self.x0) / self.V) # T is the tabular
         #return angle
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def _verify(self, model, xref):
@@ -896,11 +1007,12 @@ class GUST(BaseCard):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         list_fields = ['GUST', self.sid, self.dload, self.wg, self.x0, self.V]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -920,6 +1032,12 @@ class MKAERO1(BaseCard):
     """
     type = 'MKAERO1'
 
+    @classmethod
+    def _init_from_empty(cls):
+        machs = [1.]
+        reduced_freqs = [1.]
+        return MKAERO1(machs, reduced_freqs, comment='')
+
     def __init__(self, machs, reduced_freqs, comment=''):
         """
         Creates an MKAERO1 card, which defines a set of mach and
@@ -933,6 +1051,7 @@ class MKAERO1(BaseCard):
             series of reduced frequencies
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -941,12 +1060,17 @@ class MKAERO1(BaseCard):
         self.reduced_freqs = np.unique(reduced_freqs)
 
     def validate(self):
+        msg = ''
+        if None in self.machs:
+            msg += 'MKAERO1; None in machs=%s\n' % (self.machs)
+        if None in self.reduced_freqs:
+            msg += 'MKAERO1; None in rfreqs=%s\n' % (self.reduced_freqs)
         if len(self.machs) == 0:
-            msg = 'MKAERO1; nmachs=%s machs=%s' % (len(self.machs), self.machs)
-            raise ValueError(msg)
+            msg += 'MKAERO1; nmachs=%s machs=%s\n' % (len(self.machs), self.machs)
         if len(self.reduced_freqs) == 0:
-            msg = 'MKAERO1; nrfreqs=%s rfreqs=%s' % (len(self.reduced_freqs), self.reduced_freqs)
-            raise ValueError(msg)
+            msg += 'MKAERO1; nrfreqs=%s rfreqs=%s' % (len(self.reduced_freqs), self.reduced_freqs)
+        if msg:
+            raise ValueError(msg.rstrip())
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -959,8 +1083,9 @@ class MKAERO1(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
-        list_fields = [interpret_value(field) for field in card[1:]]
+        list_fields = [interpret_value(field, card) for field in card[1:]]
         nfields = len(list_fields) - 8
         machs = []
         reduced_freqs = []
@@ -971,6 +1096,13 @@ class MKAERO1(BaseCard):
         reduced_freqs = wipe_empty_fields(reduced_freqs)
         return MKAERO1(machs, reduced_freqs, comment=comment)
 
+    def mklist(self):
+        mklist = []
+        for mach in self.machs:
+            for kfreq in self.reduced_freqs:
+                mklist.append([mach, kfreq])
+        return mklist
+
     def raw_fields(self):
         """
         Gets the fields in their unmodified form
@@ -979,6 +1111,7 @@ class MKAERO1(BaseCard):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         #list_fields = ['MKAERO1']
         #for (i, mach, rfreq) in zip(count(), self.machs, self.reduced_freqs):
@@ -995,7 +1128,7 @@ class MKAERO1(BaseCard):
         list_fields = ['MKAERO1'] + machs + freqs
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         nmachs = len(self.machs)
         nreduced_freqs = len(self.reduced_freqs)
         if nmachs > 8 or nreduced_freqs > 8:
@@ -1051,6 +1184,12 @@ class MKAERO2(BaseCard):
     """
     type = 'MKAERO2'
 
+    @classmethod
+    def _init_from_empty(cls):
+        machs = [1.]
+        reduced_freqs = [1.]
+        return MKAERO2(machs, reduced_freqs, comment='')
+
     def __init__(self, machs, reduced_freqs, comment=''):
         """
         Creates an MKAERO2 card, which defines a set of mach and
@@ -1064,6 +1203,7 @@ class MKAERO2(BaseCard):
             series of reduced frequencies
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -1094,6 +1234,7 @@ class MKAERO2(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         list_fields = card.fields(1)
         nfields = len(list_fields)
@@ -1104,6 +1245,13 @@ class MKAERO2(BaseCard):
             reduced_freqs.append(double(card, i + 1, 'rFreq'))
         return MKAERO2(machs, reduced_freqs, comment=comment)
 
+
+    def mklist(self):
+        mklist = []
+        for mach, kfreq in zip(self.machs, self.reduced_freqs):
+            mklist.append([mach, kfreq])
+        return mklist
+
     def raw_fields(self):
         """
         Gets the fields in their unmodified form
@@ -1112,13 +1260,14 @@ class MKAERO2(BaseCard):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         list_fields = ['MKAERO2']
         for (mach, rfreq) in zip(self.machs, self.reduced_freqs):
             list_fields += [mach, rfreq]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         cards = []
         list_fields = ['MKAERO2']
         nvalues = 0

@@ -2,26 +2,35 @@
 tests:
   - CBEAM, PBEAM, PBEAML, PBCOMP, PBMSECT
   - CBEAM3, PBEAM3
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 import os
 import unittest
 from itertools import count
 
-from six.moves import zip
-from numpy import array, allclose
+import numpy as np
 
-from pyNastran.bdf.bdf import BDF, BDFCard, PBEAM
+try:
+    import matplotlib
+    IS_MATPLOTLIB = True
+except ImportError:  # pragma: no cover
+    IS_MATPLOTLIB = False
+
+if IS_MATPLOTLIB:
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+from pyNastran.bdf.bdf import BDF, BDFCard, PBEAM, PBEND, PBMSECT, PBRSECT
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.cards.test.utils import save_load_deck
-
+from pyNastran.bdf.cards.properties.bars import get_beam_sections
 
 class TestBeams(unittest.TestCase):
     """
     tests:
       - CBEAM, PBEAM, PBEAML, PBCOMP, PBMSECT
       - CBEAM3, PBEAM3
+
     """
     def test_pbeam_01(self):
         """tests a nasty PBEAM"""
@@ -34,7 +43,7 @@ class TestBeams(unittest.TestCase):
             '     ,   ,   ,   ,    ,0.5,,0.0',
         ]
         bdf = BDF(debug=False)
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         #print(print_card_8(card))
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
@@ -46,7 +55,7 @@ class TestBeams(unittest.TestCase):
             '             YES      1.     5.3    56.2    78.6      0.      0.      0.',
             '              0.      0.     2.5     -5.      0.      0.      0.      0.',
             '              1.      1.     1.1      0.     2.1     2.1     .21     .21',
-            '              0.      0.      0.      0.      .5      .5      0.      0.'
+            '              0.      0.      0.      0.      .5      0.      0.      0.'
         ]
         self._compare(fields, lines_expected)
 
@@ -79,7 +88,7 @@ class TestBeams(unittest.TestCase):
             '     ,   ,   ,   ,    ,0.5,,0.0',
         ]
 
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
         fields = card2.raw_fields()
@@ -94,7 +103,7 @@ class TestBeams(unittest.TestCase):
             #'             YES      1.     5.3    56.2    78.6      0.      0.      0.',
             #'              0.      0.     2.5     -5.      0.      0.      0.      0.',
             '              1.      1.     1.1      0.     2.1     2.1     .21     .21',
-            '              0.      0.      0.      0.      .5      .5      0.      0.'
+            '              0.      0.      0.      0.      .5      0.      0.      0.'
         ]
         self._compare(fields, lines_expected)
 
@@ -110,7 +119,7 @@ class TestBeams(unittest.TestCase):
             '     ,   ,   ,   ,    ,0.5,,0.0',
         ]
 
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
         fields = card2.raw_fields()
@@ -121,7 +130,7 @@ class TestBeams(unittest.TestCase):
             '             YES      1.     5.3    56.2    78.6      0.      0.      0.',
             '              0.      0.     2.5     -5.      0.      0.      0.      0.',
             '              1.      1.     1.1      0.     2.1     2.1     .21     .21',
-            '              0.      0.      0.      0.      .5      .5      0.      0.',
+            '              0.      0.      0.      0.      .5      0.      0.      0.',
         ]
         self._compare(fields, lines_expected)
 
@@ -135,7 +144,7 @@ class TestBeams(unittest.TestCase):
             '     ,   ,   ,   ,    ,0.5,,0.0',
         ]
 
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
         fields = card2.raw_fields()
@@ -143,7 +152,7 @@ class TestBeams(unittest.TestCase):
             'PBEAM         39       6     2.9     3.5    5.97      0.      0.      0.',
             '              0.      0.      2.     -4.      0.      0.      0.      0.',
             '              1.      1.     1.1      0.     2.1     2.1     .21     .21',
-            '              0.      0.      0.      0.      .5      .5      0.      0.',
+            '              0.      0.      0.      0.      .5      0.      0.      0.',
         ]
         self._compare(fields, lines_expected)
 
@@ -155,7 +164,7 @@ class TestBeams(unittest.TestCase):
             '     ,  , ,2.0,-4.0',
         ]
 
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         #print(print_card_8(card))
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
@@ -181,7 +190,7 @@ class TestBeams(unittest.TestCase):
             '+BEAM4                  -.666667',
         ]
 
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
         fields = card2.raw_fields()
@@ -204,7 +213,7 @@ class TestBeams(unittest.TestCase):
             '+Z1     NO      1.0                                                     +Z4',
             '+Z4     0.0     0.0',
         ]
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         PBEAM.add_card(cardi)
 
@@ -249,7 +258,7 @@ class TestBeams(unittest.TestCase):
             '*',
         ]
 
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         card2 = PBEAM.add_card(cardi)
 
@@ -287,7 +296,7 @@ class TestBeams(unittest.TestCase):
         #print(card)
         card = print_card_8(fields)
         lines = card.split('\n')
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
         #with self.assertRaises(AssertionError):  # A=0, I12=0, K1=0
         pbeam = PBEAM.add_card(cardi)
@@ -409,7 +418,7 @@ class TestBeams(unittest.TestCase):
             self.assertEqual(actual, expected, msg)
 
     def test_pbeaml_01(self):
-        model = BDF()
+        model = BDF(debug=False)
         model.validate()
 
         fields = [
@@ -490,7 +499,35 @@ class TestBeams(unittest.TestCase):
         self.assertEqual(cbeam.I12(), 0.4)
         self.assertEqual(cbeam.J(), 3.14)
 
-    def test_cbeam_02(self):
+    def test_cbeam_g0(self):
+        """modification of test_cbeam_01"""
+        model = BDF(debug=False)
+        lines = ['PBEAM,200,6,2.9,3.5,5.97,0.4,3.14',
+                 '     , , ,2.0,-4.0',]
+        model.add_card(lines, 'PBEAM', is_list=False)
+
+        eid = 100
+        pid = 200
+        nids = [10, 20]
+        x = None
+        g0 = 30
+        model.add_cbeam(eid, pid, nids, x, g0, offt='GGG', bit=None, pa=0,
+                        pb=0, wa=None, wb=None, sa=0,
+                        sb=0, comment='')
+
+        mid = 6
+        E = 1.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu)
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(20, [1., 0., 0.])
+        model.add_grid(30, [0., 1., 0.])
+        model.cross_reference()
+
+        save_load_deck(model)
+
+    def test_cbeam_pbeaml(self):
         """CBEAM/PBEAML"""
         model = BDF(debug=False)
         model.add_grid(1, [0., 0., 0.])
@@ -509,9 +546,9 @@ class TestBeams(unittest.TestCase):
         nids = [1, 2]
         x = [0., 0., 1.]
         g0 = None
-        cbeam1 = model.add_cbeam(eid, pid, nids, x, g0, offt='GGG', bit=None,
-                                 pa=0, pb=0, wa=None, wb=None,
-                                 sa=0, sb=0, comment='CBEAM')
+        unused_cbeam1 = model.add_cbeam(eid, pid, nids, x, g0, offt='GGG', bit=None,
+                                        pa=0, pb=0, wa=None, wb=None,
+                                        sa=0, sb=0, comment='CBEAM')
         beam_type = 'BOX'
         xxb = [0.]
         dims = [[1., 2., 0.1, 0.1], [1., 2., 0.1, 0.1]]
@@ -667,14 +704,16 @@ class TestBeams(unittest.TestCase):
         e2 = [0.]
         f1 = [0.]
         f2 = [0.]
-        pbeam = model.add_pbeam(
+        unused_pbeam = model.add_pbeam(
             pid, mid, xxb, so, area, i1, i2, i12, j, nsm,
             c1, c2, d1, d2,
             e1, e2, f1, f2,
             k1=1., k2=1., s1=0., s2=0.,
             nsia=0., nsib=None, cwa=0., cwb=None,
-            m1a=0., m2a=None, m1b=0., m2b=None,
-            n1a=0., n2a=None, n1b=0., n2b=None,
+            m1a=0., m2a=0., m1b=None, m2b=None,
+            n1a=0., n2a=0., n1b=None, n2b=None,
+            #m1a=0., m2a=None, m1b=0., m2b=None,
+            #n1a=0., n2a=None, n1b=0., n2b=None,
             comment='pbeam')
         #print(pbeam)
         #---------------------------------------------------------------
@@ -705,7 +744,7 @@ class TestBeams(unittest.TestCase):
         model.safe_cross_reference()
         model.uncross_reference()
 
-    def test_cbeam_03(self):
+    def test_cbeam_bit(self):
         """tests an BIT field on the CBEAM"""
         model = BDF(debug=False)
 
@@ -766,8 +805,8 @@ class TestBeams(unittest.TestCase):
                                 e1=None, e2=None, f1=None, f2=None,
                                 k1=1., k2=1., s1=0., s2=0.,
                                 nsia=0., nsib=None, cwa=0., cwb=None,
-                                m1a=0., m2a=None, m1b=0., m2b=None,
-                                n1a=0., n2a=None, n1b=0., n2b=None,
+                                m1a=0., m2a=0., m1b=None, m2b=None,
+                                n1a=0., n2a=0., n1b=None, n2b=None,
                                 comment='')
         str(pbeam)
 
@@ -775,7 +814,7 @@ class TestBeams(unittest.TestCase):
         G = None
         nu = 0.3
         model.add_mat1(mid, E, G, nu, rho=1.)
-        save_load_deck(model)
+        save_load_deck(model, run_mass_properties=False, run_test_bdf=False)
 
 
     def test_beam_mass_01(self):
@@ -829,7 +868,7 @@ class TestBeams(unittest.TestCase):
         model.cross_reference()
         #print(model.properties[11])
 
-        mass, cg, I = model.mass_properties(
+        unused_mass, unused_cg, unused_I = model.mass_properties(
             element_ids=None, mass_ids=None,
             reference_point=None,
             sym_axis=None,
@@ -839,19 +878,24 @@ class TestBeams(unittest.TestCase):
         area = (area1 + area2) / 2.
         nsm = (nsm_a + nsm_b) / 2.
         mass_per_length = area * rho + nsm
-        mass = L * mass_per_length
+        unused_mass = L * mass_per_length
 
         mass_a = L / 2. * (area1 * rho + nsm_a)
         mass_b = L / 2. * (area2 * rho + nsm_b)
-        xcg = (0.0 * mass_a + 1.0 * mass_b) / (mass_a + mass_b)
+        #xcg = (0.0 * mass_a + 1.0 * mass_b) / (mass_a + mass_b)
+
         #print(mass_a, mass_b, xcg, mass_a + mass_b)
         #print('mass =', mass)
         #cbeam = CBEAM()
         cbeam = model.elements[10]
         pbeam = model.properties[11]
+        cg = cbeam.center_of_mass()
+        centroid = cbeam.Centroid()
         assert pbeam.Nu() == nu, 'pbeam.Nu()=%s nu=%s' % (pbeam.Nu(), nu)
         assert pbeam.Rho() == rho, 'pbeam.Rho()=%s rho=%s' % (pbeam.Rho(), rho)
-        assert allclose(cbeam.Length(), 1.0), cbeam.Length()
+        assert np.allclose(cbeam.Length(), 1.0), cbeam.Length()
+        assert np.allclose(cg[0], 0.5), 'cg=%s' % cg
+        assert np.allclose(centroid[0], 0.5), 'centroid=%s' % centroid
         #assert allclose(cbeam.Mass(), 10.25), cbeam.Mass()
         #assert allclose(cbeam.MassPerLength(), 10.25), cbeam.MassPerLength()
         #assert allclose(mass, 10.25), mass
@@ -875,23 +919,22 @@ class TestBeams(unittest.TestCase):
         model2 = BDF(debug=False)
         model2.read_bdf('pbeam12.bdf')
 
-        if not os.path.exists('pbeam12.op2') and 0:  # pragma: no cover
-            os.system('nastran scr=yes bat=no old=no pbeam12.bdf')
+        #if not os.path.exists('pbeam12.op2') and 0:  # pragma: no cover
+            #os.system('nastran scr=yes bat=no old=no pbeam12.bdf')
         os.remove('pbeam12.bdf')
 
-        if 0:  # pragma: no cover
-            from pyNastran.op2.op2 import OP2
-            op2 = OP2()
-            op2.read_op2('pbeam12.op2')
-            #os.remove('pbeam12.op2')
-            gpw = op2.grid_point_weight
-            op2_mass = gpw.mass.max()
-            assert op2_mass == mass, 'op2_mass=%s mass=%s' % (op2_mass, mass)
-            print('op2_mass=%s mass=%s' % (op2_mass, mass))
-            op2_cg = gpw.cg
-
-            cg = array([0.5, 0., 0.], dtype='float32')
-            print('cg =', op2_cg)
+        #if 0:  # pragma: no cover
+            #from pyNastran.op2.op2 import OP2
+            #op2 = OP2()
+            #op2.read_op2('pbeam12.op2')
+            ##os.remove('pbeam12.op2')
+            #gpw = op2.grid_point_weight
+            #op2_mass = gpw.mass.max()
+            #assert op2_mass == mass, 'op2_mass=%s mass=%s' % (op2_mass, mass)
+            #print('op2_mass=%s mass=%s' % (op2_mass, mass))
+            #op2_cg = gpw.cg
+            #cg = array([0.5, 0., 0.], dtype='float32')
+            #print('cg =', op2_cg)
 
     def test_pbeam_nsm(self):
         """tests a PBEAM with nonstructural mass"""
@@ -902,22 +945,48 @@ class TestBeams(unittest.TestCase):
         xxb = [0., 1.]
         so = ['YES', 'YES']
 
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        x = [0., 1., 0.]
+        g0 = None
+
         area = [2.0, 2.0]
         i1 = i2 = j = [0.1, 0.1]
         i12 = [0.01, 0.01]
         c1 = c2 = d1 = d2 = e1 = e2 = f1 = f2 = [0., 0.]
-        pbeam = model.add_pbeam(pid, mid, xxb, so, area, i1, i2, i12, j, nsm,
-                               c1, c2, d1, d2,
-                               e1, e2, f1, f2,
-                               k1=1., k2=1.,
-                               s1=0., s2=0.,
-                               nsia=0., nsib=None,
-                               cwa=0., cwb=None,
-                               m1a=0., m2a=None,
-                               m1b=0., m2b=None,
-                               n1a=0., n2a=None,
-                               n1b=0., n2b=None, comment='')
-        pbeam.validate()
+        pbeam_a1 = model.add_pbeam(pid, mid, xxb, so, area, i1, i2, i12, j, nsm,
+                                   c1, c2, d1, d2,
+                                   e1, e2, f1, f2,
+                                   k1=1., k2=1.,
+                                   s1=0., s2=0.,
+                                   nsia=0., nsib=None,
+                                   cwa=0., cwb=None,
+                                   m1a=0., m2a=0., m1b=None, m2b=None,
+                                   n1a=0., n2a=0., n1b=None, n2b=None,
+                                   comment='')
+
+        nsm = [1., 1.]
+        pid_pbeam_nsm = 30
+        pbeam_b1 = model.add_pbeam(pid_pbeam_nsm, mid, xxb, so, area, i1, i2, i12, j, nsm,
+                                   c1, c2, d1, d2,
+                                   e1, e2, f1, f2,
+                                   k1=1., k2=1.,
+                                   s1=0., s2=0.,
+                                   nsia=10., nsib=10.,
+                                   cwa=0., cwb=None,
+                                   # cg location at A/B (1.,1.)
+                                   m1a=1., m2a=1.,
+                                   m1b=None, m2b=None,
+                                   # neutral axis at A/B (0., 0.)
+                                   n1a=0., n2a=0.,
+                                   n1b=None, n2b=None,
+                                   comment='')
+        eid = 42
+        model.add_cbeam(eid, pid_pbeam_nsm, [1, 2], x, g0, offt='GGG', bit=None,
+                        pa=0, pb=0, wa=None, wb=None, sa=0, sb=0, comment='')
+
+        pbeam_a1.validate()
+        pbeam_b1.validate()
 
         E = 1.0
         G = None
@@ -931,20 +1000,46 @@ class TestBeams(unittest.TestCase):
         model.add_card(card_lines, 'PBEAML', comment='', is_list=False,
                        has_none=True)
         model.pop_parse_errors()
-        pbeam2 = model.properties[2]
+        pbeam_a2 = model.properties[2]
         #------------------
         model.cross_reference()
+        model.pop_xref_errors()
 
-        assert pbeam.Nsm() == 1.0
-        assert pbeam.Area() == 2.0
+        assert pbeam_a1.Nsm() == 1.0
+        assert pbeam_a1.Area() == 2.0
 
         # mass/L = area*rho + nsm
-        assert pbeam.MassPerLength() == 1.0
+        assert pbeam_a1.MassPerLength() == 1.0
+        assert pbeam_b1.MassPerLength() == 1.0, pbeam_b1.MassPerLength() # should be 10
+
+        mass, cg1, unused_inertia = model.mass_properties(
+            element_ids=eid,
+            mass_ids=None,
+            reference_point=None,
+            sym_axis=None,
+            scale=None)
+        assert mass == 1.0, mass
+        #print('cg1=%s' % cg)
+        assert np.allclose(cg1, [0.5, 1., 1.]), cg1
+
+        mass, cg2, unused_inertia = model.mass_properties_nsm(
+            element_ids=eid, mass_ids=None,
+            nsm_id=None,
+            reference_point=None,
+            sym_axis=None,
+            scale=None,
+            xyz_cid0_dict=None,
+            debug=False)
+        #print('mass =', mass)
+        #print('cg2=%s' % cg2)
+        assert mass == 1.0, mass
+        assert np.allclose(cg2, [0.5, 1., 1.]), cg2
 
         # area = 2.0
         mat1.rho = 10.0
-        assert pbeam.MassPerLength() == 21.0, pbeam.MassPerLength()
-        assert pbeam2.MassPerLength() == 21.0, pbeam2.MassPerLength()
+        assert pbeam_a1.MassPerLength() == 21.0, pbeam_a1.MassPerLength()
+        assert pbeam_a2.MassPerLength() == 21.0, pbeam_a2.MassPerLength()
+
         save_load_deck(model)
 
     def test_pbeaml_nsm(self):
@@ -954,13 +1049,13 @@ class TestBeams(unittest.TestCase):
         mid = 1
         beam_type = 'BAR'
         dim = [1., 2.]  # area = 2.0
-        nsm = 1.
+        unused_nsm = 1.
         xxb = [0., 1.]
         dims = [dim, dim]
         pbeaml = model.add_pbeaml(pid, mid, beam_type, xxb, dims, so=None,
-                                 nsm=[1.0],
-                                 group='MSCBML0',
-                                 comment='')
+                                  nsm=[1.0],
+                                  group='MSCBML0',
+                                  comment='')
         E = 1.0
         G = None
         nu = 0.3
@@ -987,7 +1082,87 @@ class TestBeams(unittest.TestCase):
         mat1.rho = 10.0
         assert pbeaml.MassPerLength() == 21.0, pbeaml.MassPerLength()
         assert pbeaml2.MassPerLength() == 21.0, pbeaml2.MassPerLength()
+
+        eid = 1
+        nids = [1, 2]
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [0., 0., 1.])
+        x = None
+        g0 = 3
+        cbeam = model.add_cbeam(eid, pid, nids, x, g0, offt='GGG',
+                                bit=None, pa=0, pb=0, wa=None, wb=None, sa=0, sb=0, comment='')
+        model.uncross_reference()
+        model.cross_reference()
+
+        cg = cbeam.center_of_mass()
+        centroid = cbeam.Centroid()
+        assert np.allclose(cg, [0.5, 0., 0.]), cg
+        assert np.allclose(centroid, [0.5, 0., 0.]), centroid
         save_load_deck(model)
+
+    def test_pbeam_opt(self):
+        """tests a PBEAM with DVPREL1"""
+        model = BDF(debug=False)
+        pid = 1
+        mid = 1
+        nsm = [1., 1.]
+        xxb = [0., 1.]
+        so = ['YES', 'YES']
+
+        area = [2.0, 2.0]
+        i1 = i2 = j = [0.1, 0.1]
+        i12 = [0.01, 0.01]
+        c1 = c2 = d1 = d2 = e1 = e2 = f1 = f2 = [0., 0.]
+        pbeam = model.add_pbeam(pid, mid, xxb, so, area, i1, i2, i12, j, nsm,
+                                c1, c2, d1, d2,
+                                e1, e2, f1, f2,
+                                k1=1., k2=1.,
+                                s1=0., s2=0.,
+                                nsia=0., nsib=None,
+                                cwa=0., cwb=None,
+                                m1a=0., m2a=0., m1b=None, m2b=None,
+                                n1a=0., n2a=0., n1b=None, n2b=None,
+                                comment='')
+        pbeam.validate()
+
+        E = 1.0
+        G = None
+        nu = 0.3
+        unused_mat1 = model.add_mat1(mid, E, G, nu)
+        prop_type = 'PBEAM'
+
+        desvar_id = 1
+        xinit = 1.0
+        label = 'VAR1'
+        model.add_desvar(desvar_id, label, xinit, xlb=-1e20, xub=1e20,
+                         delx=None, ddval=None,
+                         comment='')
+        desvar_id = 2
+        label = 'VAR2'
+        model.add_desvar(desvar_id, label, xinit, xlb=-1e20, xub=1e20,
+                         delx=None, ddval=None,
+                         comment='')
+        for i in range(15):
+            oid = i + 1
+            pname_fid = -8 - i
+            if pname_fid in [-11, -12, -13, -22, -23]:
+                continue
+            dvids = desvar_id
+            coeffs = 1.0
+            model.add_dvprel1(oid, prop_type, pid, pname_fid, dvids, coeffs,
+                              p_min=None, p_max=1e20,
+                              c0=0.0, validate=True,
+                              comment='')
+        oid = 20
+        dependent_desvar = 1
+        independent_desvars = 2
+        coeffs = 1.0
+        model.add_dlink(oid, dependent_desvar, independent_desvars, coeffs,
+                        c0=0., cmult=1., comment='')
+        model.cross_reference()
+        model.update_model_by_desvars()
+        save_load_deck(model, run_save_load_hdf5=True)
 
     def test_pbcomp(self):
         """tests a PBCOMP"""
@@ -1028,25 +1203,42 @@ class TestBeams(unittest.TestCase):
         model.pop_parse_errors()
         model.cross_reference()
         model.pop_xref_errors()
-        save_load_deck(model, run_convert=False)
+        save_load_deck(model, run_convert=False, run_renumber=False)
 
-    def test_pbmsect(self):
-        """tests a PBMSECT"""
+    def test_beamor(self):
+        """tests a BEAMOR"""
         model = BDF(debug=False)
-        pid = 10
-        mid = 11
-        form = 'GS'
-        options = {'OUTP' : 2}
-        #pbrsect = model.add_pbrsect(pid, mid, form, options, comment='pbrsect')
-        pbrsect = model.add_pbmsect(pid, mid, form, options, comment='pbmsect')
+        n1 = 10
+        n2 = 20
+        model.add_grid(n1, [0., 0., 0.])
+        model.add_grid(n2, [1., 0., 0.])
 
-        pbrsect.validate()
-        pbrsect.raw_fields()
-        pbrsect.write_card()
-        pbrsect.write_card(size=16)
+        pid = 2
+        mid = 1
+        beam_type = 'BAR'
+        dim = [1., 2.]  # area = 2.0
+        unused_nsm = 1.
+        xxb = [0., 1.]
+        dims = [dim, dim]
+        unused_pbeaml = model.add_pbeaml(pid, mid, beam_type, xxb, dims, so=None,
+                                         nsm=[1.0],
+                                         group='MSCBML0',
+                                         comment='')
 
-        #PBMSECT 32      10      OP
-            #OUTP=101,T=0.1,brp=102,brp=103,brp=104,nsm=0.015
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu, rho=1.)
+
+        card_lines = ['BEAMOR', None, pid, None, None, 0.6, 2.9, -5.87, 'GOG']
+        model.add_card(card_lines, 'BEAMOR', comment='BEAMOR', is_list=True,
+                       has_none=True)
+
+        eid = 1
+        card_lines = ['CBEAM', eid, pid, n1, n2]
+        model.add_card(card_lines, 'CBEAM', comment='', is_list=True,
+                       has_none=True)
+        model.pop_parse_errors()
 
     def test_pbeam3(self):
         """tests a PBEAM3"""
@@ -1079,6 +1271,431 @@ class TestBeams(unittest.TestCase):
         model.uncross_reference()
         pbeam3.write_card()
         pbeam3.write_card(size=16)
+
+    def test_cbend(self):
+        model = BDF(debug=False)
+        model.add_grid(10, [1., 0., 0.])
+        model.add_grid(11, [.707, .707, 0.])
+        model.add_grid(12, [0., 1., 0.])
+        eid = 2
+        pid = 3
+        nids = [10, 11]
+        g0 = 12
+        geom = 1
+
+        mid = 100
+
+        # The center of curvature lies on the line AO (or its
+        # extension) or vector v.
+        #
+        #      0
+        #     /
+        #    +
+        #   / \
+        #  A   R   B
+        #    ------
+        #      --   <---- curve A-B
+        #
+        x = None
+        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
+
+        A = 1.0
+        i1 = 2.0
+        i2 = 3.0
+        j = 4.0
+        pbend1 = PBEND.add_beam_type_1(
+            pid, mid, A, i1, i2, j,
+            rb=None, theta_b=None,
+            c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
+            k1=None, k2=None, nsm=0.,
+            rc=0., zc=0., delta_n=0., comment='pbend1')
+
+        fsi = 1
+        rm = 0.2
+        t = 0.4
+        #p = 0.5
+        #rb = 0.6
+        #theta_b = 0.7
+        pbend2 = PBEND.add_beam_type_2(
+            pid, mid, fsi, rm, t,
+            p=None, rb=None, theta_b=None,
+            nsm=0., rc=0., zc=0., comment='')
+        model.properties[pid] = pbend1
+
+        #model.add_pbend(pid, mid, beam_type, A, i1, i2, j,
+                        #c1, c2, d1, d2, e1, e2, f1, f2, k1, k2,
+                        #nsm, rc, zc, delta_n, fsi, rm, t, p, rb, theta_b, comment='')
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+        model.validate()
+        model.cross_reference()
+        model.pop_xref_errors()
+
+        model.uncross_reference()
+
+        cbend.write_card()
+        cbend.write_card(size=16)
+
+        pbend1.write_card()
+        pbend1.write_card(size=16)
+
+        pbend2.write_card()
+        pbend2.write_card(size=16)
+
+        save_load_deck(model, punch=True, run_convert=False)
+
+    def test_pbrsect(self):
+        """tests a PBRSECT"""
+        model = BDF(debug=False)
+        pid = 2
+        mid = 3
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+
+        outp_id = 10
+        ids = [1, 2]
+        model.add_point(1, [0., 0., 0.], cp=0, comment='point')
+        model.add_point(2, [1., 0., 0.], cp=0, comment='point')
+        model.add_set1(outp_id, ids, is_skin=False, comment='')
+
+        form = 'GS'
+        options = []
+        pbrsect = model.add_pbrsect(pid, mid, form, options, comment='pbrsect')
+        with self.assertRaises(AssertionError):
+            pbrsect.validate()
+
+        #------------------------------------
+        form = 'GS'
+        options = [
+            ['OUTP', 10],
+            ['INP', 20],
+        ]
+        pbrsect = model.add_pbrsect(pid, mid, form, options, comment='pbrsect')
+        pbrsect.validate()
+        pbrsect.write_card()
+
+        #------------------------------------
+        card = [
+            'PBRSECT 4       3       GS',
+            '        OUTP=10,INP=20',
+        ]
+        PBRSECT.add_card(card, comment='')
+
+        #------------------------------------
+        card = [
+            'PBRSECT 4\t3\tGS',
+            '        OUTP=10,INP=20',
+        ]
+        PBRSECT.add_card(card, comment='')
+
+        #------------------------------------
+        card = [
+            'PBRSECT 4       3       GS',
+            '        OUTP=10,BRP=20,T=1.0,T(11)=1.2, NSM=0.01',
+        ]
+        pbrsect = PBRSECT.add_card(card, comment='')
+        #pbrsect.cross_reference(model)
+
+        #------------------------------------
+        card = [
+            'PBRSECT 5       3       CP',
+            '        OUTP=10,BRP=20,T=1.0,T(11)=[1.2,PT=(123,204)], NSM=0.01',
+        ]
+        pbrsect = PBRSECT.add_card(card, comment='')
+        pbrsect.write_card()
+
+    def test_pbrsect_1(self):
+        model = BDF(debug=False, log=None, mode='msc')
+        mid = 10
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+
+        #POINT   201             0.5     0.5
+        #POINT   202             10.5    0.5
+        #POINT   203             19.5    0.5
+        #POINT   204             19.5    18.9
+        #POINT   205             10.5    18.9
+        #POINT   206             0.5     18.9
+        #POINT   224             10.5    10.0
+        model.add_point(201, [0.5, 0.5, 0.])
+        model.add_point(202, [10.5, 0.5, 0.])
+        model.add_point(203, [19.5, 0.5, 0.])
+        model.add_point(204, [19.5, 18.9, 0.])
+        model.add_point(205, [10.5, 18.9, 0.])
+        model.add_point(206, [0.5, 18.9, 0.])
+        model.add_point(224, [10.5, 10.0, 0.])
+
+        #SET1    201     201     THRU    206
+        #SET1    202     202     224     205
+        model.add_set1(201, [201, 202, 203, 204, 205, 206])
+        set_card = model.add_set1(202, [202, 224, 205])
+        assert set_card.ids == [202, 224, 205]
+
+        pid = 32
+        form = 'CP'
+        options = [
+            ['OUTP', 201],
+            ['T', 1.0],
+            ['BRP', 202],
+            ['T(11)', '[2.0, PT=(202,224)]'],
+            ['T(12)', '[4.0, PT=(224,205)]'],
+        ]
+        model.add_pbrsect(pid, mid, form, options)
+        model.cross_reference()
+        #PBRSECT 32      10      CP
+            #OUTP=201,T=1.0,BRP=202,
+            #T(11)=[2.0,PT=(202,224)],T(12)=[1.2,PT=(224,205)]
+
+        #model2 = BDF(debug=True, log=None, mode='msc')
+        #model2.read_bdf(r'C:\MSC.Software\MSC.Nastran\msc20051\nast\tpl\zbr3.dat')
+        if IS_MATPLOTLIB:
+            for pid, prop in model.properties.items():
+                prop.plot(model, show=False)
+            plt.close()
+
+    def test_pbrsect_2(self):
+        model = BDF(debug=False)
+        pid = 2
+        mid = 3
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+        model.add_point(1001, [0., 0., 0.])
+        model.add_point(1002, [22.5, 0., 0.])
+        model.add_point(1003, [22.5, 45., 0.])
+        model.add_point(1004, [0., 45., 0.])
+        model.add_point(1005, [45., 0., 0.])
+        model.add_point(1006, [45., 45., 0.])
+        #point, 1001,,   0.,   0.
+        #point, 1002,,  22.5,  0.
+        #point, 1003,,  22.5, 45.
+        #point, 1004,,   0.,  45.
+        #point, 1005,,  45.,   0.
+        #point, 1006,,  45.,  45.
+        model.add_set1(1000, [1001, 1002, 1003, 1004])
+        model.add_set1(2000, [1002, 1005])
+        model.add_set1(3000, [1003, 1006])
+        set3 = model.add_set3(3001, 'POINT', [1006, 1001])
+        assert set3.ids == [1006, 1001]
+        #set3, 1000, point, 1001, 1002, 1003, 1004
+        #set3, 2000, point, 1002, 1005
+        #set3, 3000, point, 1003, 1006
+        options = [
+            ['OUTP', 1000],
+            ['BRP(1)', 2000],
+            ['BRP(2)', 3000],
+            ['T(1)', 5.],
+        ]
+        prop = model.add_pbmsect(pid, mid, 'OP', options)
+
+        #pbmsect, 100, 200, op
+            #outp=1000, brp(1)=2000, brp(2)=3000
+            #t(1)=5.
+        model.cross_reference()
+        if IS_MATPLOTLIB:
+            prop.plot(model, show=False)
+            plt.close()
+
+    def test_pbmsect_2(self):
+        """
+        PBMSECT bulk data entry is utilized to describe the shape of I section
+        and PARAM,ARBMSTYP is used to control the selection of formulation.
+        Note that default value for PARAM,ARBMSTYP select VKI formulation
+        to compute sectional properties of arbitrary cross section with
+        isotropic material. However, PARAM,ARBMSTYP,TIMISHEN must be present
+        in the bulk data section if PBMSECT entry with Core and/or Layer
+        keywords exists in the deck.
+
+        ftp://ftp.uni-siegen.de/lokales/div/MSC/mdnastran_r3_doc_application.pdf
+        """
+        model = BDF(debug=False)
+        pid = 2
+        mid = 3
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+        # to select VAM
+        #PARAM,ARBMSTYPE,TIMOSHEN
+
+        #$ Composite case
+        #PBMSECT 32 1 OP 0.015
+        #OUTP=101,C=101,brp=103,c(1)=[201,pt=(15,34)]
+        #---------------------
+        #$ Section profile
+        model.add_point(1, [-0.5, .23, 0.])
+        model.add_point(2, [0.00, .23, 0.])
+        model.add_point(3, [0.50, .23, 0.])
+        model.add_point(4, [-0.5, -.23, 0.])
+        model.add_point(5, [0.00, -.23, 0.])
+        model.add_point(6, [0.50, -.23, 0.])
+        #point 1 -0.50 0.23
+        #point 2 0.00 0.23
+        #point 3 0.50 0.23
+        #point 4 -0.50 -0.23
+        #point 5 0.00 -0.23
+        #point 6 0.50 -0.23
+
+        #.......2.......3.......4.......5.......6.......7.......8.......9.......10.....
+        model.add_set1(101, [1, 2, 5, 6])
+        model.add_set1(201, [2, 3])
+        model.add_set1(102, [5, 4])
+        #SET1 101 1 2 5 6
+        #SET1 201 2 3
+        #SET1 102 5 4
+
+        # Ply properties
+        #.......2.......3.......4.......5.......6.......7.......8.......9.......10.....
+        #$MAT8 501 20.59e6 1.42e6 0.42 0.89e6 0.89e6 0.89e6
+        #$MAT1 501 1.+7 .3
+
+        # isotropic case using T keyword
+        options = [
+            ['OUTP', 101],
+            ['T', 0.04],
+            ['BRP(1)', 201],
+            ['BRP(3)', 102],
+        ]
+        prop1 = model.add_pbmsect(pid, mid, 'OP', options)
+        #PBMSECT 31 1 OP
+        #OUTP=101,t=0.04,BRP(1)=201,BRP(3)=102
+
+        # isotropic case using C and MAT1
+        options = [
+            ['OUTP', 101],
+            ['CORE', 301],
+            ['CORE(1)', '[101,PT=(1,2)]'],
+            ['CORE(2)', '[202,PT=(5,6)]'],
+            ['BRP(1)', 201],
+            ['CORE(3)', '[201,PT=(2,3)]'],
+            ['BRP(3)', 102],
+            ['C(3)', '[102,PT=(5,4)]'],
+        ]
+        prop2 = model.add_pbmsect(pid+1, mid, 'OP', options)
+        str(prop1)
+        str(prop2)
+        model.cross_reference()
+        #PBMSECT 32 OP +
+        #OUTP=101,CORE=301,CORE(1)=[101,PT=(1,2)],CORE(2)=[202,PT=(5,6)],+
+        #BRP(1)=201,CORE(3)=[201,PT=(2,3)], +
+        #BRP(3)=102,CORE(3)=[102,PT=(5,4)]
+
+        if IS_MATPLOTLIB:
+            prop1.plot(model, figure_id=pid, show=False)
+            #plt.close()
+            prop2.plot(model, figure_id=pid+1, show=False)
+            #plt.close()
+        #save_load_deck(model, run_convert=False, run_remove_unused=False)
+
+    def test_pbmsect_1(self):
+        model = BDF(debug=False, log=None, mode='msc')
+        mid = 10
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+
+        model.add_point(111, [0.0, 0.00, 0.,])
+        model.add_point(112, [20., 0.00, 0.,])
+        model.add_point(113, [20., 19.4, 0.,])
+        model.add_point(114, [0.0, 19.4, 0.,])
+        model.add_point(125, [1.0, 1.00, 0.,])
+        model.add_point(126, [10., 1.00, 0.,])
+        model.add_point(127, [10., 18.4, 0.,])
+        model.add_point(128, [1.0, 18.4, 0.,])
+        model.add_point(132, [11., 1.00, 0.,])
+        model.add_point(133, [19., 1.00, 0.,])
+        model.add_point(134, [19., 18.4, 0.,])
+        model.add_point(135, [11., 18.4, 0.,])
+        #POINT   111             0.0     0.0
+        #POINT   112             20.0    0.0
+        #POINT   113             20.0    19.4
+        #POINT   114             0.0     19.4
+        #POINT   125             1.0     1.0
+        #POINT   126             10.0    1.0
+        #POINT   127             10.0    18.4
+        #POINT   128             1.0     18.4
+        #POINT   132             11.0    1.0
+        #POINT   133             19.0    1.0
+        #POINT   134             19.0    18.4
+        #POINT   135             11.0    18.4
+
+        model.add_set1(111, [111, 'THRU', 114])
+        model.add_set1(122, [128, 127, 126, 125, 128])
+        model.add_set1(133, [132, 133, 134, 135])
+        #SET1    111     111     THRU    114
+        #SET1    122     128     127     126     125     128
+        #SET1    133     132     133     134     135
+
+        options = [
+            ['OUTP', 111],
+            ['INP', 122],
+            ['INP', 133],
+        ]
+        pid = 31
+        form = 'GS'
+        prop = model.add_pbmsect(pid, mid, form, options)
+        model.cross_reference()
+        #print(prop)
+        if IS_MATPLOTLIB:
+            prop.plot(model, figure_id=2, show=False)
+            plt.close()
+        #pbmsect  31     10      GS
+            #OUTP=111,inp=122,inp=133
+        #DESVAR  31      DBOXGS	15.0	0.01	60.0
+        #DVPREL1	112	pbmsect	31      W
+            #31      1.0
+
+    def test_pbmsect(self):
+        model = BDF(debug=False)
+        pid = 2
+        mid = 3
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+
+        #PBMSECT 32      10      OP
+            #OUTP=101,T=0.1,brp=102,brp=103,brp=104,nsm=0.015
+
+        outp_id = 10
+        ids = [1, 2]
+        model.add_point(1, [0., 0., 0.], cp=0, comment='point')
+        model.add_point(2, [1., 0., 0.], cp=0, comment='point')
+        model.add_set1(outp_id, ids, is_skin=False, comment='')
+
+        form = 'GS'
+        options = [
+            ['OUTP', outp_id],
+        ]
+        pbmsect = model.add_pbmsect(pid, mid, form, options, comment='pbmsect')
+        model.cross_reference()
+        if IS_MATPLOTLIB:
+            #pbmsect.cross_reference(model)
+            pbmsect.plot(model, show=False)
+            plt.close()
+
+
+        pbmsect.validate()
+        pbmsect.write_card()
+        card = [
+            'PBMSECT 4       3       GS',
+            '        OUTP=10,INP=20',
+        ]
+        PBMSECT.add_card(card, comment='')
+
+        card = [
+            'PBMSECT 4\t3\tGS',
+            '        OUTP=10,INP=20',
+        ]
+        PBMSECT.add_card(card, comment='')
+
+        card = [
+            'PBMSECT 4       3       GS',
+            '        OUTP=10,BRP=20,T=1.0,T(11)=1.2, NSM=0.01',
+        ]
+        pbmsect = PBMSECT.add_card(card, comment='')
+        # doesn't work because missing SET=20 (from BRP=20)
+        #pbmsect.cross_reference(model)
+
+        line = 'OUTP=10,BRP=20,T=1.0,T(11)=[1.2,PT=(123,204)], NSM=0.01'
+        sections = get_beam_sections(line)
+        msg = '\nsections: %s\n' % sections
+        msg += "expected: [u'OUTP=10', u'BRP=20', u'T=1.0', u'T(11)=[1.2,PT=(123,204)', 'NSM=0.01']"
+        assert sections == ['OUTP=10', 'BRP=20', 'T=1.0', 'T(11)=[1.2,PT=(123,204)]', 'NSM=0.01'], msg
+
+        card = [
+            'PBMSECT 5       3       CP',
+            '        OUTP=10,BRP=20,T=1.0,T(11)=[1.2,PT=(123,204)], NSM=0.01',
+        ]
+        pbmsect = PBMSECT.add_card(card, comment='')
+        pbmsect.write_card()
 
 
 if __name__ == '__main__':  # pragma: no cover

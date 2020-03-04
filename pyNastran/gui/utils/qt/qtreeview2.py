@@ -1,7 +1,11 @@
-from __future__ import print_function
+"""
+creates:
+ - QTreeView2 - allows for semi-easy access to the QTreeView
+ - RightClickTreeView - adds some right click support for results
+ - GenericRightClickTreeView - used for more general right click support
 
-from six import string_types
-
+"""
+from functools import partial
 from qtpy import QtGui
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QTreeView, QMessageBox, QMenu
@@ -12,12 +16,13 @@ class QTreeView2(QTreeView):
     creates a QTreeView with:
      - a nice-ish way to extract the location in the tree
      - key press delete support
+
     """
     def __init__(self, parent, data, choices):
         self.parent = parent
         self.old_rows = []
         self.data = data
-        self.cases_deleted = set([])
+        self.cases_deleted = set()
         self.choices = choices
         self.single = False
         QTreeView.__init__(self)
@@ -29,6 +34,7 @@ class QTreeView2(QTreeView):
          - delete: delete result cases
          - enter/return: apply result
          - up/down/left/right: navigate the tree
+
         """
         #if event.key() == QtCore.Qt.Key_Escape:
             #self.close()
@@ -37,16 +43,17 @@ class QTreeView2(QTreeView):
         if key == Qt.Key_Delete:
             self.on_delete()
         elif key in [Qt.Key_Enter, Qt.Key_Return]:
-            return self.parent.parent.on_apply(event)
+            return self.parent.parent.on_apply()
         elif key in [Qt.Key_Up, Qt.Key_Down]:
             QTreeView.keyPressEvent(self, event)
             self.set_rows()
         else:
             QTreeView.keyPressEvent(self, event)
+        return None
 
     def remove_rows(self, rows):
         """
-        We just hide the row to delete things to prevent refreshing
+        We hide the row to delete things to prevent refreshing
         the window and changing which items have been expanded
 
         Parameters
@@ -85,6 +92,7 @@ class QTreeView2(QTreeView):
         # delete Min Edge Length
         data[0][5][1] = ('Min Edge Length', 6, [])
         >>> remove_rows([0, 5, 1])
+
         """
         # find the row the user wants to delete
         data = self.data
@@ -163,11 +171,11 @@ class QTreeView2(QTreeView):
 
     def on_left_mouse_button(self):
         self.set_rows()
-        valid, keys = self.get_row()
-        if not valid:
-            print('invalid=%s keys=%s' % (valid, keys))
-        else:
-            print('valid=%s keys=%s' % (valid, keys))
+        unused_valid, unused_keys = self.get_row()
+        #if not valid:
+            #print('invalid=%s keys=%s' % (valid, keys))
+        #else:
+            #print('valid=%s keys=%s' % (valid, keys))
             #print('choice =', self.choices[keys])
 
     def on_right_mouse_button(self):
@@ -208,6 +216,7 @@ class QTreeView2(QTreeView):
                 0 - the location (e.g. node, centroid)
                 1 - icase
                 2 - []
+
         """
         # if there's only 1 data member, we don't need to extract the data id
         if self.single:
@@ -222,7 +231,7 @@ class QTreeView2(QTreeView):
         data = self.data
         for row in self.old_rows:
             try:
-                key = data[row][0]
+                unused_key = data[row][0]
             except IndexError:
                 return False, irow
             irow = data[row][1]
@@ -237,7 +246,7 @@ class QTreeView2(QTreeView):
         self.old_rows = [0]
 
 
-class RightClickTreeView(QTreeView2):
+class GenericRightClickTreeView(QTreeView2):
     """
     creates a QTreeView with:
      - all the features of QTreeView2
@@ -247,28 +256,101 @@ class RightClickTreeView(QTreeView2):
        - Apply Results to Displacement
        - Apply Results to Vector
        - Delete Case
+
     """
-    def __init__(self, parent, data, choices):
+    def __init__(self, parent, data, choices, actions, **kwargs):
+        QTreeView2.__init__(self, parent, data, choices)
+        #
+        # TODO: create a menu that only has clear/normals/fringe/delete
+        #       if there is no transient result
+        #
+        #print(data)
+        #print(choices)
+        #print('kwargs', kwargs)
+        self.right_click_menu = QMenu()
+
+        def false_callback(callback_func):
+            """dont validate the click"""
+            #print('false')
+            #print('  ', callback_func)
+            #print('  ', menu)
+            callback_func()
+
+        def true_callback(callback_func):
+            """a validated callback returns the row"""
+            #print('true')
+            #print('  ', callback_func)
+            #print('  ', menu)
+            #print('  ', self)
+            unused_is_valid, icase = self.get_row()
+            #print('callback =', callback_func)
+            callback_func(icase)
+
+        for actioni in actions:
+            (right_click_msg, callback_func, validate) = actioni
+            action = self.right_click_menu.addAction(right_click_msg)
+
+            true_false_callback = true_callback if validate else false_callback
+            trigger_func = partial(true_false_callback, callback_func)
+            action.triggered.connect(trigger_func)
+            #self.clear = self.right_click_menu.addAction("Clear Results...")
+            #self.clear.triggered.connect(self.on_clear_results)
+
+    def on_right_mouse_button(self):
+        """interfaces with the right click menu"""
+        self.set_rows()
+        is_valid, unused_icase = self.get_row()
+        if not is_valid:
+            return
+        # TODO: check if we should show disp/vector
+        self.right_click_menu.popup(QtGui.QCursor.pos())
+
+
+class RightClickTreeView(QTreeView2):
+    """
+    creates a QTreeView with:
+     - all the features of QTreeView2
+     - a right click context menu with:
+       - Clear Active Results
+       - Export Case
+       - Apply Results to Fringe
+       - Apply Results to Displacement
+       - Apply Results to Vector
+       - Delete Case
+
+    """
+    def __init__(self, parent, data, choices,
+                 include_clear=True, include_export_case=True,
+                 include_delete=True,
+                 include_results=True):
         QTreeView2.__init__(self, parent, data, choices)
         #
         # TODO: create a menu that only has clear/normals/fringe/delete
         #       if there is no transient result
         #
         self.right_click_menu = QMenu()
-        self.clear = self.right_click_menu.addAction("Clear Results...")
-        self.fringe = self.right_click_menu.addAction("Apply Results to Fringe...")
 
-        self.clear.triggered.connect(self.on_clear_results)
-        self.fringe.triggered.connect(self.on_fringe)
+        if include_clear:
+            self.clear = self.right_click_menu.addAction("Clear Results...")
+            self.clear.triggered.connect(self.on_clear_results)
 
-        self.disp = self.right_click_menu.addAction("Apply Results to Displacement...")
-        self.vector = self.right_click_menu.addAction("Apply Results to Vector...")
+        if include_export_case:
+            self.export_case = self.right_click_menu.addAction("Export Case...")
+            self.export_case.triggered.connect(self.on_export_case)
 
-        self.disp.triggered.connect(self.on_disp)
-        self.vector.triggered.connect(self.on_vector)
-        #if 1:  # pragma: no cover
-        self.delete = self.right_click_menu.addAction("Delete...")
-        self.delete.triggered.connect(self.on_delete)
+        if include_results:
+            self.fringe = self.right_click_menu.addAction("Apply Results to Fringe...")
+            self.fringe.triggered.connect(self.on_fringe)
+
+            self.disp = self.right_click_menu.addAction("Apply Results to Displacement...")
+            self.vector = self.right_click_menu.addAction("Apply Results to Vector...")
+
+            self.disp.triggered.connect(self.on_disp)
+            self.vector.triggered.connect(self.on_vector)
+
+        if include_delete:
+            self.delete = self.right_click_menu.addAction("Delete...")
+            self.delete.triggered.connect(self.on_delete)
 
         #self.fringe.setCheckable(True)
         #self.disp.setCheckable(True)
@@ -283,29 +365,44 @@ class RightClickTreeView(QTreeView2):
         }
         return is_clicked
 
+    @property
+    def sidebar(self):
+        """gets the sidebar"""
+        return self.parent.parent
+
+    @property
+    def gui(self):
+        """get the MainWindow class"""
+        return self.sidebar.parent
+
     def on_clear_results(self):
         """clears the active result"""
-        self.parent.parent.on_clear_results()
+        self.sidebar.on_clear_results()
+
+    def on_export_case(self):
+        """exports the case to a file"""
+        unused_is_valid, icase = self.get_row()
+        self.gui.export_case_data(icase)
 
     def on_fringe(self):
         """applies a fringe result"""
-        is_valid, icase = self.get_row()
-        self.parent.parent.on_fringe(icase)
+        unused_is_valid, icase = self.get_row()
+        self.sidebar.on_fringe(icase)
 
     def on_disp(self):
         """applies a displacement result"""
-        is_valid, icase = self.get_row()
-        self.parent.parent.on_disp(icase)
+        unused_is_valid, icase = self.get_row()
+        self.sidebar.on_disp(icase)
 
     def on_vector(self):
         """applies a vector result"""
-        is_valid, icase = self.get_row()
-        self.parent.parent.on_vector(icase)
+        unused_is_valid, icase = self.get_row()
+        self.sidebar.on_vector(icase)
 
     def on_right_mouse_button(self):
         """interfaces with the right click menu"""
         self.set_rows()
-        is_valid, icase = self.get_row()
+        is_valid, unused_icase = self.get_row()
         if not is_valid:
             return
         # TODO: check if we should show disp/vector
@@ -328,14 +425,15 @@ def get_many_cases(data):
 
     >>> data = [(u'Max Interior Angle', 8, [])]
     [8]
+
     """
-    name, case, rows = data
+    unused_name, case, rows = data
     if case is None:
         # remove many results
         # (Geometry, None, [results...])
         cases = []
-        for irow, row in enumerate(rows):
-            name, row_id, data2 = row
+        for unused_irow, row in enumerate(rows):
+            unused_name, unused_row_id, unused_data2 = row
             cases += get_many_cases(row)
     else:
         cases = [case]

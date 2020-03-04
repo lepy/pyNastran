@@ -1,5 +1,4 @@
 """defines OP2 Matrix Test"""
-from __future__ import print_function
 import os
 import unittest
 
@@ -10,6 +9,7 @@ from pyNastran.bdf.bdf import read_bdf
 from pyNastran.op2.op2 import OP2
 from pyNastran.op2.op2_geom import read_op2_geom, FatalError
 PKG_PATH = pyNastran.__path__[0]
+MODEL_PATH = os.path.abspath(os.path.join(PKG_PATH, '..', 'models'))
 
 
 class TestOP2Matrix(unittest.TestCase):
@@ -38,11 +38,45 @@ class TestOP2Matrix(unittest.TestCase):
         uexpt = model.matrices['UEXPT']
         assert uexpt.data.shape == (276, 24), uexpt.data.shape
 
+    def test_kelm_kdict(self):
+        """Tests reading KELM and KDICT"""
+        op2_filename = os.path.join(MODEL_PATH, 'sol_101_elements', 'static_solid_shell_bar_kelm.op2')
+        model = read_op2_geom(op2_filename, debug=False)
+
+        kelm = model.matrices['KELM']
+        kdict = model.matdicts['KDICT']
+        assert kelm.data.shape == (300, 21), kelm.data.shape
+        assert (kdict.element_types) == [34, 2, 67, 68, 33, 1, 39, 74], kdict.element_types
+        ngrids = [len(np.where(sil[0, :] > 0)[0]) for sil in kdict.sils]
+
+        #print(kelm.data)
+        #print('ndata =', len(kelm.data.data), 300*21)
+        eids = np.hstack(kdict.eids)
+        ndofs = [len(eids)*numgrid*dof_per_grid for eids, numgrid, dof_per_grid in zip(kdict.eids, ngrids, kdict.dof_per_grids)]
+        ndof = np.cumsum(ndofs)
+
+        sil = np.hstack([sil.ravel() for sil in kdict.sils])
+        usil = np.unique(sil)
+
+        address = np.vstack(kdict.address)
+        #print(kelm.data.__dict__.keys())
+        #print(kelm)
+        #print('ngrids =', ngrids)
+        #print('numgrids =', kdict.numgrids)
+        #print('ndofs =', ndofs)
+        #print('ndof csum =', ndof)
+        #print('eids =', eids, len(eids))
+        #print('sil =', sil, len(sil))
+        #print('address:\n', address)
+        #print("usil =", usil, len(usil))
+        #for sil, ndofci, ndofi, dof_per_grid, numgrid in zip(kdict.sils, ndof, ndofs, kdict.dof_per_grids, kdict.numgrids):
+            #print(sil, 'neids=%s cdof=%s ndof=%s dof/grid=%s ngrid=%s' % (sil.shape[0], ndofci, ndofi, dof_per_grid, numgrid))
+        #print(kdict)
+
     def test_op2_dmi_01(self):
         """tests DMI matrix style"""
-        folder = os.path.abspath(os.path.join(PKG_PATH, '..', 'models'))
-        bdf_filename = os.path.join(folder, 'matrix', 'matrix.dat')
-        op2_filename = os.path.join(folder, 'matrix', 'mymatrix.op2')
+        bdf_filename = os.path.join(MODEL_PATH, 'matrix', 'matrix.dat')
+        op2_filename = os.path.join(MODEL_PATH, 'matrix', 'mymatrix.op2')
         matrices = {
             'A' : True,
             'B' : False,
@@ -83,8 +117,8 @@ class TestOP2Matrix(unittest.TestCase):
             -1.0, 2.0, 2.0, -1.0, 2.0, 3.0, -1.0, 2.0,
             4.0, -1.0, 2.0, 5.0, -1.0, 2.0, 6.0,
         ])
-        BTA = np.dot(B.T, A)
-        ATB = np.dot(A.T, B)
+        BTA = B.T @ A
+        ATB = A.T @ B
         ATB_expected = np.array([
             [35., 18.],
             [18., 100.]
@@ -96,14 +130,13 @@ class TestOP2Matrix(unittest.TestCase):
 
         for matrix_name, expected in zip(matrix_names, expecteds):
             assert matrix_name in op2.matrices, matrix_name
-            actual = op2.matrices[matrix_name].data.todense()
+            actual = op2.matrices[matrix_name].data.toarray()
             compare_dmi_matrix_from_bdf_to_op2(model, op2, expected, actual, matrix_name)
 
     def test_op2_dmi_02(self):
         """tests DMI matrix style"""
-        folder = os.path.abspath(os.path.join(PKG_PATH, '..', 'models'))
-        bdf_filename = os.path.join(folder, 'matrix', 'matrix.dat')
-        op2_filename = os.path.join(folder, 'matrix', 'mymatrix.op2')
+        bdf_filename = os.path.join(MODEL_PATH, 'matrix', 'matrix.dat')
+        op2_filename = os.path.join(MODEL_PATH, 'matrix', 'mymatrix.op2')
         matrices = {
             'A' : True,
             'B' : False,
@@ -141,8 +174,8 @@ class TestOP2Matrix(unittest.TestCase):
             -1.0, 2.0, 2.0, -1.0, 2.0, 3.0, -1.0, 2.0,
             4.0, -1.0, 2.0, 5.0, -1.0, 2.0, 6.0,
         ])
-        BTA = np.dot(B.T, A)
-        ATB = np.dot(A.T, B)
+        BTA = B.T @ A
+        ATB = A.T @ B
         ATB_expected = np.array([
             [35., 18.],
             [18., 100.]
@@ -154,7 +187,7 @@ class TestOP2Matrix(unittest.TestCase):
 
         for matrix_name, expected in zip(matrix_names, expecteds):
             assert matrix_name in op2.matrices, matrix_name
-            actual = op2.matrices[matrix_name].data.todense()
+            actual = op2.matrices[matrix_name].data.toarray()
             compare_dmi_matrix_from_bdf_to_op2(model, op2, expected, actual, matrix_name)
 
 def compare_dmi_matrix_from_bdf_to_op2(bdf_model, op2_model, expected, actual, matrix_name):

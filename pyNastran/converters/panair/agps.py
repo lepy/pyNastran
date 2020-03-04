@@ -1,11 +1,11 @@
 """
 defines:
  - AGPS(log=None, debug=False)
+
 """
-from __future__ import print_function
 import numpy as np
 
-class AGPS(object):
+class AGPS:
     """Interface to the AGPS file"""
     def __init__(self, log=None, debug=False):
         """
@@ -21,6 +21,7 @@ class AGPS(object):
         log : logging module object / None
             if log is set, debug is ignored and uses the
             settings the logging object has
+
         """
         self.infilename = None
         self.pressures = {}
@@ -73,22 +74,32 @@ class AGPS(object):
 
         # time to parse the patches
         for ipatch, patch in enumerate(patches):
-            if self.debug:  # pragma: no cover
-                print('ipatch=%s' % ipatch)
+            self.log.debug('ipatch=%s' % ipatch)
 
             nrows = len(patch)
             ncols = len(patch[0])
             XYZ = np.zeros((nrows, ncols, 3), dtype='float32')
-            Cp = np.zeros((nrows, ncols), dtype='float32')
+
+            cps = []
+            node0 = patch[0][0].split()
+            cp0 = node0[4:]
+            ncp = len(cp0)
+            cp = np.zeros((ncp, nrows, ncols), dtype='float32')
             for icol, col in enumerate(patch):
                 for inode, node in enumerate(col):
-                    # dropping the counter with [1:]
-                    xi, yi, zi, cpi = node.strip().split()[1:]
-                    XYZ[icol, inode, :] = [xi, yi, zi]
-                    Cp[icol, inode] = cpi
+                    sline = node.strip().split()
 
-            self.pressures[ipatch] = Cp
-            if self.debug:  # pragma: no cover
-                print('')
-        #for ipatch, Cp in sorted(iteritems(self.pressures)):
+                    # dropping the counter with [1:]
+                    # counter, xi, yi, zi, cp1, cp2, cp3, cp4
+                    xyz = sline[1:4]
+                    cpi = sline[4:]
+                    assert len(xyz) == 3, 'sline=%s xyz=%s' % (sline, xyz)
+                    assert 1 <= len(cp) <= 3, 'sline=%s cpi=%s' % (sline, cpi)
+                    XYZ[icol, inode, :] = xyz # xi, yi, zi
+
+                    # we don't support multiple Cps, but you can hack it...
+                    cp[:, icol, inode] = cpi
+
+            self.pressures[ipatch] = cp
+        #for ipatch, Cp in sorted(self.pressures.items()):
             #print(Cp)

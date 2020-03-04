@@ -1,4 +1,3 @@
-from six.moves import zip, range
 from numpy import arange, zeros, searchsorted, unique
 
 from pyNastran.bdf.field_writer_8 import print_card_8
@@ -8,7 +7,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (integer,
 
 from pyNastran.dev.bdf_vectorized.cards.loads.vectorized_load import VectorizedLoad
 
-class PLOAD2(object):
+class PLOAD2:
     type = 'PLOAD2'
 
     def __init__(self, model):

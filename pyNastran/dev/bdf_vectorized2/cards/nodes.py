@@ -1,7 +1,9 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
-from six import iteritems
+from typing import TYPE_CHECKING
 import numpy as np
+
+from pyNastran.femutils.utils import duplicates
 from pyNastran.bdf.bdf import GRID
 
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -11,9 +13,11 @@ from pyNastran.bdf.field_writer_8 import print_float_8, set_string8_blank_if_def
 from pyNastran.bdf.field_writer_16 import print_float_16, set_string16_blank_if_default
 from pyNastran.bdf.field_writer_double import print_scientific_double
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class Nodes(object):
+class Nodes:
     def __init__(self, model):
         self.model = model
         self.grid = model.grid
@@ -82,7 +86,7 @@ class Nodes(object):
         nid_cp_cd : (n, 3) int ndarray
             node id, CP, CD for each node
 
-        Example
+        Examples
         --------
         # assume GRID 1 has a CD=10, CP=0
         # assume GRID 2 has a CD=10, CP=0
@@ -161,13 +165,13 @@ class Nodes(object):
 
         # get the indicies of the xyz array where the nodes that
         # need to be transformed are
-        for cd, nids in sorted(iteritems(nids_cd_transform)):
+        for cd, nids in sorted(nids_cd_transform.items()):
             if cd in [0, -1]:
                 continue
             nids = np.array(nids)
             icd_transform[cd] = np.where(np.in1d(nids_all, nids))[0]
 
-        for cp, nids in sorted(iteritems(nids_cp_transform)):
+        for cp, nids in sorted(nids_cp_transform.items()):
             if cp in [-1]:
                 continue
             nids = np.array(nids)
@@ -208,7 +212,7 @@ class Nodes(object):
         return i
 
 
-class GRIDv(object):
+class GRIDv:
     """
     +------+-----+----+----+----+----+----+----+------+
     |   1  |  2  | 3  | 4  | 5  | 6  |  7 | 8  |  9   |
@@ -369,7 +373,18 @@ class GRIDv(object):
                 self.cd = np.array(self._cd, dtype='int32')
                 self.ps = np.array(self._ps, dtype='|U8')
                 self.seid = np.array(self._seid, dtype='int32')
-            assert len(self.nid) == len(np.unique(self.nid))
+
+            unid = np.unique(self.nid)
+            if len(self.nid) != len(unid):
+                duplicate_nodes = duplicates(self.nid)
+                msg = ('there are duplicate nodes\n'
+                       'nid =%s; n=%s\n'
+                       'unid=%s; n=%s\n'
+                       'duplicates=%s' % (
+                    self.nid, len(self.nid),
+                    unid, len(unid),
+                    duplicate_nodes))
+                raise RuntimeError(msg)
 
             isort = np.argsort(self.nid)
             self.nid = self.nid[isort]
@@ -387,7 +402,7 @@ class GRIDv(object):
             self._seid = []
             self.is_current = True
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 

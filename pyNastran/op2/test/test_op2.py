@@ -1,12 +1,9 @@
-"""
-Defines the command line tool `test_op2`
-"""
-from __future__ import print_function
+"""Defines the command line tool `test_op2`"""
 import os
 import sys
 import time
 from traceback import print_exc
-from six import string_types, iteritems
+from typing import List, Tuple, Optional, Any
 
 import numpy as np
 np.set_printoptions(precision=3, threshold=20)
@@ -28,91 +25,10 @@ except ImportError:
 #warnings.filterwarnings('error', category=UnicodeWarning)
 
 import pyNastran
-from pyNastran import is_release
-from pyNastran.op2.op2 import OP2, FatalError
+from pyNastran.op2.op2 import OP2, FatalError # , read_op2
 #SortCodeError, DeviceCodeError, FortranMarkerError
 
-from pyNastran.op2.op2_geom import OP2Geom
-
-
-# we need to check the memory usage
-is_linux = None
-is_memory = True
-try:  # pragma: no cover
-    if os.name == 'nt':  # windows
-        windows_flag = True
-        is_linux = False
-        import wmi
-        comp = wmi.WMI()
-
-        """Functions for getting memory usage of Windows processes."""
-
-        __all__ = ['get_current_process', 'get_memory_info', 'get_memory_usage']
-
-        import ctypes
-        from ctypes import wintypes
-
-        GetCurrentProcess = ctypes.windll.kernel32.GetCurrentProcess
-        GetCurrentProcess.argtypes = []
-        GetCurrentProcess.restype = wintypes.HANDLE
-
-        SIZE_T = ctypes.c_size_t
-
-        class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
-            """
-            Windows memory tool that has the same interface as
-            `resource` on Linux/Mac.
-            """
-            _fields_ = [
-                ('cb', wintypes.DWORD),
-                ('PageFaultCount', wintypes.DWORD),
-                ('PeakWorkingSetSize', SIZE_T),
-                ('WorkingSetSize', SIZE_T),
-                ('QuotaPeakPagedPoolUsage', SIZE_T),
-                ('QuotaPagedPoolUsage', SIZE_T),
-                ('QuotaPeakNonPagedPoolUsage', SIZE_T),
-                ('QuotaNonPagedPoolUsage', SIZE_T),
-                ('PagefileUsage', SIZE_T),
-                ('PeakPagefileUsage', SIZE_T),
-                ('PrivateUsage', SIZE_T),
-            ]
-
-        GetProcessMemoryInfo = ctypes.windll.psapi.GetProcessMemoryInfo
-        GetProcessMemoryInfo.argtypes = [
-            wintypes.HANDLE,
-            ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
-            wintypes.DWORD,
-        ]
-        GetProcessMemoryInfo.restype = wintypes.BOOL
-
-        def get_current_process():
-            """Return handle to current process."""
-            return GetCurrentProcess()
-
-        def get_memory_info(process=None):
-            """Return Win32 process memory counters structure as a dict."""
-            if process is None:
-                process = get_current_process()
-            counters = PROCESS_MEMORY_COUNTERS_EX()
-            ret = GetProcessMemoryInfo(process, ctypes.byref(counters),
-                                       ctypes.sizeof(counters))
-            if not ret:
-                raise ctypes.WinError()
-            info = dict((name, getattr(counters, name))
-                        for name, _ in counters._fields_)
-            return info
-
-        def get_memory_usage(process=None):
-            """Return this process's memory usage in bytes."""
-            info = get_memory_info(process=process)
-            return info['PrivateUsage']
-
-    elif os.name in ['posix', 'mac']:  # linux/mac
-        import resource
-        windows_flag = False
-        is_linux = True
-except:
-    is_memory = False
+from pyNastran.op2.op2_geom import OP2Geom, DuplicateIDsError
 
 
 def parse_table_names_from_f06(f06_filename):
@@ -128,12 +44,13 @@ def parse_table_names_from_f06(f06_filename):
     return names
 
 
-def run_lots_of_files(files, make_geom=True, write_bdf=False, write_f06=True,
-                      delete_f06=True, skip_dataframe=False, write_op2=False,
-                      debug=True, skip_files=None,
-                      stop_on_failure=False, nstart=0, nstop=1000000000,
-                      short_stats=False, binary_debug=False,
-                      compare=True, quiet=False, dev=True):
+def run_lots_of_files(files, make_geom: bool=True, write_bdf: bool=False, write_f06: bool=True,
+                      delete_f06: bool=True, delete_op2: bool=True, delete_hdf5: bool=True,
+                      delete_debug_out: bool=True, build_pandas: bool=True, write_op2: bool=False,
+                      write_hdf5: bool=True, debug: bool=True, skip_files: Optional[List[str]]=None,
+                      stop_on_failure: bool=False, nstart: int=0, nstop: int=1000000000,
+                      short_stats: bool=False, binary_debug: bool=False,
+                      compare: bool=True, quiet: bool=False, dev: bool=True, xref_safe: bool=False):
     """used by op2_test.py to run thousands of files"""
     if skip_files is None:
         skip_files = []
@@ -141,6 +58,9 @@ def run_lots_of_files(files, make_geom=True, write_bdf=False, write_f06=True,
     assert make_geom in [True, False]
     assert write_bdf in [True, False]
     assert write_f06 in [True, False]
+    assert write_op2 in [True, False]
+    assert write_hdf5 in [True, False]
+    assert build_pandas in [True, False]
     if binary_debug in [True, False]:
         binary_debug = [binary_debug]
 
@@ -167,12 +87,17 @@ def run_lots_of_files(files, make_geom=True, write_bdf=False, write_f06=True,
                                      write_f06=write_f06, write_op2=write_op2,
                                      is_mag_phase=False,
                                      delete_f06=delete_f06,
-                                     skip_dataframe=skip_dataframe,
+                                     delete_op2=delete_op2,
+                                     delete_hdf5=delete_hdf5,
+                                     delete_debug_out=delete_debug_out,
+                                     build_pandas=build_pandas,
+                                     write_hdf5=write_hdf5,
                                      short_stats=short_stats,
                                      subcases=subcases, debug=debug,
                                      stop_on_failure=stop_on_failure,
                                      binary_debug=binary_debug,
-                                     compare=compare, dev=dev)[1]
+                                     compare=compare, dev=dev,
+                                     xref_safe=xref_safe)[1]
                 if not is_passedi:
                     is_passed = False
                     break
@@ -186,13 +111,23 @@ def run_lots_of_files(files, make_geom=True, write_bdf=False, write_f06=True,
     return failed_cases
 
 
-def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
-            write_f06=True, write_op2=False,
-            is_mag_phase=False, is_sort2=False, is_nx=None,
-            delete_f06=False, skip_dataframe=False,
-            subcases=None, exclude=None, short_stats=False,
-            compare=True, debug=False, log=None, binary_debug=False,
-            quiet=False, check_memory=False, stop_on_failure=True, dev=False):
+def run_op2(op2_filename: str, make_geom: bool=False,
+            write_bdf: bool=False, read_bdf: Optional[bool]=None,
+            write_f06: bool=True, write_op2: bool=False,
+            write_hdf5: bool=True,
+            is_mag_phase: bool=False, is_sort2: bool=False,
+            is_nx: Optional[bool]=None, is_autodesk: Optional[bool]=None,
+            is_nasa95: Optional[bool]=None,
+            delete_f06: bool=False, delete_op2: bool=False, delete_hdf5: bool=False,
+            delete_debug_out: bool=False,
+            build_pandas: bool=True,
+            subcases: Optional[str]=None, exclude: Optional[str]=None,
+            short_stats: bool=False, compare: bool=True,
+            debug: bool=False, log: Any=None,
+            binary_debug: bool=False, quiet: bool=False,
+            stop_on_failure: bool=True,
+            dev: bool=False, xref_safe: bool=False,
+            post: Any=None, load_as_h5: bool=False) -> Tuple[OP2, bool]:
     """
     Runs an OP2
 
@@ -208,6 +143,8 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
         should an F06 be written based on the results
     write_op2 : bool; default=False
         should an OP2 be written based on the results
+    write_hdf5 : bool; default=True
+        should an HDF5 be written based on the results
     is_mag_phase : bool; default=False
         False : write real/imag results
         True : write mag/phase results
@@ -219,8 +156,20 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
         True : use NX Nastran
         False : use MSC Nastran
         None : guess
+    is_autodesk : bool; default=None
+        True : use Autodesk Nastran
+        False : use MSC Nastran
+        None : guess
+    is_nasa95 : bool; default=None
+        True : use NASA 95 Nastran
+        False : use MSC Nastran
+        None : guess
     delete_f06 : bool; default=False
         deletes the F06 (assumes write_f06 is True)
+    delete_op2 : bool; default=False
+        deletes the OP2 (assumes write_op2 is True)
+    delete_hdf5 : bool; default=False
+        deletes the HDF5 (assumes write_hdf5 is True)
     subcases : List[int, ...]; default=None
         limits subcases to specified values; default=None -> no limiting
     exclude : List[str, ...]; default=None
@@ -252,7 +201,10 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
         the op2 object
     is_passed : bool
         did the test pass
+
     """
+    assert build_pandas in [True, False]
+
     if read_bdf is None:
         read_bdf = write_bdf
     op2 = None
@@ -261,13 +213,18 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
         subcases = []
     if exclude is None:
         exclude = []
+    if isinstance(is_sort2, bool):
+        sort_methods = [is_sort2]
+    else:
+        sort_methods = is_sort2
+
     assert '.op2' in op2_filename.lower(), 'op2_filename=%s is not an OP2' % op2_filename
     is_passed = False
 
     fname_base = os.path.splitext(op2_filename)[0]
     bdf_filename = fname_base + '.test_op2.bdf'
 
-    if isinstance(subcases, string_types):
+    if isinstance(subcases, str):
         if '_' in subcases:
             subcases = [int(i) for i in subcases.split('_')]
         else:
@@ -283,22 +240,26 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
         op2 = OP2Geom(debug=debug, log=log)
         op2_nv = OP2Geom(debug=debug, log=log, debug_file=debug_file)
         op2_bdf = OP2Geom(debug=debug, log=log)
-        if is_nx is None:
-            pass
-        elif is_nx:
-            op2.set_as_nx()
-            op2_nv.set_as_nx()
-            op2_bdf.set_as_nx()
-        else:
-            op2.set_as_msc()
-            op2_nv.set_as_msc()
-            op2_bdf.set_as_msc()
+        set_versions([op2, op2_nv, op2_bdf], is_nx, is_autodesk, is_nasa95, post)
+
+        if load_as_h5 and IS_HDF5:
+            # you can't open the same h5 file twice
+            op2.load_as_h5 = load_as_h5
+            #op2_nv.load_as_h5 = load_as_h5
+            #op2_bdf.load_as_h5 = load_as_h5
 
         op2_bdf.set_error_storage(nparse_errors=0, stop_on_parsing_error=True,
                                   nxref_errors=0, stop_on_xref_error=True)
     else:
         op2 = OP2(debug=debug, log=log)
-        op2_nv = OP2(debug=debug, log=log, debug_file=debug_file) # have to double write this until
+        # have to double write this until ???
+        op2_nv = OP2(debug=debug, log=log, debug_file=debug_file)
+
+        set_versions([op2, op2_nv], is_nx, is_autodesk, is_nasa95, post)
+        if load_as_h5 and IS_HDF5:
+            # you can't open the same h5 file twice
+            op2.load_as_h5 = load_as_h5
+            #op2_nv.load_as_h5 = load_as_h5
         op2_bdf = None
     op2_nv.use_vector = False
 
@@ -308,14 +269,6 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
     op2_nv.set_subcases(subcases)
     op2.remove_results(exclude)
     op2_nv.remove_results(exclude)
-
-    if is_memory and check_memory:  # pragma: no cover
-        if is_linux: # linux
-            kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        else: # windows
-            kb = get_memory_usage() / 1024
-        mb = kb / 1024.
-        print("Memory usage start: %s (KB); %.2f (MB)" % (kb, mb))
 
     try:
         #op2.read_bdf(op2.bdf_filename, includeDir=None, xref=False)
@@ -335,55 +288,51 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
             print(op2.get_op2_stats(short=short_stats))
             op2.print_subcase_key()
 
-        write_op2_as_bdf(op2, op2_bdf, bdf_filename, write_bdf, make_geom, read_bdf, dev)
+        write_op2_as_bdf(op2, op2_bdf, bdf_filename, write_bdf, make_geom, read_bdf, dev,
+                         xref_safe=xref_safe)
 
         if compare:
             assert op2 == op2_nv
 
-        if is_memory and check_memory:  # pragma: no cover
-            if is_linux: # linux
-                kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            else: # windows
-                kb = get_memory_usage() / 1024
-            mb = kb / 1024.
-            print("Memory usage     end: %s (KB); %.2f (MB)" % (kb, mb))
-
-        if IS_HDF5:
-            op2.export_to_hdf5(model + '.test_op2.h5')
+        if IS_HDF5 and write_hdf5:
+            from pyNastran.op2.op2_interface.hdf5_interface import load_op2_from_hdf5_filename
+            h5_filename = model + '.test_op2.h5'
+            op2.export_hdf5_filename(h5_filename)
+            load_op2_from_hdf5_filename(h5_filename, log=op2.log)
+            if delete_hdf5:
+                remove_file(h5_filename)
         if write_f06:
-            op2.write_f06(model + '.test_op2.f06', is_mag_phase=is_mag_phase,
-                          is_sort1=not is_sort2, quiet=quiet, repr_check=True)
+            for is_sort2 in sort_methods:
+                f06_filename = model + '.test_op2.f06'
+                op2.write_f06(f06_filename, is_mag_phase=is_mag_phase,
+                              is_sort1=not is_sort2, quiet=quiet, repr_check=True)
             if delete_f06:
-                try:
-                    os.remove(model + '.test_op2.f06')
-                except:
-                    pass
+                remove_file(f06_filename)
 
         # we put it down here so we don't blame the dataframe for real errors
-        if IS_PANDAS and not skip_dataframe:
+        if IS_PANDAS and build_pandas:
             op2.build_dataframe()
         #if compare:
             #op2_nv.build_dataframe()
 
         if write_op2:
             model = os.path.splitext(op2_filename)[0]
-            op2.write_op2(model + '.test_op2.op2', is_mag_phase=is_mag_phase)
-            if delete_f06:
-                try:
-                    os.remove(model + '.test_op2.op2')
-                except:
-                    pass
+            op2_filename2 = model + '.test_op2.op2'
+            total_case_count = op2.write_op2(op2_filename2,
+                                             #is_mag_phase=is_mag_phase,
+                                             endian=b'<')
+            if total_case_count > 0:
+                #print('------------------------------')
+                op2a = OP2(debug_file='debug.out', log=log)
+                op2a.use_vector = False
+                op2a.read_op2(op2_filename2)
+                os.remove(op2_filename2)
+            #read_op2(op2_filename2)
+            if delete_op2:
+                remove_file(op2_filename2)
 
-        if is_memory and check_memory:
-            op2 = None
-            del op2_nv
-            if is_linux: # linux
-                kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            else: # windows
-                kb = get_memory_usage() / 1024
-            mb = kb / 1024.
-            print("Memory usage cleanup: %s (KB); %.2f (MB)" % (kb, mb))
-
+        if debug_file is not None and delete_debug_out:
+            os.remove(debug_file)
 
         #table_names_f06 = parse_table_names_from_F06(op2.f06FileName)
         #table_names_op2 = op2.getTableNamesFromOP2()
@@ -415,6 +364,8 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
     #except RuntimeError:
         #pass
     #except ValueError:
+        #pass
+    #except IndexError:
         #pass
     #except FortranMarkerError:
         #pass
@@ -450,6 +401,11 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
     #except FortranMarkerError:  # this block should be commented
         #is_passed = True
 
+    except DuplicateIDsError:
+        if not dev:
+            raise
+        is_passed = True
+
     except SystemExit:
         #print_exc(file=sys.stdout)
         #sys.exit('stopping on sys.exit')
@@ -475,17 +431,21 @@ def run_op2(op2_filename, make_geom=False, write_bdf=False, read_bdf=None,
 
     return op2, is_passed
 
-def write_op2_as_bdf(op2, op2_bdf, bdf_filename, write_bdf, make_geom, read_bdf, dev):
+def write_op2_as_bdf(op2, op2_bdf, bdf_filename, write_bdf, make_geom, read_bdf, dev,
+                     xref_safe=False):
     if write_bdf:
-        assert make_geom, 'make_geom=%s' % make_geom
+        assert make_geom, f'write_bdf=False, but make_geom={make_geom!r}; expected make_geom=True'
         op2._nastran_format = 'msc'
         op2.executive_control_lines = ['CEND\n']
         op2.validate()
         op2.write_bdf(bdf_filename, size=8)
         op2.log.debug('bdf_filename = %s' % bdf_filename)
+        xref = xref_safe is False
         if read_bdf:
             try:
-                op2_bdf.read_bdf(bdf_filename)
+                op2_bdf.read_bdf(bdf_filename, xref=xref)
+                if xref_safe:
+                    op2_bdf.safe_cross_reference()
             except:
                 if dev and len(op2_bdf.card_count) == 0:
                     pass
@@ -493,24 +453,26 @@ def write_op2_as_bdf(op2, op2_bdf, bdf_filename, write_bdf, make_geom, read_bdf,
                     raise
         #os.remove(bdf_filename)
 
-def get_test_op2_data():
+def get_test_op2_data(argv):
     """defines the docopt interface"""
     from docopt import docopt
     ver = str(pyNastran.__version__)
+    is_release = 'dev' not in ver
 
-    msg = "Usage:\n"
-    #is_release = True
-    options = '[--skip_dataframe] [-z] [-w] [-t] [-s <sub>] [-x <arg>]... [--nx]'
+    msg = "Usage:  "
+    nasa95 = '' if is_release else '|--nasa95'
+    version = f'[--nx|--autodesk{nasa95}]'
+    options = f'[-p] [-d] [-z] [-w] [-t] [-s <sub>] [-x <arg>]... {version} [--safe] [--post POST] [--load_hdf5]'
     if is_release:
-        line1 = "test_op2 [-q] [-b] [-c] [-g] [-n] [-f] %s OP2_FILENAME\n" % options
+        line1 = f"test_op2 [-q] [-b] [-c] [-g] [-n] [-f] [-o] {options} OP2_FILENAME\n"
     else:
-        line1 = "test_op2 [-q] [-b] [-c] [-g] [-n] [-f] [-o] [-p] %s OP2_FILENAME\n" % options
+        line1 = f"test_op2 [-q] [-b] [-c] [-g] [-n] [-f] [-o] [--profile] {options} OP2_FILENAME\n"
 
     while '  ' in line1:
         line1 = line1.replace('  ', ' ')
     msg += line1
-    msg += "  test_op2 -h | --help\n"
-    msg += "  test_op2 -v | --version\n"
+    msg += "        test_op2 -h | --help\n"
+    msg += "        test_op2 -v | --version\n"
     msg += "\n"
     msg += "Tests to see if an OP2 will work with pyNastran %s.\n" % ver
     msg += "\n"
@@ -527,30 +489,36 @@ def get_test_op2_data():
     # n is for NAS
     msg += "  -n, --write_bdf        Writes the bdf to fem.test_op2.bdf (default=False)\n"
     msg += "  -f, --write_f06        Writes the f06 to fem.test_op2.f06\n"
+    msg += "  -d, --write_hdf5       Writes the h5 to fem.test_op2.h5\n"
+    msg += "  -o, --write_op2        Writes the op2 to fem.test_op2.op2\n"
     msg += "  -z, --is_mag_phase     F06 Writer writes Magnitude/Phase instead of\n"
     msg += "                         Real/Imaginary (still stores Real/Imag); [default: False]\n"
-    msg += "  --skip_dataframe       Disables pandas dataframe building; [default: False]\n"
+    msg += "  --load_hdf5            Load as HDF5 (default=False)\n"
+    msg += "  -p, --pandas           Enables pandas dataframe building; [default: False]\n"
     msg += "  -s <sub>, --subcase    Specify one or more subcases to parse; (e.g. 2_5)\n"
     msg += "  -w, --is_sort2         Sets the F06 transient to SORT2\n"
     msg += "  -x <arg>, --exclude    Exclude specific results\n"
     msg += "  --nx                   Assume NX Nastran\n"
+    msg += "  --autodesk             Assume Autodesk Nastran\n"
+    if not is_release:
+        msg += "  --nasa95               Assume Nastran 95\n"
+    msg += "  --post POST            Set the PARAM,POST flag\n"
+    msg += "  --safe                 Safe cross-references BDF (default=False)\n"
 
     if not is_release:
         msg += "\n"
         msg += "Developer:\n"
-        msg += "  -o, --write_op2   Writes the op2 to fem.test_op2.op2\n"
-        msg += '  -p, --profile     Profiles the code (default=False)\n'
+        msg += '  --profile         Profiles the code (default=False)\n'
 
     msg += "\n"
     msg += "Info:\n"
     msg += "  -h, --help     Show this help message and exit\n"
     msg += "  -v, --version  Show program's version number and exit\n"
 
-    if len(sys.argv) == 1:
+    if len(argv) == 1:
         sys.exit(msg)
 
-    data = docopt(msg, version=ver)
-
+    data = docopt(msg, version=ver, argv=argv[1:])
     if is_release:
         data['--profile'] = False
         data['--write_xlsx'] = False
@@ -564,11 +532,45 @@ def get_test_op2_data():
     #print("data", data)
     return data
 
-def main():
+def remove_file(filename):
+    try:
+        os.remove(filename)
+    except:
+        pass
+
+
+def set_versions(op2s, is_nx, is_autodesk, is_nasa95, post):
+    for op2 in op2s:
+        op2.IS_TESTING = False
+
+    if is_nx is None and is_autodesk is None and is_nasa95 is None:
+        pass
+    elif is_nx:
+        for op2 in op2s:
+            op2.set_as_nx()
+    elif is_autodesk:
+        for op2 in op2s:
+            op2.set_as_autodesk()
+    elif is_nasa95:
+        for op2 in op2s:
+            op2.set_as_nasa95()
+    else:
+        for op2 in op2s:
+            op2.set_as_msc()
+
+    if post is not None:
+        for op2 in op2s:
+            op2.post = -4
+
+def main(argv=None, show_args=True):
     """the interface for test_op2"""
-    data = get_test_op2_data()
-    for key, value in sorted(iteritems(data)):
-        print("%-12s = %r" % (key.strip('--'), value))
+    if argv is None:
+        argv = sys.argv
+    data = get_test_op2_data(argv)
+
+    if show_args:
+        for key, value in sorted(data.items()):
+            print("%-12s = %r" % (key.strip('--'), value))
 
     if os.path.exists('skippedCards.out'):
         os.remove('skippedCards.out')
@@ -584,11 +586,13 @@ def main():
             run_op2,
             data['OP2_FILENAME'],
             make_geom=data['--geometry'],
+            load_as_h5=data['--load_hdf5'],
             write_bdf=data['--write_bdf'],
             write_f06=data['--write_f06'],
             write_op2=data['--write_op2'],
+            write_hdf5=data['--write_hdf5'],
             is_mag_phase=data['--is_mag_phase'],
-            skip_dataframe=data['--skip_dataframe'],
+            build_pandas=data['--pandas'],
             subcases=data['--subcase'],
             exclude=data['--exclude'],
             debug=not data['--quiet'],
@@ -597,6 +601,10 @@ def main():
             compare=not data['--disablecompare'],
             quiet=data['--quiet'],
             is_nx=data['--nx'],
+            is_autodesk=data['--autodesk'],
+            is_nasa95=data['--nasa95'],
+            safe=data['--safe'],
+            post=data['--post'],
         )
         prof.dump_stats('op2.profile')
 
@@ -609,11 +617,13 @@ def main():
         run_op2(
             data['OP2_FILENAME'],
             make_geom=data['--geometry'],
+            load_as_h5=data['--load_hdf5'],
             write_bdf=data['--write_bdf'],
             write_f06=data['--write_f06'],
             write_op2=data['--write_op2'],
+            write_hdf5=data['--write_hdf5'],
             is_mag_phase=data['--is_mag_phase'],
-            skip_dataframe=data['--skip_dataframe'],
+            build_pandas=data['--pandas'],
             subcases=data['--subcase'],
             exclude=data['--exclude'],
             short_stats=data['--short_stats'],
@@ -623,8 +633,12 @@ def main():
             compare=not data['--disablecompare'],
             quiet=data['--quiet'],
             is_nx=data['--nx'],
+            is_autodesk=data['--autodesk'],
+            is_nasa95=data['--nasa95'],
+            xref_safe=data['--safe'],
+            post=data['--post'],
         )
     print("dt = %f" % (time.time() - time0))
 
-if __name__ == '__main__':  # op2
-    main()
+if __name__ == '__main__':  # pragma: no cover
+    main(show_args=True)

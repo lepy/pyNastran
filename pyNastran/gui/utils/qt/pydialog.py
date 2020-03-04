@@ -1,15 +1,30 @@
 """
 defines:
  - PyDialog()
-"""
-from __future__ import print_function
 
+"""
+from pyNastran.gui.qt_version import qt_version
 from qtpy.QtCore import Qt
 from qtpy.QtGui import QFont
-from qtpy.QtWidgets import QDialog
+from qtpy.QtWidgets import QDialog, QComboBox
 
 from pyNastran.bdf.utils import (
     parse_patran_syntax, parse_patran_syntax_dict)
+
+from pyNastran.gui.utils.qt.checks.qlineedit import (
+    check_path, check_save_path,
+    check_int, check_positive_int_or_blank,
+    check_float, check_float_ranged,
+    check_name_str, check_name_length, check_format, check_format_str,
+)
+
+def make_font(font_size, is_bold=False):
+    """creates a QFont"""
+    font = QFont()
+    font.setPointSize(font_size)
+    if is_bold:
+        font.setBold(is_bold)
+    return font
 
 class PyDialog(QDialog):
     """
@@ -17,7 +32,7 @@ class PyDialog(QDialog):
     is not repeated
     """
     def __init__(self, data, win_parent):
-        QDialog.__init__(self, win_parent)
+        super(PyDialog, self).__init__(win_parent)
         self.out_data = data
         self.win_parent = win_parent
         self.font_size = None
@@ -34,8 +49,7 @@ class PyDialog(QDialog):
         if self.font_size == font_size:
             return
         self.font_size = font_size
-        font = QFont()
-        font.setPointSize(font_size)
+        font = make_font(font_size, is_bold=False)
         self.setFont(font)
 
     def closeEvent(self, event):
@@ -46,102 +60,60 @@ class PyDialog(QDialog):
         if event.key() == Qt.Key_Escape:
             self.on_cancel()
 
-    @staticmethod
-    def check_int(cell):
-        text = cell.text()
-        try:
-            value = int(text)
-            cell.setStyleSheet("QLineEdit{background: white;}")
-            return value, True
-        except ValueError:
-            cell.setStyleSheet("QLineEdit{background: red;}")
-            return None, False
-
-    @staticmethod
-    def check_positive_int_or_blank(cell):
-        text = str(cell.text()).strip()
-        if len(text) == 0:
-            return None, True
-        try:
-            value = int(text)
-        except ValueError:
-            cell.setStyleSheet("QLineEdit{background: red;}")
-            return None, False
-
-        if value < 1:
-            cell.setStyleSheet("QLineEdit{background: red;}")
-            return None, False
-
-        cell.setStyleSheet("QLineEdit{background: white;}")
-        return value, True
-
-    @staticmethod
-    def check_float(cell):
-        text = cell.text()
-        try:
-            value = float(text)
-            cell.setStyleSheet("QLineEdit{background: white;}")
-            return value, True
-        except ValueError:
-            cell.setStyleSheet("QLineEdit{background: red;}")
-            return None, False
-
-    @staticmethod
-    def check_patran_syntax(cell, pound=None):
-        text = str(cell.text())
-        try:
-            values = parse_patran_syntax(text, pound=pound)
-            cell.setStyleSheet("QLineEdit{background: white;}")
-            return values, True
-        except ValueError as e:
-            cell.setStyleSheet("QLineEdit{background: red;}")
-            cell.setToolTip(str(e))
-            return None, False
-
-    @staticmethod
-    def check_patran_syntax_dict(cell, pound=None):
-        text = str(cell.text())
-        try:
-            value = parse_patran_syntax_dict(text)
-            cell.setStyleSheet("QLineEdit{background: white;}")
-            cell.setToolTip('')
-            return value, True
-        except (ValueError, SyntaxError, KeyError) as e:
-            cell.setStyleSheet("QLineEdit{background: red;}")
-            cell.setToolTip(str(e))
-            return None, False
-
-
-def check_format(cell):
+def check_patran_syntax(cell, pound=None):
     text = str(cell.text())
-
-    is_valid = True
-    if len(text) < 2:
-        is_valid = False
-    elif 's' in text.lower():
-        is_valid = False
-    elif '%' not in text[0]:
-        is_valid = False
-    elif text[-1].lower() not in ['g', 'f', 'i', 'e']:
-        is_valid = False
-
     try:
-        text % 1
-        text % .2
-        text % 1e3
-        text % -5.
-        text % -5
-    except ValueError:
-        is_valid = False
-
-    try:
-        text % 's'
-        is_valid = False
-    except TypeError:
-        pass
-
-    if is_valid:
+        values = parse_patran_syntax(text, pound=pound)
         cell.setStyleSheet("QLineEdit{background: white;}")
-        return text, True
-    cell.setStyleSheet("QLineEdit{background: red;}")
-    return None, False
+        return values, True
+    except ValueError as error:
+        cell.setStyleSheet("QLineEdit{background: red;}")
+        cell.setToolTip(str(error))
+        return None, False
+
+def check_patran_syntax_dict(cell, pound=None):
+    text = str(cell.text())
+    try:
+        value = parse_patran_syntax_dict(text)
+        cell.setStyleSheet("QLineEdit{background: white;}")
+        cell.setToolTip('')
+        return value, True
+    except (ValueError, SyntaxError, KeyError) as error:
+        cell.setStyleSheet("QLineEdit{background: red;}")
+        cell.setToolTip(str(error))
+        return None, False
+
+def make_combo_box(items, initial_value):
+    """
+    Makes a QComboBox, sets the items, and sets an initial value.
+
+    Parameters
+    ----------
+    items : List[str]
+        the values of the combo box
+    initial_value : str
+        the value to set the combo box to
+
+    Returns
+    -------
+    combo_box : QComboBox
+        the pulldown
+    """
+    assert initial_value in items, 'initial_value=%r items=%s' % (initial_value, items)
+    combo_box = QComboBox()
+    combo_box.addItems(items)
+    set_combo_box_text(combo_box, initial_value)
+
+    if initial_value not in items:
+        msg = 'initial_value=%r is not supported in %s' % (initial_value, items)
+        raise RuntimeError(msg)
+    return combo_box
+
+def set_combo_box_text(combo_box, value):
+    """sets the combo_box text"""
+    if qt_version == 'pyside':
+        items = [combo_box.itemText(i) for i in range(combo_box.count())]
+        j = items.index(value)
+        combo_box.setCurrentIndex(j)
+    else:
+        combo_box.setCurrentText(value)

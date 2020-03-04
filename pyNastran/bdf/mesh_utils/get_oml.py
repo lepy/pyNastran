@@ -2,10 +2,9 @@
 defines:
  - eids_oml = get_oml_eids(bdf_filename, eid_start, theta_tol=30.,
                            is_symmetric=True, consider_flippped_normals=True)
+
 """
-from __future__ import print_function
 from copy import deepcopy
-from six import iteritems
 import numpy as np
 
 from pyNastran.bdf.bdf import read_bdf
@@ -30,6 +29,7 @@ def get_oml_eids(bdf_filename, eid_start, theta_tol=30.,
     consider_flippped_normals : bool; default=True
         if you extracted the free faces from tets, you can get flipped normals
         this considers a 180 degree error to be 0.0, which will cause other problems
+
     """
     #ninety = np.radians(90.)
 
@@ -48,13 +48,15 @@ def get_oml_eids(bdf_filename, eid_start, theta_tol=30.,
         eids=None, map_names=None,
         consider_0d=False, consider_0d_rigid=False,
         consider_1d=False, consider_2d=True, consider_3d=False)
-    (edge_to_eid_map, eid_to_edge_map, nid_to_edge_map) = maps
+    edge_to_eid_map = maps['edge_to_eid_map']
+    eid_to_edge_map = maps['eid_to_edge_map']
+    nid_to_edge_map = maps['nid_to_edge_map']
 
     #free_edges = get_free_edges(model, maps=maps)
     #---------------------------------
     normals = {}
-    etypes_skipped = set([])
-    for eid, elem in iteritems(model.elements):
+    etypes_skipped = set()
+    for eid, elem in model.elements.items():
         if elem.type in ['CTRIA3', 'CQUAD4']:
             normals[eid] = elem.Normal()
         else:
@@ -104,14 +106,14 @@ def get_oml_eids(bdf_filename, eid_start, theta_tol=30.,
                 normal = normals[eid]
                 # a o b = a * b * cos(theta)
                 # cos(theta) = (a o b)/ (a b); where |a| = 1; |b| = 1
-                cos_theta = np.dot(normal, normal_start)
+                cos_theta = normal @ normal_start
                 theta = np.arccos(cos_theta)
                 if theta < theta_tol:
                     eids_next.add(eid)
                     eids_oml.add(eid)
                 elif consider_flippped_normals:
                     # handles flipped normals
-                    cos_theta = np.dot(normal, -normal_start)
+                    cos_theta = normal @ -normal_start
                     theta = np.arccos(cos_theta)
                     if theta < theta_tol:
                         eids_next.add(eid)

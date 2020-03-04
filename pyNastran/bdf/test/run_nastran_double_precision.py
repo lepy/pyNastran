@@ -1,4 +1,3 @@
-from __future__ import print_function
 import os
 import sys
 
@@ -12,7 +11,7 @@ from pyNastran.op2.op2 import read_op2
 #except ImportError:
     #is_f06 = False
 
-#class remove_prints(object):
+#class remove_prints:
     #def __init__(self):
         #pass
     #def write(self, msg):
@@ -26,8 +25,8 @@ from pyNastran.op2.op2 import read_op2
 
 def update_bdf(model, post=-1):
     #cc = model.case_control_deck
-    #for isubcase, subcase in sorted(iteritems(cc.subcases)):
-        #for param, values in iteritems(subcase.params):
+    #for isubcase, subcase in sorted(cc.subcases.items()):
+        #for param, values in subcase..items(params):
             #if param in ['SPCFORCES', 'STRESS', 'DISPLACEMENT', 'STRAIN', 'MPCFORCES',
                          #'GPFORCE', 'GPSTRESS', 'VELOCITY', 'ACCELERATION']:
                 #print('values =', values)
@@ -49,14 +48,14 @@ def main(bdf_filename, run_first_nastran=True, debug=True):
         op2_filename = base + '.op2'
         try:
             model2 = read_op2(op2_filename)
-        except FatalError as e:
-            print(e)
+        except FatalError as error:
+            print(error)
 
         #try:
             #model2 = F06()
             #model2.read_f06(f06_filename)
-        #except FatalError as e:
-            #print(e)
+        #except FatalError as error:
+            #print(error)
             #return
     else:
         pass
@@ -88,7 +87,7 @@ def main(bdf_filename, run_first_nastran=True, debug=True):
         #model5 = F06(debug=False)
         #model5.read_f06(out_f06_16)
 
-    out_op2_8 = base + '_8.op2'
+    #out_op2_8 = base + '_8.op2'
     out_op2_16 = base + '_16.op2'
 
     model6 = read_op2(out_op2_16)

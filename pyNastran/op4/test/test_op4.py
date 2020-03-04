@@ -1,12 +1,8 @@
-"""
-defines the command line argument ``test_op4``
-"""
-from __future__ import print_function
+"""defines the command line argument ``test_op4``"""
 import os
 import sys
 import time
 from traceback import print_exc
-from six import iteritems
 
 import pyNastran
 from pyNastran.op4.op4 import read_op4
@@ -71,6 +67,9 @@ def run_op4(op4_filename, write_op4=True, debug=True,
     #debug = True
     try:
         matrices = read_op4(op4_filename, debug=debug)
+        keys = list(matrices.keys())
+        keys.sort()
+        print('matrices =', keys)
 
         #if 0:
             #matrices2 = op4.read_op4(op4_filename)
@@ -79,7 +78,7 @@ def run_op4(op4_filename, write_op4=True, debug=True,
             #print('matrices =', matrices.keys())
 
             #assert list(sorted(matrices.keys())) == list(sorted(matrices2.keys()))
-            #for key, (form, matrix) in sorted(iteritems(matrices)):
+            #for key, (form, matrix) in sorted(matrices.items()):
                 #form2, matrix2 = matrices2[key]
                 #assert form == form2
                 #delta = matrix - matrix2
@@ -87,8 +86,8 @@ def run_op4(op4_filename, write_op4=True, debug=True,
 
         if write_op4:
             model = os.path.splitext(op4_filename)[0]
-            op4.write_op4(model+'.test_op4_ascii.op4', matrices, is_binary=False)
-            op4.write_op4(model+'.test_op4_binary.op4', matrices, is_binary=True)
+            model.write_op4(model+'.test_op4_ascii.op4', matrices, is_binary=False)
+            model.write_op4(model+'.test_op4_binary.op4', matrices, is_binary=True)
             if delete_op4:
                 try:
                     os.remove(model+'.test_op4_ascii.op4')
@@ -172,7 +171,7 @@ def main():
     data = docopt(msg, version=ver)
     #print("data", data)
 
-    for key, value in sorted(iteritems(data)):
+    for key, value in sorted(data.items()):
         print("%-12s = %r" % (key.strip('--'), value))
 
     time0 = time.time()

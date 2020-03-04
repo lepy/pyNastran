@@ -1,5 +1,4 @@
-from __future__ import print_function
-from six.moves import StringIO
+from io import StringIO
 from numpy import zeros, searchsorted, where, asarray, array
 
 from pyNastran.dev.bdf_vectorized.cards.elements.element import Element
@@ -19,6 +18,7 @@ class SolidElement(Element):
          - elements[1:10:2]
          - elements[[1,2,5]]
          - elements[array([1,2,5])]
+
         """
         try:
             i = searchsorted(self.element_id, element_ids)

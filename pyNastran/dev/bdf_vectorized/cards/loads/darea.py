@@ -1,5 +1,3 @@
-from six.moves import zip
-
 import numpy as np
 
 #from pyNastran.bdf.field_writer_8 import set_blank_if_default
@@ -11,7 +9,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (
 
 from pyNastran.dev.bdf_vectorized.cards.vectorized_card import VectorizedCard
 
-#class DAREA(object):
+#class DAREA:
     #type = 'DAREA'
     #def __init__(self, model):
         #self.n = 0

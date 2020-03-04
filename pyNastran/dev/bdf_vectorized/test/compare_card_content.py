@@ -1,6 +1,3 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six.moves import zip, range
 from itertools import count
 
 from pyNastran.bdf.cards.utils import wipe_empty_fields
@@ -199,19 +196,19 @@ def compare_matrices(fem1, fem2):
         #card2 = fem2.dmis[key]
         #assert str(card1) == str(card2)
 
-    for key in fem1.dmijs:
-        card1 = fem1.dmijs[key]
-        card2 = fem2.dmijs[key]
+    for key in fem1.dmij:
+        card1 = fem1.dmij[key]
+        card2 = fem2.dmij[key]
         assert str(card1) == str(card2)
 
-    for key in fem1.dmijis:
-        card1 = fem1.dmijis[key]
-        card2 = fem2.dmijis[key]
+    for key in fem1.dmiji:
+        card1 = fem1.dmiji[key]
+        card2 = fem2.dmiji[key]
         assert str(card1) == str(card2)
 
-    for key in fem1.dmiks:
-        card1 = fem1.dmiks[key]
-        card2 = fem2.dmiks[key]
+    for key in fem1.dmik:
+        card1 = fem1.dmik[key]
+        card2 = fem2.dmik[key]
         assert str(card1) == str(card2)
 
 
@@ -245,6 +242,7 @@ def compare_thermal_content(fem1, fem2):
 def compare_optimization_content(fem1, fem2):
     assert len(fem1.dconstrs) == len(fem2.dconstrs)
     assert len(fem1.desvars) == len(fem2.desvars)
+    assert len(fem1.topvar) == len(fem2.topvar)
     assert len(fem1.ddvals) == len(fem2.ddvals)
     assert len(fem1.dresps) == len(fem2.dresps)
     assert len(fem1.dvprels) == len(fem2.dvprels)
@@ -257,6 +255,11 @@ def compare_optimization_content(fem1, fem2):
     for key in fem1.desvars:
         card1 = fem1.desvars[key]
         card2 = fem2.desvars[key]
+        assert_fields(card1, card2)
+
+    for key in fem1.topvar:
+        card1 = fem1.topvar[key]
+        card2 = fem2.topvar[key]
         assert_fields(card1, card2)
 
     for key in fem1.ddvals:

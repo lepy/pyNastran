@@ -6,20 +6,33 @@ All ungrouped properties are defined in this file.  This includes:
  * PRAC2D (CrackProperty)
  * PRAC3D (CrackProperty)
  * PCONEAX (not done)
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class PFAST(Property):
+    """
+    +------+-----+-----+------+-------+---------+--------+--------+-----+
+    |   1  |  2  |  3  |   4  |   5   |    6    |    7   |    8   |  9  |
+    +======+=====+=====+======+=======+=========+========+========+=====+
+    |PFAST | PID |  D  | MCID | MFLAG |   KT1   |   KT2  |   KT3  | KR1 |
+    +------+-----+-----+------+-------+---------+--------+--------+-----+
+    |      | KR2 | KR3 | MASS |   GE  |         |        |        |     |
+    +------+-----+-----+------+-------+---------+--------+--------+-----+
+    |PFAST |  7  | 1.1 | 70   |       | 100000. | 46000. | 12300. |     |
+    +------+-----+-----+------+-------+---------+--------+--------+-----+
+    """
     type = 'PFAST'
     _field_map = {
         1: 'pid', 2:'d', 3:'mcid', 4:'mflag',
@@ -27,6 +40,25 @@ class PFAST(Property):
         8:'kr1', 9:'kr2', 10:'kr3',
         11:'mass', 12:'ge'
     }
+    pname_fid_map = {
+        'KT1' : 'kt1',
+        'KT2' : 'kt2',
+        'KT3' : 'kt3',
+        'KR1' : 'kr1',
+        'KR2' : 'kr2',
+        'KR3' : 'kr3',
+        'MASS' : 'mass',
+    }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        d = 0.1
+        kt1 = 1.
+        kt2 = 2.
+        kt3 = 3.
+        return PFAST(pid, d, kt1, kt2, kt3,
+                     mcid=-1, mflag=0, kr1=0., kr2=0., kr3=0., mass=0., ge=0., comment='')
 
     def __init__(self, pid, d, kt1, kt2, kt3, mcid=-1, mflag=0,
                  kr1=0., kr2=0., kr3=0., mass=0., ge=0., comment=''):
@@ -137,7 +169,7 @@ class PFAST(Property):
         assert isinstance(self.Mcid(), integer_types), self.Mcid()
         assert isinstance(self.Mass(), float), self.mass
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -145,12 +177,15 @@ class PFAST(Property):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by PFAST pid=%s' % self.pid
+        msg = ', which is required by PFAST pid=%s' % self.pid
         if self.mcid != -1:
             self.mcid_ref = model.Coord(self.Mcid(), msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        """Removes cross-reference links"""
         self.mcid = self.Mcid()
         #if self.mcid != -1:
         self.mcid_ref = None
@@ -182,7 +217,7 @@ class PFAST(Property):
                   self.kt3, kr1, kr2, kr3, mass, ge]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -218,6 +253,12 @@ class PGAP(Property):
         12 : 'trmin',
         'KA' : 'ka',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        return PGAP(pid, u0=0., f0=0., ka=1.e8, kb=None, mu1=0.,
+                    kt=None, mu2=None, tmax=0., mar=100., trmin=0.001, comment='')
 
     def __init__(self, pid, u0=0., f0=0., ka=1.e8, kb=None, mu1=0.,
                  kt=None, mu2=None, tmax=0., mar=100., trmin=0.001,
@@ -347,10 +388,11 @@ class PGAP(Property):
         pid = self.Pid()
         assert isinstance(pid, int), 'pid=%r\n%s' % (pid, str(self))
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def raw_fields(self):
@@ -375,7 +417,7 @@ class PGAP(Property):
                   tmax, mar, trmin]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -387,11 +429,12 @@ class CrackProperty(Property):
         Property.__init__(self)
 
     def Mid(self):
-        if isinstance(self.mid, int):
-            return self.mid
-        return self.mid_ref.mid
+        # type: () -> int
+        if self.mid_ref is not None:
+            return self.mid_ref.mid
+        return self.mid
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -408,6 +451,14 @@ class PRAC2D(CrackProperty):
     _field_map = {
         1: 'pid', 2:'mid', 3:'thick', 4:'iPlane', 5:'nsm', 6:'gamma', 7:'phi',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid = 1
+        thick = 0.1
+        iplane = 1
+        return PRAC2D(pid, mid, thick, iplane, nsm=0., gamma=0.5, phi=180., comment='')
 
     def __init__(self, pid, mid, thick, iplane, nsm=0., gamma=0.5, phi=180.,
                  comment=''):
@@ -466,7 +517,7 @@ class PRAC2D(CrackProperty):
         pid = self.Pid()
         assert isinstance(pid, int)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -475,11 +526,11 @@ class PRAC2D(CrackProperty):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by PRAC2D pid=%s' % self.pid
-        self.mid = model.Material(self.mid, msg)  # MAT1, MAT2, MAT8
-        self.mid_ref = self.mid
+        msg = ', which is required by PRAC2D pid=%s' % self.pid
+        self.mid_ref = model.Material(self.mid, msg)  # MAT1, MAT2, MAT8
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 
@@ -506,6 +557,12 @@ class PRAC3D(CrackProperty):
     _field_map = {
         1: 'pid', 2:'mid', 3:'gamma', 4:'phi',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid = 1
+        return PRAC3D(pid, mid, gamma=0.5, phi=180., comment='')
 
     def __init__(self, pid, mid, gamma=0.5, phi=180., comment=''):
         CrackProperty.__init__(self)
@@ -547,7 +604,7 @@ class PRAC3D(CrackProperty):
         pid = self.Pid()
         assert isinstance(pid, int)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -556,11 +613,11 @@ class PRAC3D(CrackProperty):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by PRAC3D pid=%s' % self.pid
-        self.mid = model.Material(self.mid, msg)  # MAT1, MAT9
-        self.mid_ref = self.mid
+        msg = ', which is required by PRAC3D pid=%s' % self.pid
+        self.mid_ref = model.Material(self.mid, msg)  # MAT1, MAT9
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 

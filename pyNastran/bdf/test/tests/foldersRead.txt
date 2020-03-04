@@ -21,13 +21,27 @@ F:\Program Files\Siemens\NXNastran\nxn10p1\nxn10p1\nast\tpl
 # desktop2
 
 # MSC 2005
-C:\Users\sdoyle\Dropbox\pyNastran_examples
-C:\Users\sdoyle\Desktop\move
-C:\Users\sdoyle\Dropbox\move_tpl
+#C:\Users\sdoyle\Dropbox\pyNastran_examples
+#C:\Users\sdoyle\Desktop\move
+#C:\Users\sdoyle\Dropbox\move_tpl
+C:\NASA\m4\formats\git\examples\pyNastran_examples
+C:\NASA\m4\formats\git\examples\pyNastran_examples\demo
+C:\NASA\m4\formats\git\examples\pyNastran_examples\demo_sort2_post_m2
+C:\NASA\m4\formats\git\examples
+C:\NASA\m4\formats\git\examples\move
+C:\NASA\m4\formats\git\examples\move_tpl
+C:\NASA\m4\formats\git\examples\move_tpl\works
+
 C:\MSC.Software\MSC.Nastran\msc20051\nast\nast
 C:\MSC.Software\MSC.Nastran\msc20051\nast\demo
 C:\MSC.Software\MSC.Nastran\msc20051\nast\doc
 C:\MSC.Software\MSC.Nastran\msc20051\nast\tpl
+
+# MSC 2005r3
+C:\MSC.Software\MSC.Nastran2005r3\msc20055\nast\nast
+C:\MSC.Software\MSC.Nastran2005r3\msc20055\nast\demo
+C:\MSC.Software\MSC.Nastran2005r3\msc20055\nast\doc
+C:\MSC.Software\MSC.Nastran2005r3\msc20055\nast\tpl
 
 # these don't work - nx 10.2
 "C:\Program Files\Siemens\NXNastran\nxn10p2\nxn10p2\nast"
@@ -40,6 +54,9 @@ C:\MSC.Software\MSC.Nastran\msc20051\nast\tpl
 "C:\Program Files\Siemens\NX 12.0\NXNASTRAN\nxn12\doc"
 "C:\Program Files\Siemens\NX 12.0\NXNASTRAN\nxn12\demo"
 "C:\Program Files\Siemens\NX 12.0\NXNASTRAN\nxn12\tpl"
+
+# NX 2019
+C:\MSC.Software\simcenter_nastran_2019.2\tpl_post2
 #-------------------------------------------------
 # laptop
 D:\work\move

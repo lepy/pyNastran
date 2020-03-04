@@ -2,10 +2,11 @@
 """
 defines:
   - make_gpwg(Mgg, reference_point, xyz_cid0, log)
+
 """
-from __future__ import print_function
-from six import iteritems
 import numpy as np
+import scipy as sp
+from pyNastran.bdf.mesh_utils.mass_properties import get_sub_eids
 
 def _lambda_1d(v1):
     """
@@ -13,8 +14,6 @@ def _lambda_1d(v1):
       3d  [l,m,n,0,0,0]  2x6
           [0,0,0,l,m,n]
     """
-    #R = self.Rmatrix(model,is3D)
-
     #xyz1 = model.Node(n1).get_position()
     #xyz2 = model.Node(n2).get_position()
     #v1 = xyz2 - xyz1
@@ -39,15 +38,15 @@ def triple(A, B):
     """
     return np.einsum('ia,aj,ka->ijk', A, B, A)
 
-def make_mass_matrix(model, reference_point):
+def make_mass_matrix(model, reference_point, fdtype='float64', idtype='int32'):
     """
     Performs an accurate mass calculation
 
     ..todo:: not anywhere close to being done
     ..todo:: doesn't support SPOINTs/EPOINTs
     """
-    icd_transform, icp_transform, xyz_cp, nid_cp_cd = model.get_displacement_index_xyz_cp_cd(
-        fdtype='float64', idtype='int32', sort_ids=True)
+    unused_icd_transform, icp_transform, xyz_cp, nid_cp_cd = model.get_displacement_index_xyz_cp_cd(
+        fdtype=fdtype, idtype=idtype, sort_ids=True)
     xyz_cid0 = model.transform_xyzcp_to_xyz_cid(
         xyz_cp, icp_transform, cid=0, in_place=False, atol=1e-6)
 
@@ -68,7 +67,6 @@ def make_mass_matrix(model, reference_point):
         i += 6
     nrows = len(components)
 
-    import scipy as sp
     mass = sp.sparse.dok_matrix((nrows, nrows), dtype=np.float64)
 
     no_mass = [
@@ -83,22 +81,18 @@ def make_mass_matrix(model, reference_point):
         'CORD3G', 'CONV', 'CONVM', 'CSET', 'CSET1', 'CLOAD',
         'CHBDYG', 'CHBDYE', 'CHBDYP',
     ]
-    def get_sub_eids(all_eids, eids):
-        """supports limiting the element/mass ids"""
-        eids = np.array(eids)
-        ieids = np.searchsorted(all_eids, eids)
-        eids2 = eids[all_eids[ieids] == eids]
-        return eids2
+    all_eids = np.array(list(model.elements.keys()), dtype='int32')
 
-    #etypes_skipped = set([])
-    for etype, eids in iteritems(model._type_to_id_map):
+    #etypes_skipped = set()
+    for etype, eids in model._type_to_id_map.items():
         if etype in no_mass:
             continue
-        elif etype in ['CROD', 'CONROD']:
-            eids2 = get_sub_eids(all_eids, eids)
+
+        if etype in ['CROD', 'CONROD']:
+            eids2 = get_sub_eids(all_eids, eids, etype)
 
             # lumped
-            mass_mat = np.ones((2, 2))
+            mass_mat = np.ones((2, 2), dtype=fdtype)
             mass_mat[0, 0] = mass_mat[2, 2] = 1.
             #mass_mat[2, 2] = mass_mat[5, 5] = 0.
 
@@ -118,12 +112,12 @@ def make_mass_matrix(model, reference_point):
 
                 inid1 = inids[n1]
                 inid2 = inids[n2]
-                v1 = xyz[inid2, :] - xyz[inid1, :]
+                v1 = xyz_cid0[inid2, :] - xyz_cid0[inid1, :]
                 length = np.linalg.norm(v1)
                 mpl = elem.MassPerLength()
                 massi = mpl * length / 2.
                 Lambda = _lambda_1d(v1)
-                mass_mat2 = np.dot(np.dot(Lambda.T, mass_mat * massi), Lambda)
+                mass_mat2 = (Lambda.T @ mass_mat @ Lambda) * massi
                 assert mass_mat2.shape == (6, 6), mass_mat2
                 mass[i1, i1] = mass_mat2[0, 0]
                 mass[i2, i2] = mass_mat2[1, 1]
@@ -136,12 +130,12 @@ def make_mass_matrix(model, reference_point):
                 #centroid = (xyz[n1] + xyz[n2]) / 2.
                 #mass = _increment_inertia(centroid, reference_point, m, mass, cg, I)
         elif etype == 'CONM2':
-            mass_mat = np.zeros((6, 6))
-            eids2 = get_sub_eids(all_eids, eids)
+            mass_mat = np.zeros((6, 6), dtype=fdtype)
+            eids2 = get_sub_eids(all_eids, eids, etype)
             for eid in eids2:
                 elem = model.masses[eid]
                 massi = elem.Mass()
-                rx, ry, rz = elem.X
+                unused_rx, unused_ry, unused_rz = elem.X
                 mass_mat[0, 0] = massi
                 mass_mat[1, 1] = massi
                 mass_mat[2, 2] = massi
@@ -238,7 +232,7 @@ def make_gpwg(Mgg, reference_point, xyz_cid0, grid_cps, coords, log):
         d = np.zeros((6, 6), dtype='float32')
         d[:3, :3] = TiT
         d[3:, 3:] = TiT
-        d[:3, 3:] = np.dot(TiT, Tr)
+        d[:3, 3:] = TiT @ Tr
         D[j:j+6, :] = d
 
     Mo = np.zeros((6, 6), dtype='float32')
@@ -319,7 +313,8 @@ def make_gpwg(Mgg, reference_point, xyz_cid0, grid_cps, coords, log):
     I21 = I12 = -Mr[0, 1] - Mz * xz * yz
     I13 = I31 = -Mr[0, 2] - My * xy * zy
     I22 = Mr[1, 1] - Mz * xz ** 2 - Mx * zx ** 2
-    I32 = I23 = -Mr[1, 2] - Mx * yx * zx
+    I23 = -Mr[1, 2] - Mx * yx * zx
+    I32 = I23
     I33 = Mr[2, 2] - Mx * yx ** 2 - My * xy ** 2
     II = np.array([
         [I11, I12, I13],
@@ -334,7 +329,7 @@ def make_gpwg(Mgg, reference_point, xyz_cid0, grid_cps, coords, log):
     # 6. Reverse the sign of the off diagonal terms
     np.fill_diagonal(-II, np.diag(II))
     #print('I~=\n%s\n' % II)
-    if nan in II:
+    if np.nan in II:
         Q = np.zeros((3, 3), dtype='float32')
     else:
         omegaQ, Q = np.linalg.eig(II)
@@ -350,13 +345,13 @@ def get_Ajj(model, xyz=None):
     """not finished"""
     if xyz is None:
         xyz = {}
-        for nid, node in iteritems(model.nodes):
+        for nid, node in model.nodes.items():
             xyz[nid] = node.get_position()
-    for caero_id, caero in iteritems(model.caeros):
-        centroids = caero.get_centroids()
+    for unused_caero_id, caero in model.caeros.items():
+        unused_centroids = caero.get_centroids()
 
-    for spline_id, spline in iteritems(model.splines):
-        spline_nodes = spline.spline_nodes
+    for unused_spline_id, spline in model.splines.items():
+        unused_spline_nodes = spline.spline_nodes
 
     Ajj = None
     return Ajj

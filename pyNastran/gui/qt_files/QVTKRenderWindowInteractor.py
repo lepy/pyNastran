@@ -40,59 +40,16 @@ Changes by Fabian Wenzel, Jan. 2016
  Support for Python3
 """
 import vtk
-from pyNastran.gui.qt_version import qt_version
+from pyNastran.gui.qt_version import qt_int, qt_version
 
-# Check whether a specific PyQt implementation was chosen
-#try:
-    #import vtk.qt
-    #PyQtImpl = vtk.qt.PyQtImpl
-#except ImportError:
-    #pass
+print('qt_version = %r' % qt_version)
 
-PyQtImpl = None
-if PyQtImpl is None:
-    # Autodetect the PyQt implementation to use
-    try:
-        import PyQt5
-        PyQtImpl = "PyQt5"
-    except ImportError:
-        try:
-            import PyQt4
-            PyQtImpl = "PyQt4"
-        except ImportError:
-            try:
-                import PySide
-                PyQtImpl = "PySide"
-            except ImportError:
-                raise ImportError("Cannot load either PyQt or PySide")
-
-if PyQtImpl == "PyQt5":
-    from PyQt5.QtWidgets import QWidget
-    from PyQt5.QtWidgets import QSizePolicy
-    from PyQt5.QtWidgets import QApplication
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtCore import QTimer
-    from PyQt5.QtCore import QObject
-    from PyQt5.QtCore import QSize
-    from PyQt5.QtCore import QEvent
-elif PyQtImpl == "PyQt4":
-    from PyQt4.QtGui import QWidget
-    from PyQt4.QtGui import QSizePolicy
-    from PyQt4.QtGui import QApplication
-    from PyQt4.QtCore import Qt
-    from PyQt4.QtCore import QTimer
-    from PyQt4.QtCore import QObject
-    from PyQt4.QtCore import QSize
-    from PyQt4.QtCore import QEvent
-elif PyQtImpl == "PySide":
-    from PySide.QtGui import QWidget
-    from PySide.QtGui import QSizePolicy
-    from PySide.QtGui import QApplication
-    from PySide.QtCore import Qt
-    from PySide.QtCore import QTimer
-    from PySide.QtCore import QObject
-    from PySide.QtCore import QSize
-    from PySide.QtCore import QEvent
+if qt_version == "pyqt5":
+    from PyQt5.QtWidgets import QWidget, QSizePolicy, QApplication
+    from PyQt5.QtCore import Qt, QTimer, QObject, QSize, QEvent
+elif qt_version == "pyside2":
+    from PySide2.QtWidgets import QWidget, QSizePolicy, QApplication
+    from PySide2.QtCore import Qt, QTimer, QObject, QSize, QEvent
 else:
     raise ImportError("Unknown PyQt implementation " + repr(PyQtImpl))
 
@@ -182,6 +139,12 @@ class QVTKRenderWindowInteractor(QWidget):
     }
 
     def __init__(self, parent=None, wflags=Qt.WindowFlags(), **kw):
+        # default value
+        self._TimerDuration = 10
+        if 'timer_duration' in kw:
+            self._TimerDuration = kw['timer_duration']
+            del kw['timer_duration']
+
         # the current button
         self._ActiveButton = Qt.NoButton
 
@@ -288,7 +251,13 @@ class QVTKRenderWindowInteractor(QWidget):
         self._RenderWindow.Finalize()
 
     def CreateTimer(self, obj, evt):
-        self._Timer.start(10)
+        self._Timer.start(self._TimerDuration) # self._Timer.start(10) in orginal
+
+    #def CreateRepeatingTimer(self, duration):
+        #print('duration = %s' % duration)
+        #self._TimerDuration = duration
+        #super(QVTKRenderWindowInteractor, self).GetRenderWindow().GetInteractor().CreateRepeatingTimer(duration)
+        #self._TimeDuration = 10
 
     def DestroyTimer(self, obj, evt):
         self._Timer.stop()
@@ -430,7 +399,7 @@ class QVTKRenderWindowInteractor(QWidget):
         self._Iren.KeyReleaseEvent()
 
     def wheelEvent(self, ev):
-        if qt_version == 4:
+        if qt_int == 4:
             delta = ev.delta()
         else:
             delta = ev.angleDelta().y()
@@ -589,5 +558,5 @@ def _qt_key_to_key_sym(key):
 
 
 if __name__ == "__main__":
-    print(PyQtImpl)
+    #print(PyQtImpl)
     QVTKRenderWidgetConeExample()

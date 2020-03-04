@@ -1,6 +1,4 @@
-from __future__ import print_function
-from six import iteritems
-#import numpy as np
+import numpy as np
 
 from pyNastran.bdf.bdf import BDF_, LOAD
 #from pyNastran.bdf.bdf import BDF as BDF_, LOAD
@@ -150,10 +148,137 @@ class BDF(BDF_):
 
         self._update_card_parser()
 
-    def uncross_reference(self):
+    def clear_attributes(self):
+        # type: () -> None
+        """removes the attributes from the model"""
+        self.log.info('clearing vectorized BDF model')
+        #self.__init_attributes()
+        model = self
+        #self.superelement_models = {}
+        self.grid = GRIDv(model)
+        self.nodes = Nodes(model)
+
+        self.celas1 = CELAS1(model)
+        self.celas2 = CELAS2(model)
+        self.celas3 = CELAS3(model)
+        self.celas4 = CELAS4(model)
+        self.springs = Springs(model)
+
+        self.cdamp1 = CDAMP1(model)
+        self.cdamp2 = CDAMP2(model)
+        self.cdamp3 = CDAMP3(model)
+        self.cdamp4 = CDAMP4(model)
+        #self.cdamp5 = CDAMP5(model)    # TODO: temp
+        self.cvisc = CVISCv(model)    # this is in dampers right now
+        self.plotel = PLOTELv(model)  # this is in dampers right now
+        self.dampers = Dampers(model)
+
+        self.cbush = CBUSHv(model)
+        self.bushes = Bushes(model)
+
+        #self.conm1 = CONM1v(model)
+        self.conm2 = CONM2v(model)
+        #self.cmass1 = CMASS1v(model)
+        #self.cmass2 = CMASS2v(model)
+        #self.cmass3 = CMASS3v(model)
+        #self.cmass4 = CMASS4v(model)
+        self.masses2 = Masses(model)
+
+        self.crod = CRODv(model)
+        self.conrod = CONRODv(model)
+        self.ctube = CTUBEv(model)
+        self.rods = Rods(model)
+
+        self.cbar = CBARv(model)
+        self.bars = Bars(model)
+
+        self.cbeam = CBEAMv(model)
+        self.beams = Beams(model)
+
+        self.ctria3 = CTRIA3v(model)
+        self.cquad4 = CQUAD4v(model)
+        self.ctria6 = CTRIA6v(model)
+        self.cquad8 = CQUAD8v(model)
+        self.cquad = CQUADv(model)
+        self.cquadr = CQUADRv(model)
+        self.ctriar = CTRIARv(model)
+
+        self.shells = Shells(model)
+        #self.pshell = PSHELLv(model)  # TODO: temp
+
+        self.cshear = CSHEARv(model)
+        self.shears = Shears(model)
+
+        #self.ctriax = CTRIA3v(model)   # TODO: temp
+        #self.cquadx = CTRIA3v(model)   # TODO: temp
+        #self.ctriax6 = CTRIA3v(model)  # TODO: temp
+        #self.cquadx8 = CTRIA3v(model)  # TODO: temp
+
+        self.ctetra4 = CTETRA4v(model)
+        self.ctetra10 = CTETRA10v(model)
+        self.chexa8 = CHEXA8v(model)
+        self.chexa20 = CHEXA20v(model)
+        self.cpenta6 = CPENTA6v(model)
+        self.cpenta15 = CPENTA15v(model)
+        self.cpyram5 = CPYRAM5v(model)
+        self.cpyram13 = CPYRAM13v(model)
+        self.solids = Solids(model)
+
+        self.elements2 = Elements(model)  # TODO: change this name
+
+
+        self.sload = SLOADv(model)
+        self.grav = GRAVv(model)
+        self.force = FORCEv(model)
+        self.force1 = FORCE1v(model)
+        self.force2 = FORCE2v(model)
+        self.pload = PLOADv(model)
+        self.pload1 = PLOAD1v(model)
+        self.pload2 = PLOAD2v(model)
+        self.pload4 = PLOAD4v(model)
+
+        self.moment = MOMENTv(model)
+        self.moment1 = MOMENT1v(model)
+        self.moment2 = MOMENT2v(model)
+
+        self.spcd = SPCDv(model)
+        self.temp = TEMPv(model)
+        self.tempd = TEMPDv(model)
+
+        self.load_combinations = {}
+        #def lseqi():
+            #return LSEQv(model)
+        #self.lseqs = defaultdict(lseqi)
+        self.lseq = LSEQv(model)
+        self.loads = Loads(model)
+
+    def _add_superelements(self, superelement_lines, superelement_ilines):
+        for superelement_id, superelement_line in sorted(superelement_lines.items()):
+            assert isinstance(superelement_line, list), superelement_line
+
+            # hack to get rid of extra 'BEGIN SUPER=2' lines
+            iminus = 0
+            for line in superelement_line:
+                uline = line.upper()
+                if not uline.startswith('BEGIN '):
+                    break
+                iminus += 1
+
+            nlines = len(superelement_line) - iminus
+            model = BDF()
+            model.active_filenames = self.active_filenames
+            model.log = self.log
+            model.punch = True
+            #model.nastran_format = ''
+            superelement_ilines = np.zeros((nlines, 2), dtype='int32')  ## TODO: calculate this
+            model._parse_all_cards(superelement_line[iminus:], superelement_ilines)
+            self.superelement_models[superelement_id] = model
+
+    def uncross_reference(self) -> None:
         pass
     def _prepare_grid(self, card, card_obj, comment=''):
         self.grid.add_card(card_obj, comment=comment)
+
     def _add_node_object(self, node, allow_overwrites=False):
         raise AttributeError("'BDF' object has no attribute '_add_node_object'")
     def _add_element_object(self, elem, allow_overwrites=False):
@@ -556,19 +681,6 @@ class BDF(BDF_):
     #def xyz_cid0(self):
         #return self.xyz_cid0
 
-    def _get_bdf_stats_loads(self):
-        # loads
-        msg = []
-        #for (lid, loads) in sorted(iteritems(self.loads)):
-            #msg.append('bdf.loads[%s]' % lid)
-            #groups_dict = {}  # type: Dict[str, int]
-            #for loadi in loads:
-                #groups_dict[loadi.type] = groups_dict.get(loadi.type, 0) + 1
-            #for name, count_name in sorted(iteritems(groups_dict)):
-                #msg.append('  %-8s %s' % (name + ':', count_name))
-            #msg.append('')
-        return msg
-
 
     #def _write_header(self, bdf_file, encoding):
         #"""
@@ -599,27 +711,27 @@ class BDF(BDF_):
         #"""
         #BDF_._write_nodes(self, bdf_file, size=size, is_double=is_double)
 
-    def _write_grids(self, bdf_file, size=8, is_double=False):
-        # type: (Any, int, bool) -> None
+    def _write_grids(self, bdf_file, size=8, is_double=False, is_long_ids=None):
+        # type: (Any, int, bool, Optional[bool]) -> None
         """Writes the GRID-type cards"""
         self.nodes.write_card(size=size, is_double=is_double, bdf_file=bdf_file)
 
-    def _write_elements_interspersed(self, bdf_file, size=8, is_double=False):
-        # type: (Any, int, bool) -> None
+    def _write_elements_interspersed(self, bdf_file, size=8, is_double=False, is_long_ids=None):
+        # type: (Any, int, bool, Optional[bool]) -> None
         """spoofed method"""
-        self._write_elements(bdf_file, size=size, is_double=is_double)
-        self._write_properties(bdf_file, size=size, is_double=is_double)
+        self._write_elements(bdf_file, size=size, is_double=is_double, is_long_ids=is_long_ids)
+        self._write_properties(bdf_file, size=size, is_double=is_double, is_long_ids=is_long_ids)
 
-    def _write_elements(self, bdf_file, size=8, is_double=False):
-        # type: (Any, int, bool) -> None
+    def _write_elements(self, bdf_file, size=8, is_double=False, is_long_ids=None):
+        # type: (Any, int, bool, Optional[bool]) -> None
         """Writes the elements in a sorted order"""
         if self.elements:
             bdf_file.write('$ELEMENTS\n')
             if self.is_long_ids:
-                for (eid, element) in sorted(iteritems(self.elements)):
+                for (eid, element) in sorted(self.elements.items()):
                     bdf_file.write(element.write_card_16(is_double))
             else:
-                for (eid, element) in sorted(iteritems(self.elements)):
+                for (eid, element) in sorted(self.elements.items()):
                     try:
                         bdf_file.write(element.write_card(size, is_double))
                     except:
@@ -630,9 +742,9 @@ class BDF(BDF_):
         #bdf_file.write(self.shells.write_card(size, is_double))
         #bdf_file.write(self.solids.write_card(size, is_double))
         if self.ao_element_flags:
-            for (eid, element) in sorted(iteritems(self.ao_element_flags)):
+            for (eid, element) in sorted(self.ao_element_flags.items()):
                 bdf_file.write(element.write_card(size, is_double))
-        self._write_nsm(bdf_file, size, is_double)
+        self._write_nsm(bdf_file, size, is_double, is_long_ids=is_long_ids)
 
     #def _write_loads(self, bdf_file, size=8, is_double=False):
         #"""Writes the loads in a sorted order"""
@@ -640,8 +752,8 @@ class BDF(BDF_):
         ##for key, loadi in sorted(self.loads):
             ##bdf_file.write(loadi.write_card(size=size, is_double=is_double))
 
-    def _write_loads(self, bdf_file, size=8, is_double=False):
-        # type: (Any, int, bool) -> None
+    def _write_loads(self, bdf_file, size=8, is_double=False, is_long_ids=None):
+        # type: (Any, int, bool, Optional[bool]) -> None
         """Writes the load cards sorted by ID"""
         if self.loads or self.tempds:
             #msg = ['$LOADS\n']
@@ -652,7 +764,7 @@ class BDF(BDF_):
                 raise
 
             try:
-                for key, load_combinations in sorted(iteritems(self.load_combinations)):
+                for key, load_combinations in sorted(self.load_combinations.items()):
                     bdf_file.write(load_combinations.write_card(size=size, is_double=is_double))
                     #for load_combination in load_combinations:
                         #bdf_file.write(load_combination.write_card(size=size, is_double=is_double))
@@ -661,7 +773,7 @@ class BDF(BDF_):
                 raise
 
         assert len(self.tempds) == 0, self.tempds
-        self._write_dloads(bdf_file, size=size, is_double=is_double)
+        self._write_dloads(bdf_file, size=size, is_double=is_double, is_long_ids=is_long_ids)
 
     def get_displacement_index_xyz_cp_cd(self, fdtype='float64', idtype='int32', sort_ids=True):
         # type: (str, str, bool) -> Any

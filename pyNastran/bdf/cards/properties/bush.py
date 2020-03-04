@@ -4,21 +4,23 @@ All bush properties are defined in this file.  This includes:
  *   PBUSH
  *   PBUSH1D
  *   PBUSH2D (not implemented)
- *   PBUSHT (not implemented)
+ *   PBUSHT
 
 All bush properties are BushingProperty and Property objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import iteritems
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank, string,
     string_or_blank, blank, fields)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
+
 
 class BushingProperty(Property):
     type = 'BushingProperty'
@@ -26,10 +28,11 @@ class BushingProperty(Property):
     def __init__(self):
         Property.__init__(self)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
 
@@ -56,6 +59,12 @@ class PBUSH(BushingProperty):
     type = 'PBUSH'
     _field_map = {
         1: 'pid',
+    }
+    pname_map = {
+        -2 : 'K1', -3 : 'K2', -4 : 'K3', -5 : 'K4', -6 : 'K5', -7 : 'K6',
+        -8 : 'B1', -9 : 'B2', -10 : 'B3', -11 : 'B4', -12 : 'B5', -13 : 'B6',
+        -14 : 'GE1', -15 : 'GE2', -16 : 'GE3', -17 : 'GE4', -18 : 'GE5', -19 : 'GE6',
+        -20 : 'SA', -21 : 'ST', -22 : 'EA', -23 : 'ET',
     }
     def update_by_pname_fid(self, name, value):
         if name == 'B1':
@@ -84,8 +93,23 @@ class PBUSH(BushingProperty):
         elif name == 'K6':
             self.Ki[5] = value
 
+        elif name == 'GE1':
+            self.GEi[0] = value
+        elif name == 'GE2':
+            self.GEi[1] = value
+        elif name == 'GE3':
+            self.GEi[2] = value
+        elif name == 'GE4':
+            self.GEi[3] = value
+        elif name == 'GE5':
+            self.GEi[4] = value
+        elif name == 'GE6':
+            self.GEi[5] = value
         #elif name == 'M':
             #self.mass
+        elif isinstance(name, int) and name in self.pname_map:
+            name2 = self.pname_map[name]
+            self.update_by_pname_fid(name2, value)
         else:
             raise NotImplementedError('property_type=%r has not implemented %r in pname_map' % (
                 self.type, name))
@@ -123,6 +147,7 @@ class PBUSH(BushingProperty):
             This is an MSC only parameter.
         comment : str; default=''
             a comment for the card
+
         """
         BushingProperty.__init__(self)
         if comment:
@@ -162,15 +187,23 @@ class PBUSH(BushingProperty):
             sa, st, ea, et = rcv
         if sa is not None or st is not None or ea is not None or et is not None:
             self.vars.append('RCV')
-            self.sa = rcv[0]
-            self.st = rcv[1]
-            self.ea = rcv[2]
-            self.et = rcv[3]
+        self.sa = sa
+        self.st = st
+        self.ea = ea
+        self.et = et
 
         # M parameter (MSC only; in 2016, not in 2005)
         self.mass = mass
         if mass:
             self.vars.append('M')
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        k = [1.]
+        b = [1.]
+        ge = [1.]
+        return PBUSH(pid, k, b, ge, rcv=None, mass=None, comment='')
 
     def validate(self):
         assert isinstance(self.Ki, list), 'PBUSH: pid=%i type(Ki)=%s Ki=%s' % (self.pid, type(self.Ki), self.Ki)
@@ -188,6 +221,7 @@ class PBUSH(BushingProperty):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         k_fields = []
         b_fields = []
@@ -257,6 +291,7 @@ class PBUSH(BushingProperty):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         (pid, k1, k2, k3, k4, k5, k6, b1, b2, b3, b4, b5, b6,
          g1, g2, g3, g4, g5, g6, sa, st, ea, et) = data
@@ -309,7 +344,7 @@ class PBUSH(BushingProperty):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -321,7 +356,7 @@ class PBUSH1D(BushingProperty):
     +---------+--------+-------+--------+--------+-------+-------+-------+
     |   1     |    2   |   3   |    4   |    5   |   6   |   7   |   8   |
     +=========+========+=======+========+========+=======+=======+=======+
-    | PBUSH1D |   PID  |   K   |    C   |    M   |   SA  |  SE   |       |
+    | PBUSH1D |   PID  |   K   |    C   |    M   |       |   SA  |   SE  |
     +---------+--------+-------+--------+--------+-------+-------+-------+
     |         | SHOCKA | TYPE  |   CVT  |   CVC  | EXPVT | EXPVC |  IDTS |
     +---------+--------+-------+--------+--------+-------+-------+-------+
@@ -335,25 +370,92 @@ class PBUSH1D(BushingProperty):
     +---------+--------+-------+--------+--------+-------+-------+-------+
     """
     type = 'PBUSH1D'
+    _properties = ['pname_fid_map']
     pname_fid_map = {
         'K' : 'k',
         'C' : 'c',
         'M' : 'm',
     }
-    def __init__(self, pid, k=0., c=0., m=0., sa=0., se=0.,
-                 optional_vars=None, comment=''):
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        return PBUSH1D(pid, k=0., c=0., m=0., sa=0., se=0., optional_vars=None, comment='')
+
+    def __init__(self, pid: int,
+                 k: float=0., c: float=0., m: float=0.,
+                 sa: float=0., se: float=0., optional_vars=None,
+                 comment: str=''):
         """
         Creates a PBUSH1D card
 
         Parameters
         ----------
-        pid : ???
-            ???
+        pid : int
+            property id
+        k : float
+           stiffness
+        c : float
+            Viscous damping
+        m : float
+            mass
+        sa : float
+            Stress recovery coefficient [1/area].
+        se : float
+            Strain recovery coefficient [1/length].
         optional_vars : dict[name] : value; default=None
             name : str
                 SHOCKA, SPRING, DAMPER, GENER
-            values : ???
-                ???
+            values : List[varies]
+                the values
+            SHOCKA:
+                Coefficients of the following force versus
+                velocity/displacement relationship
+                F(u, v) = Cv * S(u) * sign(v) * |v|^EXPV
+                TYPE CVT CVC EXPVT EXPVC
+                IDTS IDETS IDECS IDETSD IDECSD
+                CVT/CVC : int
+                    Viscous damping coefficient CV for tension v > 0, force
+                    per unit velocity.
+                EXPVT/EXPVC : int
+                    Exponent of velocity EXPV for tension v > 0 (or compression v < 0).
+                IDTS : int
+                    Identification number of a TABLEDi entry for tension and
+                    compression if TYPE=TABLE. The TABLEDi entry
+                    defines the scale factor S, versus displacement u.
+                IDETS/IDECS : int
+                    Identification number of a DEQATN entry for tension if
+                    TYPE=EQUAT. The DEQATN entry defines the scale
+                    factor S, versus displacement u, for tension u > 0
+                    (or compression v < 0).
+                IDETSD/IDECSD : int
+                    Identification number of a DEQATN entry for tension if
+                    TYPE=EQUAT. The DEQATN entry defines the defines the scale
+                    factor S, versus displacement u, for tension u > 0
+                    (or compression v < 0).
+            SPRING:
+                Nonlinear elastic spring element in terms of a force versus
+                displacement relationship
+                TYPE IDT IDC IDTDU IDCDU
+            DAMPER:
+                Nonlinear viscous element in terms of a force versus
+                velocity relationship.
+                TYPE IDT IDC IDTDV IDCDV
+            GENER:
+                General nonlinear elastic spring and viscous damper
+                element in terms of a force versus displacement and
+                velocity relationship.  For this element, the relationship
+                can only be defined with TYPE=EQUAT (and it's implicit).
+                IDT IDC IDTDU IDCDU IDTDV IDCDV
+
+            TYPE : int
+               the type of the result; {TABLE, EQUAT}
+            IDT/IDC : int
+                tension/compression table/equation
+            IDTDU/IDCDU : int
+                du/dt tension/compression table/eq
+            IDTDV/IDCDV : int
+                dv/dt tension/compression table/eq
+
         """
         BushingProperty.__init__(self)
         if comment:
@@ -369,18 +471,18 @@ class PBUSH1D(BushingProperty):
         self.se = se
 
         # SPRING parameters
-        #self.spring_type = None
-        #self.spring_idt = None
-        #self.spring_idc = None
-        #self.spring_idtdu = None
-        #self.spring_idcdu = None
+        self.spring_type = None
+        self.spring_idt = None
+        self.spring_idc = None
+        self.spring_idtdu = None
+        self.spring_idcdu = None
 
         # DAMPER parameters
-        #self.damper_type = None
-        #self.damper_idt = None
-        #self.damper_idc = None
-        #self.damper_idtdv = None
-        #self.damper_idcdv = None
+        self.damper_type = None
+        self.damper_idt = None
+        self.damper_idc = None
+        self.damper_idtdv = None
+        self.damper_idcdv = None
 
         # GENER parameters
         #self.gener_idt = None
@@ -391,19 +493,19 @@ class PBUSH1D(BushingProperty):
         #self.gener_idcdv = None
 
         # SHOCK parameters
-        #self.shockType = None
-        #self.shockCVT = None
-        #self.shockCVC = None
-        #self.shockExpVT = None
-        #self.shockExpVC = None
-        #self.shockIDTS = None
+        self.shock_type = None
+        self.shock_cvt = None
+        self.shock_cvc = None
+        self.shock_exp_vt = None
+        self.shock_exp_vc = None
+        self.shock_idts = None
 
-        #self.shockIDETS = None
-        #self.shockIDECS = None
-        #self.shockIDETSD = None
-        #self.shockIDECSD = None
+        self.shock_idets = None
+        self.shock_idecs = None
+        self.shock_idetsd = None
+        self.shock_idecsd = None
         if optional_vars:
-            for key, values in iteritems(optional_vars):
+            for key, values in optional_vars.items():
                 if key == 'SHOCKA':
                     (shock_type, shock_cvt, shock_cvc, shock_exp_vt, shock_exp_vc,
                      shock_idts, shock_idets, shock_idecs, shock_idetsd, shock_idecsd
@@ -418,6 +520,7 @@ class PBUSH1D(BushingProperty):
                     self.shock_idecs = shock_idecs
                     self.shock_idetsd = shock_idetsd
                     self.shock_idecsd = shock_idecsd
+                    assert isinstance(self.shock_type, str), f'shock_type={shock_type}'
 
                 elif key == 'SPRING':
                     (spring_type, spring_idt, spring_idc, spring_idtdu,
@@ -428,6 +531,7 @@ class PBUSH1D(BushingProperty):
                     self.spring_idc = spring_idc
                     self.spring_idtdu = spring_idtdu
                     self.spring_idcdu = spring_idcdu
+                    assert isinstance(self.spring_type, str), f'spring_type={spring_type}'
 
                 elif key == 'DAMPER':
                     (damper_type, damper_idt, damper_idc, damper_idtdv,
@@ -437,6 +541,7 @@ class PBUSH1D(BushingProperty):
                     self.damper_idc = damper_idc
                     self.damper_idtdv = damper_idtdv
                     self.damper_idcdv = damper_idcdv
+                    assert isinstance(self.damper_type, str), f'damper_type={damper_type}'
 
                 elif key == 'GENER':
                     (
@@ -472,6 +577,7 @@ class PBUSH1D(BushingProperty):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         pid = integer(card, 1, 'pid')
         k = double_or_blank(card, 2, 'k', 0.0)
@@ -684,7 +790,7 @@ class PBUSH1D(BushingProperty):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -699,7 +805,8 @@ class PBUSH2D(BushingProperty):
         if comment:
             self.comment = comment
         raise NotImplementedError()
-    def write_card(self, size=8, is_double=False):
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         Writes the card with the specified width and precision
 
@@ -714,15 +821,37 @@ class PBUSH2D(BushingProperty):
         -------
         msg : str
             the string representation of the card
+
         """
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
+def _append_nones(list_obj, nrequired):
+    """this function has side effects"""
+    n_none = nrequired - len(list_obj)
+    list_obj.extend([None] * n_none)
 
 class PBUSHT(BushingProperty):
     type = 'PBUSHT'
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        k_tables = []
+        b_tables = []
+        ge_tables = []
+        kn_tables = []
+        return PBUSHT(pid, k_tables, b_tables, ge_tables, kn_tables, comment='')
+
+    def update_by_pname_fid(self, name, value):
+        if name == 'TGEID1':
+            self.ge_tables[0] = value
+        elif name == 'TGEID2':
+            self.ge_tables[1] = value
+        else:
+            raise NotImplementedError('%r has not implemented update_by_pname_fid for %r' % (self.type, name))
 
     def __init__(self, pid, k_tables, b_tables,
                  ge_tables, kn_tables, comment=''):
@@ -730,6 +859,12 @@ class PBUSHT(BushingProperty):
         if comment:
             self.comment = comment
         self.pid = pid
+
+        _append_nones(k_tables, 6)
+        _append_nones(b_tables, 6)
+        _append_nones(ge_tables, 6)
+        _append_nones(kn_tables, 6)
+
         self.k_tables = k_tables
         self.b_tables = b_tables
         self.ge_tables = ge_tables
@@ -746,6 +881,7 @@ class PBUSHT(BushingProperty):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         k_tables = []
         b_tables = []
@@ -790,7 +926,7 @@ class PBUSHT(BushingProperty):
             list_fields += ['KN'] + self.kn_tables
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

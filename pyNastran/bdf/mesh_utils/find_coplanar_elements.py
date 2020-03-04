@@ -1,4 +1,3 @@
-from __future__ import print_function
 import numpy as np
 from pyNastran.bdf.bdf import read_bdf
 from pyNastran.bdf.utils import parse_patran_syntax_dict
@@ -14,6 +13,8 @@ def find_coplanar_triangles(bdf_filename, eids):
     bdf_filename : str
         the path to the bdf input file
     eids : list
+        the element ids to consider
+
     """
     model = read_bdf(bdf_filename, xref=False)
 
@@ -72,7 +73,6 @@ def find_coplanar_triangles(bdf_filename, eids):
         else:
             aset.add(new_row)
         #print('aset =', aset)
-    print(nids2)
     return model, eids_to_remove
 
 #def main():

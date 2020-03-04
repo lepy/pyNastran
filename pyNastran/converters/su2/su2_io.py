@@ -1,9 +1,6 @@
-"""
-Defines the GUI IO file for SU2.
-"""
-from __future__ import print_function
-from six import iteritems
-from six.moves import range
+"""Defines the GUI IO file for SU2."""
+from collections import OrderedDict
+
 import numpy as np
 
 import vtk
@@ -14,9 +11,10 @@ from pyNastran.gui.gui_objects.gui_result import GuiResult
 from pyNastran.gui.utils.vtk.vtk_utils import numpy_to_vtk_points
 
 
-class SU2_IO(object):
-    def __init__(self, parent):
-        self.parent = parent
+class SU2_IO:
+    """supports 2d single zone SU2 models"""
+    def __init__(self, gui):
+        self.gui = gui
 
     def get_su2_wildcard_geometry_results_functions(self):
         data = ('SU2',
@@ -25,52 +23,60 @@ class SU2_IO(object):
         return data
 
     def load_su2_geometry(self, su2_filename, name='main', plot=True):
-        #print("load_su2_geometry...")
-        skip_reading = self.parent._remove_old_geometry(su2_filename)
+        model_name = name
+        skip_reading = self.gui._remove_old_geometry(su2_filename)
         if skip_reading:
             return
 
-        model = SU2(log=self.parent.log, debug=False)
+        model = SU2(log=self.gui.log, debug=False)
         #self.model_type = model.model_type
-        ndim, nodes, elements, unused_regions = model.read_su2(su2_filename)
+        ndim, zones = model.read_su2(su2_filename)
 
-        nnodes = nodes.shape[0]
+        nnodes = 0
         nelements = 0
-        for etype, elems in iteritems(elements):
-            nsub_elements = elems.shape[0]
-            if nsub_elements:
-                nelements += nsub_elements
+        nzones = len(zones)
+        for i, zone in zones.items():
+            nodes, elements, regions = zone
+            nnodes += nodes.shape[0]
+            for etype, elems in elements.items():
+                nsub_elements = elems.shape[0]
+                if nsub_elements:
+                    nelements += nsub_elements
                 #print('min of type = %s' % elems.min())
+
+            if nzones > 1:
+                self.log.warning('only reading a single zone')
+                break
         assert nnodes > 0, nnodes
         assert nelements > 0, nelements
 
-        self.parent.nnodes = nnodes
-        self.parent.nelements = nelements
+        self.gui.nnodes = nnodes
+        self.gui.nelements = nelements
 
-        self.parent.log.info('nnodes=%s nelements=%s' % (self.parent.nnodes, self.parent.nelements))
+        self.gui.log.info('nnodes=%s nelements=%s' % (self.gui.nnodes, self.gui.nelements))
 
-        grid = self.parent.grid
-        grid.Allocate(self.parent.nelements, 1000)
+        grid = self.gui.grid
+        grid.Allocate(self.gui.nelements, 1000)
 
-        self.parent.nid_map = {}
+        self.gui.nid_map = {}
 
         assert nodes is not None
         nnodes = nodes.shape[0]
         if ndim == 3:
             xmax, ymax, zmax = nodes.max(axis=0)
             xmin, ymin, zmin = nodes.min(axis=0)
-            self.parent.log.info('xmax=%s xmin=%s' % (xmax, xmin))
-            self.parent.log.info('ymax=%s ymin=%s' % (ymax, ymin))
-            self.parent.log.info('zmax=%s zmin=%s' % (zmax, zmin))
+            self.gui.log.info('xmax=%s xmin=%s' % (xmax, xmin))
+            self.gui.log.info('ymax=%s ymin=%s' % (ymax, ymin))
+            self.gui.log.info('zmax=%s zmin=%s' % (zmax, zmin))
             dim_max = max(xmax-xmin, ymax-ymin, zmax-zmin)
         elif ndim == 2:
             xmax, ymax = nodes.max(axis=0)
             xmin, ymin = nodes.min(axis=0)
-            self.parent.log.info('xmax=%s xmin=%s' % (xmax, xmin))
-            self.parent.log.info('ymax=%s ymin=%s' % (ymax, ymin))
+            self.gui.log.info('xmax=%s xmin=%s' % (xmax, xmin))
+            self.gui.log.info('ymax=%s ymin=%s' % (ymax, ymin))
             dim_max = max(xmax-xmin, ymax-ymin)
 
-        self.parent.create_global_axes(dim_max)
+        self.gui.create_global_axes(dim_max)
 
         if ndim == 2:
             nodes = np.hstack([nodes, np.zeros((nnodes, 1), dtype=nodes.dtype)])
@@ -79,14 +85,13 @@ class SU2_IO(object):
 
         points = numpy_to_vtk_points(nodes)
 
-
         #nelements = 0
         #elements = {
             #5 : tris,
             #9 : quads,
         #}
         #print('dict =', elements)
-        for etype, elems in iteritems(elements):
+        for etype, elems in elements.items():
             #print(etype, elems)
             if isinstance(elems, list):
                 #print('continue')
@@ -121,24 +126,23 @@ class SU2_IO(object):
 
         grid.SetPoints(points)
         grid.Modified()
-        if hasattr(grid, 'Update'):
-            grid.Update()
-            self.parent.log_info("updated grid")
 
         # loadSTLResults - regions/loads
-        self.parent.scalarBar.VisibilityOff()
-        self.parent.scalarBar.Modified()
+        self.gui.scalar_bar_actor.VisibilityOff()
+        self.gui.scalar_bar_actor.Modified()
 
-        cases = {}
-        self.isubcase_name_map = {}
+        cases = OrderedDict()
+        self.gui.isubcase_name_map = {}
         ID = 1
 
-        form, cases = self._fill_su2_case(cases, ID, nelements, nnodes)
-        self.parent._finish_results_io2(form, cases)
+        form, cases, node_ids, element_ids = self._fill_su2_case(cases, ID, nelements, nnodes)
+        self.gui.node_ids = node_ids
+        self.gui.element_ids = element_ids
+        self.gui._finish_results_io2(model_name, form, cases)
 
     def _fill_su2_case(self, cases, ID, nelements, nnodes):
         """adds the sidebar results"""
-        self.isubcase_name_map[ID] = ('SU2', '')
+        self.gui.isubcase_name_map = {ID : ('SU2', ''), }
 
         #nelements = elements.shape[0]
         #nnodes = nodes.shape[0]
@@ -159,4 +163,4 @@ class SU2_IO(object):
             ('ElementID', icase, []),
             ('NodeID', icase + 1, []),
         ]
-        return form, cases
+        return form, cases, nids, eids

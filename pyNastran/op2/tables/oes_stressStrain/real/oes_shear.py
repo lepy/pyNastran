@@ -1,16 +1,10 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types
-from six.moves import zip, range
+from typing import List
 import numpy as np
 from numpy import zeros, allclose
 
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 from pyNastran.f06.f06_formatting import _eigenvalue_header #, get_key0
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
 
 class RealShearArray(OES_Object):
@@ -19,18 +13,22 @@ class RealShearArray(OES_Object):
         #self.code = [self.format_code, self.sort_code, self.s_code]
         self.nelements = 0  # result specific
 
-        if is_sort1:
-            self.add_new_eid = self.add_new_eid_sort1
-        else:
-            raise NotImplementedError('SORT2')
+        #if is_sort1:
+            #self.add_new_eid = self.add_new_eid_sort1
+        #else:
+            #raise NotImplementedError('SORT2')
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
+
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
 
     def _reset_indices(self):
         self.itotal = 0
@@ -45,9 +43,6 @@ class RealShearArray(OES_Object):
     def build(self):
         """sizes the vectorized attributes of the RealShearArray"""
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -64,25 +59,53 @@ class RealShearArray(OES_Object):
         dtype = 'float32'
         if isinstance(self.nonlinear_factor, integer_types):
             dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.nelements, dtype='int32')
+        _times = zeros(self.ntimes, dtype=dtype)
+        element = zeros(self.nelements, dtype='int32')
 
         # [max_shear, avg_shear, margin]
-        self.data = zeros((self.ntimes, self.ntotal, 3), dtype='float32')
+        data = zeros((self.ntimes, self.ntotal, 3), dtype='float32')
+
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element = group.create_dataset('element', data=element)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element = element
+            self.data = data
 
     def build_dataframe(self):
-        headers = self.get_headers()
-        if self.nonlinear_factor is not None:
-            column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'Item']
-        else:
-            self.data_frame = pd.Panel(self.data, major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'Item']
+        """creates a pandas dataframe"""
+        import pandas as pd
 
-    def __eq__(self, table):
+        headers = self.get_headers()
+        if self.nonlinear_factor not in (None, np.nan):
+            #Mode                            1             2             3
+            #Freq                 1.482246e-10  3.353940e-09  1.482246e-10
+            #Eigenvalue          -8.673617e-19  4.440892e-16  8.673617e-19
+            #Radians              9.313226e-10  2.107342e-08  9.313226e-10
+            #ElementID Item
+            #22        max_shear  8.050749e-13  5.871460e-07  2.035239e-12
+            #         avg_shear -8.050749e-13  5.871460e-07  2.035239e-12
+            #         margin     1.401298e-45  1.401298e-45  1.401298e-45
+            column_names, column_values = self._build_dataframe_transient_header()
+            data_frame = self._build_pandas_transient_elements(
+                column_values, column_names,
+                headers, self.element, self.data)
+        else:
+            #Static     axial           SMa  torsion           SMt
+            #ElementID
+            #14           0.0  1.401298e-45      0.0  1.401298e-45
+            #15           0.0  1.401298e-45      0.0  1.401298e-45
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=self.element)
+            data_frame.index.name = 'ElementID'
+            data_frame.columns.names = ['Static']
+        self.data_frame = data_frame
+
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -115,7 +138,7 @@ class RealShearArray(OES_Object):
                 raise ValueError(msg)
         return True
 
-    def add_new_eid_sort1(self, dt, eid, max_shear, avg_shear, margin):
+    def add_sort1(self, dt, eid, max_shear, avg_shear, margin):
         """
         ELEMENT            MAX            AVG        SAFETY         ELEMENT            MAX            AVG        SAFETY
           ID.             SHEAR          SHEAR       MARGIN           ID.             SHEAR          SHEAR       MARGIN
@@ -126,7 +149,7 @@ class RealShearArray(OES_Object):
         self.data[self.itime, self.ielement, :] = [max_shear, avg_shear, margin]
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -139,7 +162,7 @@ class RealShearArray(OES_Object):
         #ntotal = self.ntotal
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i\n'
                        % (self.__class__.__name__, ntimes, nelements))
             ntimes_word = 'ntimes'
@@ -206,7 +229,7 @@ class RealShearStressArray(RealShearArray, StressObject):
         RealShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['max_shear', 'avg_shear', 'margin']
         return headers
 
@@ -225,7 +248,7 @@ class RealShearStrainArray(RealShearArray, StrainObject):
         RealShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['max_shear', 'avg_shear', 'margin']
         return headers
 

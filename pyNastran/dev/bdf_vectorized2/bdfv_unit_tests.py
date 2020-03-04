@@ -1,22 +1,24 @@
 """tests the vectorized BDF class before being used by the GUI"""
-from __future__ import print_function
 import os
 import unittest
 import numpy as np
+
+from cpylog import SimpleLogger
 import pyNastran
 from pyNastran.bdf.bdf import read_bdf
 from pyNastran.dev.bdf_vectorized2.bdf_vectorized import read_bdf as read_bdfv
 
 PKG_PATH = pyNastran.__path__[0]
-MODEL_PATH = os.path.join(PKG_PATH, '../', 'models')
+MODEL_PATH = os.path.join(PKG_PATH, '..', 'models')
 
 
 class TestVectorized(unittest.TestCase):
     def test_solid_bending(self):
         """tests solid_bending"""
+        log = SimpleLogger(level='warning')
         bdf_filename = os.path.join(MODEL_PATH, 'solid_bending', 'solid_bending.bdf')
         model = read_bdfv(bdf_filename, validate=True, xref=False, punch=False,
-                          skip_cards=None, encoding=None, log=None, debug=False,
+                          skip_cards=None, encoding=None, log=log, debug=False,
                           mode='msc')
         #print(model.get_bdf_stats())
 
@@ -28,12 +30,14 @@ class TestVectorized(unittest.TestCase):
         model.write_bdf(out_filename, encoding=None, size=8, is_double=False,
                         interspersed=False, enddata=None,
                         close=True)
+        os.remove(out_filename)
 
     def test_bwb(self):
         """tests bwb"""
-        bdf_filename = os.path.join(MODEL_PATH, 'bwb', 'BWB_saero.bdf')
+        log = SimpleLogger(level='warning')
+        bdf_filename = os.path.join(MODEL_PATH, 'bwb', 'bwb_saero.bdf')
         model = read_bdfv(bdf_filename, validate=True, xref=False, punch=False,
-                          skip_cards=None, encoding=None, log=None, debug=False,
+                          skip_cards=None, encoding=None, log=log, debug=False,
                           mode='msc')
         #print(model.get_bdf_stats())
 
@@ -41,14 +45,17 @@ class TestVectorized(unittest.TestCase):
         model.write_bdf(out_filename, encoding=None, size=8, is_double=False,
                         interspersed=False, enddata=None,
                         close=True)
+        os.remove(out_filename)
 
     def test_isat(self):
         """tests isat"""
+        log = SimpleLogger(level='error')
+        logw = SimpleLogger(level='error')
         bdf_filename = os.path.join(MODEL_PATH, 'iSat', 'ISat_Dploy_Sm.dat')
         out_filename_v = 'spike_v.bdf'
         out_filename_nv = 'spike_nv.bdf'
         modelv = read_bdfv(bdf_filename, validate=True, xref=False, punch=False,
-                           skip_cards=None, encoding=None, log=None, debug=True,
+                           skip_cards=None, encoding=None, log=logw, debug=True,
                            mode='msc')
         #print(model.get_bdf_stats())
         modelv.write_bdf(out_filename_v, encoding=None, size=8, is_double=False,
@@ -60,17 +67,17 @@ class TestVectorized(unittest.TestCase):
         str(modelv.elements2)
 
         model_nv = read_bdf(bdf_filename, validate=True, xref=True, punch=False,
-                            skip_cards=None, encoding=None, log=None, debug=True,
+                            skip_cards=None, encoding=None, log=log, debug=True,
                             mode='msc')
         model_nv.write_bdf(out_filename_nv, encoding=None, size=8, is_double=False,
                            interspersed=False, enddata=None,
                            close=True)
 
         model1 = read_bdf(out_filename_v, validate=True, xref=True, punch=False,
-                          skip_cards=None, encoding=None, log=None, debug=True,
+                          skip_cards=None, encoding=None, log=log, debug=True,
                           mode='msc')
         model2 = read_bdf(out_filename_nv, validate=True, xref=True, punch=False,
-                          skip_cards=None, encoding=None, log=None, debug=True,
+                          skip_cards=None, encoding=None, log=log, debug=True,
                           mode='msc')
 
         #xyz_cid1, nid_cp_cd1 = model1.get_xyz_in_coord(cid=0, fdtype='float32')
@@ -110,13 +117,15 @@ class TestVectorized(unittest.TestCase):
         for nid, xyz1, xyz2 in zip(nid_cp_cd1[:, 0], xyz_cid1, xyz_cid2):
             if not np.allclose(xyz1, xyz2):
                 print('xyz_cid0: nid=%s xyz1=%s xyz2=%s' % (nid, xyz1, xyz2))
-
+        os.remove(out_filename_v)
+        os.remove(out_filename_nv)
 
     def test_static_elements(self):
         """tests static_elements"""
+        logw = SimpleLogger(level='warning')
         bdf_filename = os.path.join(MODEL_PATH, 'elements', 'static_elements.bdf')
         model = read_bdfv(bdf_filename, validate=True, xref=False, punch=False,
-                          skip_cards=None, encoding=None, log=None, debug=False,
+                          skip_cards=None, encoding=None, log=logw, debug=False,
                           mode='msc')
 
         str(model.cquad4)
@@ -161,6 +170,8 @@ class TestVectorized(unittest.TestCase):
         model.write_bdf(out_filename, encoding=None, size=16, is_double=False,
                         interspersed=False, enddata=None,
                         close=True)
+        os.remove(out_filename)
+
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

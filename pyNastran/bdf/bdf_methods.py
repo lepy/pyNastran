@@ -11,23 +11,23 @@ reading/writing/accessing of BDF data.  Such methods include:
       change all nodes to a specific coordinate system
   - unresolve_grids
       puts all nodes back to original coordinate system
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from collections import defaultdict
-from typing import List, Tuple, Any, Union, Dict
 
-from six import iteritems
+"""
+from collections import defaultdict
+from typing import List, Tuple, Dict, Any, Optional, Union
+
 import numpy as np
 
-from pyNastran.utils import integer_types
 from pyNastran.bdf.bdf_interface.attributes import BDFAttributes
 from pyNastran.bdf.mesh_utils.mass_properties import (
-    _mass_properties_elements_init, _mass_properties_no_xref, _apply_mass_symmetry,
-    _mass_properties, _mass_properties_new)
+    mass_properties, mass_properties_no_xref, mass_properties_nsm)
 from pyNastran.bdf.mesh_utils.loads import sum_forces_moments, sum_forces_moments_elements
+from pyNastran.bdf.mesh_utils.breakdowns import (
+    get_length_breakdown, get_area_breakdown, get_volume_breakdown, get_mass_breakdown)
 from pyNastran.bdf.mesh_utils.skin_solid_elements import write_skin_solid_faces
+from pyNastran.bdf.utils import transform_load
 
+from pyNastran.nptyping import NDArray3float
 
 class BDFMethods(BDFAttributes):
     """
@@ -40,8 +40,8 @@ class BDFMethods(BDFAttributes):
             include_grav=False, xyz_cid0=None)
         sum_forces_moments(p0, loadcase_id, include_grav=False,
             xyz_cid0=None)
-    """
 
+    """
     def __init__(self):
         BDFAttributes.__init__(self)
 
@@ -50,57 +50,9 @@ class BDFMethods(BDFAttributes):
         gets a breakdown of the length by property region
 
         TODO: What about CONRODs?
+
         """
-        #skip_elements = [
-            #'CTRIA3', 'CTRIA6', 'CTRIAR',
-            #'CQUAD4', 'CQUAD8',
-            #'CELAS1', 'CELAS2', 'CELAS3', 'CELAS4',
-            #'CDAMP1', 'CDAMP2', 'CDAMP3', 'CDAMP4', 'CDAMP5',
-            #'CBUSH', 'CBUSH1D', 'CBUSH2D',
-            #'CRAC2D', 'CRAC3D',
-        #]
-        skip_props = [
-            'PSOLID', 'PLPLANE', 'PPLANE', 'PELAS',
-            'PDAMP', 'PBUSH', 'PBUSH1D', 'PBUSH2D',
-            'PELAST', 'PDAMPT', 'PBUSHT', 'PDAMP5',
-            'PFAST', 'PGAP', 'PRAC2D', 'PRAC3D', 'PCONEAX', 'PLSOLID',
-            'PCOMPS', 'PVISC',
-            'PSHELL', 'PCOMP', 'PCOMPG',
-        ]
-        pid_eids = self.get_element_ids_dict_with_pids(
-            property_ids, msg=' which is required by get_length_breakdown')
-        pids_to_length = {}
-        for pid, eids in iteritems(pid_eids):
-            prop = self.properties[pid]
-            lengths = []
-            if prop.type in skip_props:
-                continue
-            elif prop.type in ['PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PROD', 'PTUBE']:
-                #['CBAR', 'CBEAM', 'CROD', 'CTUBE']:
-                # TODO: Do I need to consider the offset on length effects for a CBEAM?
-                for eid in eids:
-                    elem = self.elements[eid]
-                    try:
-                        lengths.append(elem.Length())
-                    except AttributeError:
-                        print(prop)
-                        print(elem)
-                        raise
-            else:
-                eid0 = eids[0]
-                elem = self.elements[eid0]
-                msg = str(prop) + str(elem)
-                raise NotImplementedError(msg)
-
-            if lengths:
-                pids_to_length[pid] = sum(lengths)
-
-        has_length = len(pids_to_length)
-        if stop_if_no_length and not has_length:
-            raise RuntimeError('No elements with length were found')
-        else:
-            self.log.warning('No elements with length were found')
-        return pids_to_length
+        return get_length_breakdown(self, property_ids=property_ids, stop_if_no_length=stop_if_no_length)
 
     def get_area_breakdown(self, property_ids=None, stop_if_no_area=True, sum_bar_area=True):
         """
@@ -116,57 +68,16 @@ class BDFMethods(BDFAttributes):
         #'PCOMPS',
 
         sum_bar_area : bool; default=True
-            True : sum the areas for CBAR/CBEAM/CROD/CONROD/CTUBE elements
+            sum the areas for CBAR/CBEAM/CROD/CONROD/CTUBE elements
+            True : get the area of the model by property id
             False : only get the cross sectional properties
-            TODO: why is True even an option; it seems nonsensical to sum the areas
-                  of CBARs with the same cross-section?
+
         """
-        skip_props = [
-            'PSOLID', 'PLPLANE', 'PPLANE', 'PELAS',
-            'PDAMP', 'PBUSH', 'PBUSH1D', 'PBUSH2D',
-            'PELAST', 'PDAMPT', 'PBUSHT', 'PDAMP5',
-            'PFAST', 'PGAP', 'PRAC2D', 'PRAC3D', 'PCONEAX', 'PLSOLID',
-            'PCOMPS', 'PVISC', 'PBCOMP', 'PBEND',
-        ]
+        return get_area_breakdown(self, property_ids=property_ids,
+                                  stop_if_no_area=stop_if_no_area, sum_bar_area=sum_bar_area)
 
-        pid_eids = self.get_element_ids_dict_with_pids(
-            property_ids, msg=' which is required by get_area_breakdown')
-        pids_to_area = {}
-        for pid, eids in iteritems(pid_eids):
-            prop = self.properties[pid]
-            areas = []
-            if prop.type in ['PSHELL', 'PCOMP', 'PSHEAR', 'PCOMPG', ]:
-                for eid in eids:
-                    elem = self.elements[eid]
-                    try:
-                        areas.append(elem.Area())
-                    except AttributeError:
-                        print(prop)
-                        print(elem)
-                        raise
-            elif prop.type in ['PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PROD', 'PTUBE']:
-                elem = self.elements[eids[0]]
-                area = elem.Area()
-                if sum_bar_area:
-                    neids = len(eids)
-                    areas = [area * neids]
-                else:
-                    areas = [area]
-            elif prop.type in skip_props:
-                pass
-            else:
-                raise NotImplementedError(prop)
-            if areas:
-                pids_to_area[pid] = sum(areas)
-
-        has_area = len(pids_to_area)
-        if stop_if_no_area and not has_area:
-            raise RuntimeError('No elements with area were found')
-        else:
-            self.log.warning('No elements with area were found')
-        return pids_to_area
-
-    def get_volume_breakdown(self, property_ids=None, stop_if_no_volume=True):
+    def get_volume_breakdown(self, property_ids: Optional[int]=None,
+                             stop_if_no_volume: bool=True) -> Dict[int, float]:
         """
         gets a breakdown of the volume by property region
 
@@ -177,84 +88,17 @@ class BDFMethods(BDFAttributes):
         #'PBEAM3',
         #'PBEND',
         #'PIHEX',
+
         """
-        pid_eids = self.get_element_ids_dict_with_pids(
-            property_ids, msg=' which is required by get_area_breakdown')
+        return get_volume_breakdown(self, property_ids=property_ids,
+                                    stop_if_no_volume=stop_if_no_volume)
 
-        no_volume = [
-            'PLPLANE', 'PPLANE', 'PELAS',
-            'PDAMP', 'PBUSH', 'PBUSH1D', 'PBUSH2D',
-            'PELAST', 'PDAMPT', 'PBUSHT', 'PDAMP5',
-            'PFAST', 'PGAP', 'PRAC2D', 'PRAC3D', 'PCONEAX',
-            'PVISC', 'PBCOMP', 'PBEND',
-        ]
-        pids_to_volume = {}
-        skipped_eid_pid = set([])
-        for pid, eids in iteritems(pid_eids):
-            prop = self.properties[pid]
-            volumes = []
-            if prop.type == 'PSHELL':
-                # TODO: doesn't support PSHELL differential thicknesses
-                thickness = prop.t
-                areas = []
-                for eid in eids:
-                    elem = self.elements[eid]
-                    areas.append(elem.Area())
-                volumesi = [area * thickness for area in areas]
-                volumes.extend(volumesi)
-            elif prop.type in ['PCOMP', 'PCOMPG',]:
-                areas = []
-                for eid in eids:
-                    elem = self.elements[eid]
-                    areas.append(elem.Area())
-                thickness = prop.Thickness()
-                volumesi = [area * thickness for area in areas]
-                volumes.extend(volumesi)
-            elif prop.type in ['PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PROD', 'PTUBE']:
-                # TODO: Do I need to consider the offset on length effects for a CBEAM?
-                lengths = []
-                for eid in eids:
-                    elem = self.elements[eid]
-                    length = elem.Length()
-                    lengths.append(length)
-                area = prop.Area()
-                volumesi = [area * length for length in lengths]
-                volumes.extend(volumesi)
-            elif prop.type in ['PSOLID', 'PCOMPS', 'PLSOLID']:
-                for eid in eids:
-                    elem = self.elements[eid]
-                    if elem.type in ['CTETRA', 'CPENTA', 'CHEXA']:
-                        volumes.append(elem.Volume())
-                    else:
-                        key = (elem.type, prop.type)
-                        if key not in skipped_eid_pid:
-                            skipped_eid_pid.add(key)
-                            self.log.debug('skipping volume %s' % str(key))
-            elif prop.type == 'PSHEAR':
-                thickness = prop.t
-                areas = []
-                for eid in eids:
-                    elem = self.elements[eid]
-                    areas.append(elem.Area())
-                volumesi = [area * thickness for area in areas]
-                volumes.extend(volumesi)
-            elif prop.type in no_volume:
-                pass
-            else:
-                raise NotImplementedError(prop)
-            if volumes:
-                pids_to_volume[pid] = sum(volumes)
-
-        has_volume = len(pids_to_volume)
-        if stop_if_no_volume and not has_volume:
-            raise RuntimeError('No elements with volume were found')
-        else:
-            self.log.warning('No elements with volume were found')
-        return pids_to_volume
-
-    def get_mass_breakdown(self, property_ids=None, stop_if_no_mass=True):
+    def get_mass_breakdown(self,
+                           property_ids: Optional[int]=None,
+                           stop_if_no_mass: bool=True,
+                           detailed: bool=False) -> Dict[int, float]:
         """
-        gets a breakdown of the mass by property region
+        Gets a breakdown of the mass by property region.
 
         Parameters
         ----------
@@ -263,111 +107,33 @@ class BDFMethods(BDFAttributes):
         stop_if_no_mass : bool; default=True
             prevents crashing if there are no elements
             setting this to False really doesn't make sense for non-DMIG models
+        detailed : bool, optional, default : False
+            Separates structural and nonstructural mass outputs.
 
         Returns
-        -------
-        pids_to_mass : Dict[property_id] : mass
-            property_id : int
-                the property id
-            mass : float
-                the mass of the property region; NSM cards are not included
-            mass_type_to_mass : Dict[element_type] : mass
-            element_type : str
-                'CONM2', 'CMASS1', etc.
-            mass : float
-                the mass of the property region; NSM cards are not included
+        --------
+        pids_to_mass : dict {int : float, ...}
+            Map from property id to mass (structural mass only if detailed is True).
+        pids_to_mass_nonstructural : dict {int : float, ...}, optional
+            Map from property id to nonstructural mass (only if detailed is True).
+        mass_type_to_mass : dict {str : float, ...}
+            Map from mass id to mass for mass elements.
 
-        TODO: What about CONRODs?
-        #'PBRSECT',
+        TODO: What about CONRODs, CONM2s?
         #'PBCOMP',
         #'PBMSECT',
         #'PBEAM3',
         #'PBEND',
         #'PIHEX',
         #'PCOMPS',
+
         """
-        pid_eids = self.get_element_ids_dict_with_pids(
-            property_ids, stop_if_no_eids=False, msg=' which is required by get_area_breakdown')
+        return get_mass_breakdown(self, property_ids=property_ids,
+                                  stop_if_no_mass=stop_if_no_mass, detailed=detailed)
 
-        mass_type_to_mass = {}
-        pids_to_mass = {}
-        skipped_eid_pid = set([])
-        for eid, elem in iteritems(self.masses):
-            if elem.type not in mass_type_to_mass:
-                mass_type_to_mass[elem.type] = elem.Mass()
-            else:
-                mass_type_to_mass[elem.type] += elem.Mass()
-
-        properties_to_skip = [
-            'PLPLANE', 'PPLANE', 'PELAS',
-            'PDAMP', 'PBUSH', 'PBUSH1D', 'PBUSH2D',
-            'PELAST', 'PDAMPT', 'PBUSHT', 'PDAMP5',
-            'PFAST', 'PGAP', 'PRAC2D', 'PRAC3D', 'PCONEAX',
-            'PVISC', 'PBCOMP', 'PBEND', ]
-        for pid, eids in iteritems(pid_eids):
-            prop = self.properties[pid]
-            masses = []
-            if prop.type == 'PSHELL':
-                # TODO: doesn't support PSHELL differential thicknesses
-                thickness = prop.t
-                nsm = prop.nsm
-                rho = prop.Rho()
-                for eid in eids:
-                    elem = self.elements[eid]
-                    area = elem.Area()
-                    masses.append(area * (rho * thickness + nsm))
-            elif prop.type in ['PCOMP', 'PCOMPG']:
-                for eid in eids:
-                    elem = self.elements[eid]
-                    masses.append(elem.Mass())
-            elif prop.type in ['PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PROD', 'PTUBE']:
-                # what should I do here?
-                nsm = prop.nsm
-                try:
-                    rho = prop.Rho()
-                except AttributeError:
-                    print(prop)
-                    raise
-                for eid in eids:
-                    elem = self.elements[eid]
-                    area = prop.Area()
-                    length = elem.Length()
-                    masses.append(area * (rho * length + nsm))
-            elif prop.type in ['PSOLID', 'PCOMPS', 'PLSOLID']:
-                rho = prop.Rho()
-                for eid in eids:
-                    elem = self.elements[eid]
-                    if elem.type in ['CTETRA', 'CPENTA', 'CHEXA']:
-                        masses.append(rho * elem.Volume())
-                    else:
-                        key = (elem.type, prop.type)
-                        if key not in skipped_eid_pid:
-                            skipped_eid_pid.add(key)
-                            self.log.debug('skipping mass %s' % str(key))
-            elif prop.type in properties_to_skip:
-                pass
-            elif prop.type == 'PSHEAR':
-                thickness = prop.t
-                nsm = prop.nsm
-                rho = prop.Rho()
-                for eid in eids:
-                    elem = self.elements[eid]
-                    area = elem.Area()
-                    masses.append(area * (rho * thickness + nsm))
-            else:
-                raise NotImplementedError(prop)
-            if masses:
-                pids_to_mass[pid] = sum(masses)
-
-        has_mass = len(mass_type_to_mass) > 0 or len(pids_to_mass) > 0
-        if stop_if_no_mass and not has_mass:
-            raise RuntimeError('No elements with mass were found')
-        else:
-            self.log.warning('No elements with mass were found')
-        return pids_to_mass, mass_type_to_mass
-
-    def mass_properties(self, element_ids=None, mass_ids=None, reference_point=None,
-                        sym_axis=None, scale=None):
+    def mass_properties(self, element_ids=None, mass_ids=None,
+                        reference_point=None,
+                        sym_axis=None, scale=None, inertia_reference: str='cg'):
         """
         Calculates mass properties in the global system about the
         reference point.
@@ -378,12 +144,10 @@ class BDFMethods(BDFAttributes):
             An array of element ids.
         mass_ids : list[int]; (n, ) ndarray, optional
             An array of mass ids.
-        reference_point : ndarray/str/int, optional
+        reference_point : ndarray/int, optional
             type : ndarray
                 An array that defines the origin of the frame.
                 default = <0,0,0>.
-            type : str
-                'cg' is the only allowed string
             type : int
                 the node id
         sym_axis : str, optional
@@ -394,6 +158,9 @@ class BDFMethods(BDFAttributes):
             The WTMASS scaling value.
             default=None -> PARAM, WTMASS is used
             float > 0.0
+        inertia_reference : str; default='cg'
+            'cg' : inertia is taken about the cg
+            'ref' : inertia is about the reference point
 
         Returns
         -------
@@ -401,7 +168,7 @@ class BDFMethods(BDFAttributes):
             The mass of the model.
         cg : ndarray
             The cg of the model as an array.
-        I : ndarray
+        inertia : ndarray
             Moment of inertia array([Ixx, Iyy, Izz, Ixy, Ixz, Iyz]).
 
         I = mass * centroid * centroid
@@ -426,33 +193,35 @@ class BDFMethods(BDFAttributes):
         --------
         Mass properties of entire structure
 
-        >>> mass, cg, I = model.mass_properties()
-        >>> Ixx, Iyy, Izz, Ixy, Ixz, Iyz = I
+        >>> mass, cg, inertia = model.mass_properties()
+        >>> Ixx, Iyy, Izz, Ixy, Ixz, Iyz = inertia
 
         Mass properties of model based on Property ID
 
         >>> pids = list(model.pids.keys())
         >>> pid_eids = self.get_element_ids_dict_with_pids(pids)
-        >>> for pid, eids in sorted(iteritems(pid_eids)):
-        >>>     mass, cg, I = model.mass_properties(element_ids=eids)
-        """
-        if reference_point is None:
-            reference_point = np.array([0., 0., 0.])
-        elif isinstance(reference_point, integer_types):
-            reference_point = self.nodes[reference_point].get_position()
+        >>> for pid, eids in sorted(pid_eids.items()):
+        >>>     mass, cg, inertia = model.mass_properties(element_ids=eids)
 
-        element_ids, elements, mass_ids, masses = _mass_properties_elements_init(
-            self, element_ids, mass_ids)
-        mass, cg, I = _mass_properties(
-            self, elements, masses,
-            reference_point=reference_point)
-        mass, cg, I = _apply_mass_symmetry(self, sym_axis, scale, mass, cg, I)
-        return (mass, cg, I)
-
-    def mass_properties_no_xref(self, element_ids=None, mass_ids=None, reference_point=None,
-                                sym_axis=None, scale=None):
         """
-        Caclulates mass properties in the global system about the
+        self.deprecated(
+            'mass, cg, inertia = model.mass_properties(...)',
+            'from pyNastran.bdf.mesh_utils.mass_properties import mass_properties\n'
+            'mass, cg, inertia = mass_properties(model, ...)',
+            '1.3')
+        mass, cg, inertia = mass_properties(
+            self,
+            element_ids=element_ids, mass_ids=mass_ids,
+            reference_point=reference_point,
+            sym_axis=sym_axis, scale=scale,
+            inertia_reference=inertia_reference)
+        return mass, cg, inertia
+
+    def mass_properties_no_xref(self, element_ids=None, mass_ids=None,
+                                reference_point=None,
+                                sym_axis=None, scale=None, inertia_reference='cg'):
+        """
+        Calculates mass properties in the global system about the
         reference point.
 
         Parameters
@@ -461,12 +230,10 @@ class BDFMethods(BDFAttributes):
             An array of element ids.
         mass_ids : list[int]; (n, ) ndarray, optional
             An array of mass ids.
-        reference_point : ndarray/str/int, optional
+        reference_point : ndarray/int, optional
             type : ndarray
                 An array that defines the origin of the frame.
                 default = <0,0,0>.
-            type : str
-                'cg' is the only allowed string
             type : int
                 the node id
         sym_axis : str, optional
@@ -477,6 +244,9 @@ class BDFMethods(BDFAttributes):
             The WTMASS scaling value.
             default=None -> PARAM, WTMASS is used
             float > 0.0
+        inertia_reference : str; default='cg'
+            'cg' : inertia is taken about the cg
+            'ref' : inertia is about the reference point
 
         Returns
         -------
@@ -484,7 +254,7 @@ class BDFMethods(BDFAttributes):
             The mass of the model.
         cg : ndarray
             The cg of the model as an array.
-        I : ndarray
+        inertia : ndarray
             Moment of inertia array([Ixx, Iyy, Izz, Ixy, Ixz, Iyz]).
 
         I = mass * centroid * centroid
@@ -509,43 +279,131 @@ class BDFMethods(BDFAttributes):
         --------
         **mass properties of entire structure**
 
-        >>> mass, cg, I = model.mass_properties()
-        >>> Ixx, Iyy, Izz, Ixy, Ixz, Iyz = I
+        >>> mass, cg, inertia = model.mass_properties()
+        >>> Ixx, Iyy, Izz, Ixy, Ixz, Iyz = inertia
 
 
         **mass properties of model based on Property ID**
 
         >>> pids = list(model.pids.keys())
         >>> pid_eids = self.get_element_ids_dict_with_pids(pids)
-        >>> for pid, eids in sorted(iteritems(pid_eids)):
-        >>>     mass, cg, I = model.mass_properties(element_ids=eids)
+        >>> for pid, eids in sorted(pid_eids.items()):
+        >>>     mass, cg, inertia = model.mass_properties(element_ids=eids)
+
         """
-        if reference_point is None:
-            reference_point = np.array([0., 0., 0.])
-        elif isinstance(reference_point, integer_types):
-            reference_point = self.nodes[reference_point].get_position()
+        self.deprecated(
+            'mass, cg, inertia = model.mass_properties_no_xref(...)',
+            'from pyNastran.bdf.mesh_utils.mass_properties import mass_properties_no_xref\n'
+            'mass, cg, inertia = mass_properties_no_xref(model, ...)',
+            '1.3')
+        mass, cg, inertia = mass_properties_no_xref(
+            self, element_ids=element_ids, mass_ids=mass_ids,
+            reference_point=reference_point,
+            sym_axis=sym_axis, scale=scale,
+            inertia_reference=inertia_reference)
+        return mass, cg, inertia
 
-        element_ids, elements, mass_ids, masses = _mass_properties_elements_init(
-            self, element_ids, mass_ids)
-        #nelements = len(elements) + len(masses)
+    def mass_properties_nsm(self, element_ids=None, mass_ids=None, nsm_id=None,
+                            reference_point=None,
+                            sym_axis=None, scale=None, inertia_reference='cg',
+                            xyz_cid0_dict=None, debug=False):
+        """
+        Calculates mass properties in the global system about the
+        reference point.  Considers NSM, NSM1, NSML, NSML1.
 
-        mass, cg, I = _mass_properties_no_xref(
-            self, elements, masses,
-            reference_point=reference_point)
+        Parameters
+        ----------
+        model : BDF()
+            a BDF object
+        element_ids : list[int]; (n, ) ndarray, optional
+            An array of element ids.
+        mass_ids : list[int]; (n, ) ndarray, optional
+            An array of mass ids.
+        nsm_id : int
+            the NSM id to consider
+        reference_point : ndarray/int, optional
+            type : ndarray
+                An array that defines the origin of the frame.
+                default = <0,0,0>.
+            type : int
+                the node id
+        sym_axis : str, optional
+            The axis to which the model is symmetric.
+            If AERO cards are used, this can be left blank.
+            allowed_values = 'no', x', 'y', 'z', 'xy', 'yz', 'xz', 'xyz'
+        scale : float, optional
+            The WTMASS scaling value.
+            default=None -> PARAM, WTMASS is used
+            float > 0.0
+        inertia_reference : str; default='cg'
+            'cg' : inertia is taken about the cg
+            'ref' : inertia is about the reference point
+        xyz_cid0_dict : dict[nid] : xyz; default=None -> auto-calculate
+            mapping of the node id to the global position
+        debug : bool; default=False
+            developer debug; may be removed in the future
 
-        mass, cg, I = _apply_mass_symmetry(self, sym_axis, scale, mass, cg, I)
-        return (mass, cg, I)
+        Returns
+        -------
+        mass : float
+            The mass of the model.
+        cg : ndarray
+            The cg of the model as an array.
+        inertia : ndarray
+            Moment of inertia array([Ixx, Iyy, Izz, Ixy, Ixz, Iyz]).
 
-    def _mass_properties_new(self, element_ids=None, mass_ids=None, nsm_id=None,
-                             reference_point=None,
-                             sym_axis=None, scale=None,
-                             xyz_cid0_dict=None, debug=False):
-        """not done"""
-        mass, cg, I = _mass_properties_new(
+        I = mass * centroid * centroid
+
+        .. math:: I_{xx} = m (dy^2 + dz^2)
+
+        .. math:: I_{yz} = -m * dy * dz
+
+        where:
+
+        .. math:: dx = x_{element} - x_{ref}
+
+        .. seealso:: http://en.wikipedia.org/wiki/Moment_of_inertia#Moment_of_inertia_tensor
+
+        .. note::
+           This doesn't use the mass matrix formulation like Nastran.
+           It assumes m*r^2 is the dominant term.
+           If you're trying to get the mass of a single element, it
+           will be wrong, but for real models will be correct.
+
+        Examples
+        --------
+        **mass properties of entire structure**
+
+        >>> mass, cg, inertia = model.mass_properties()
+        >>> Ixx, Iyy, Izz, Ixy, Ixz, Iyz = inertia
+
+
+        **mass properties of model based on Property ID**
+        >>> pids = list(model.pids.keys())
+        >>> pid_eids = model.get_element_ids_dict_with_pids(pids)
+        >>> for pid, eids in sorted(pid_eids.items()):
+        >>>     mass, cg, inertia = mass_properties(model, element_ids=eids)
+
+        Warnings
+        --------
+         - If eids are requested, but don't exist, no warning is thrown.
+           Decide if this is the desired behavior.
+         - If the NSMx ALL option is used, the mass from all elements
+           will be considered, even if not included in the element set
+
+        """
+        self.deprecated(
+            'mass, cg, inertia = model.mass_properties_nsm(...)',
+            'from pyNastran.bdf.mesh_utils.mass_properties import mass_properties_nsm\n'
+            'mass, cg, inertia = mass_properties_nsm(model, ...)',
+            '1.3')
+        mass, cg, inertia = mass_properties_nsm(
             self, element_ids=element_ids, mass_ids=mass_ids, nsm_id=nsm_id,
             reference_point=reference_point,
-            sym_axis=sym_axis, scale=scale, xyz_cid0_dict=xyz_cid0_dict, debug=debug)
-        return (mass, cg, I)
+            sym_axis=sym_axis, scale=scale,
+            inertia_reference=inertia_reference,
+            xyz_cid0_dict=xyz_cid0_dict, debug=debug)
+        return (mass, cg, inertia)
 
     #def __gravity_load(self, loadcase_id):
         #"""
@@ -562,18 +420,17 @@ class BDFMethods(BDFAttributes):
         #p0 = array([0., 0., 0.])  ## .. todo:: hardcoded
         #mass, cg, I = self.mass_properties(reference_point=p0, sym_axis=None)
 
-    def sum_forces_moments_elements(self, p0, loadcase_id, eids, nids,
-                                    include_grav=False, xyz_cid0=None):
-        # type: (int, int, List[int], List[int], bool, Union[None, Dict[int, np.ndarray]]) -> Tuple[np.ndarray, np.ndarray]
+    def sum_forces_moments_elements(self, p0: int, loadcase_id: int,
+                                    eids: List[int], nids: List[int],
+                                    cid: int=0,
+                                    include_grav: bool=False,
+                                    xyz_cid0: Union[None, Dict[int, NDArray3float]]=None,
+                                    ) -> Tuple[NDArray3float, NDArray3float]:
         """
         Sum the forces/moments based on a list of nodes and elements.
 
         Parameters
         ----------
-        eids : List[int]
-            the list of elements to include (e.g. the loads due to a PLOAD4)
-        nids : List[int]
-            the list of nodes to include (e.g. the loads due to a FORCE card)
         p0 : int; (3,) ndarray
            the point to sum moments about
            type = int
@@ -582,6 +439,12 @@ class BDFMethods(BDFAttributes):
                the x, y, z location in the global frame
         loadcase_id : int
             the LOAD=ID to analyze
+        eids : List[int]
+            the list of elements to include (e.g. the loads due to a PLOAD4)
+        nids : List[int]
+            the list of nodes to include (e.g. the loads due to a FORCE card)
+        cid : int; default=0
+            the coordinate system for the summation
         include_grav : bool; default=False
             includes gravity in the summation (not supported)
         xyz_cid0 : None / Dict[int] = (3, ) ndarray
@@ -634,14 +497,26 @@ class BDFMethods(BDFAttributes):
         you have.
 
         .. todo:: not done...
+
         """
+        self.deprecated(
+            'forces, moments = model.sum_forces_moments_elements(...)',
+            'from pyNastran.bdf.mesh_utils.loads import sum_forces_moments_elements\n'
+            'forces, moments = sum_forces_moments_elements(model, ...)',
+            '1.3')
         forces, moments = sum_forces_moments_elements(self, p0, loadcase_id, eids, nids,
                                                       include_grav=include_grav, xyz_cid0=xyz_cid0)
+        if cid == 0:
+            return forces, moments
+        cid0 = 0
+        forces, moments = transform_load(forces, moments, cid0, cid, self)
         return forces, moments
 
-    def sum_forces_moments(self, p0, loadcase_id, include_grav=False,
-                           xyz_cid0=None):
-        # type: (int, int, bool, Union[None, Dict[int, np.ndarray]]) -> Tuple[np.ndarray, np.ndarray]
+    def sum_forces_moments(self, p0: int,
+                           loadcase_id: int,
+                           cid: int=0,
+                           include_grav: bool=False,
+                           xyz_cid0: Union[None, Dict[int, np.ndarray]]=None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Sums applied forces & moments about a reference point p0 for all
         load cases.
@@ -657,6 +532,8 @@ class BDFMethods(BDFAttributes):
             the reference point
         loadcase_id : int
             the LOAD=ID to analyze
+        cid : int; default=0
+            the coordinate system for the summation
         include_grav : bool; default=False
             includes gravity in the summation (not supported)
         xyz_cid0 : None / Dict[int] = (3, ) ndarray
@@ -675,12 +552,22 @@ class BDFMethods(BDFAttributes):
                  precomputed node locations.
 
         Pressure acts in the normal direction per model/real/loads.bdf and loads.f06
+
         """
+        self.deprecated(
+            'forces, moments = model.sum_forces_moments(...)',
+            'from pyNastran.bdf.mesh_utils.loads import sum_forces_moments\n'
+            'forces, moments = sum_forces_moments(model, ...)',
+            '1.3')
         forces, moments = sum_forces_moments(self, p0, loadcase_id,
                                              include_grav=include_grav, xyz_cid0=xyz_cid0)
+        if cid == 0:
+            return forces, moments
+        cid0 = 0
+        forces, moments = transform_load(forces, moments, cid0, cid, self)
         return forces, moments
 
-    def get_element_faces(self, element_ids=None, allow_blank_nids=True):
+    def get_element_faces(self, element_ids: Optional[List[int]]=None, allow_blank_nids: bool=True) -> Any:
         """
         Gets the elements and faces that are skinned from solid elements.
         This includes internal faces, but not existing shells.
@@ -698,6 +585,7 @@ class BDFMethods(BDFAttributes):
         eid_faces : (int, List[(int, int, ...)])
            value1 : element id
            value2 : face
+
         """
         if element_ids is None:
             element_ids = self.element_ids
@@ -708,14 +596,14 @@ class BDFMethods(BDFAttributes):
                 elem = self.elements[eid]
                 if elem.type in ['CTETRA', 'CPENTA', 'CHEXA', 'CPYRAM']:
                     faces = elem.faces
-                    for face_id, face in iteritems(faces):
+                    for face_id, face in faces.items():
                         eid_faces.append((eid, face))
         else:
             for eid in element_ids:
                 elem = self.elements[eid]
                 if elem.type in ['CTETRA', 'CPENTA', 'CHEXA', 'CPYRAM']:
                     faces = elem.faces
-                    for face_id, face in iteritems(faces):
+                    for face_id, face in faces.items():
                         if None in face:
                             msg = 'There is a None in the face.\n'
                             msg = 'face_id=%s face=%s\n%s' % (face_id, str(face), str(elem))
@@ -744,8 +632,14 @@ class BDFMethods(BDFAttributes):
             double precision flag
         encoding : str; default=None -> system default
             the string encoding
+
         """
-        return write_skin_solid_faces(
+        self.deprecated(
+            'model.write_skin_solid_faces(...)',
+            'from pyNastran.bdf.mesh_utils.skin_solid_elements import write_skin_solid_faces\n'
+            'write_skin_solid_faces(model, ...)',
+            '1.3')
+        write_skin_solid_faces(
             self, skin_filename,
             write_solids=write_solids, write_shells=write_shells,
             size=size, is_double=is_double, encoding=encoding)
@@ -754,45 +648,45 @@ class BDFMethods(BDFAttributes):
         """doesn't require cross referenceing"""
         # these are the nominal values of the desvars
         desvar_init = {key : desvar.value
-                       for key, desvar in iteritems(self.desvars)}
+                       for key, desvar in self.desvars.items()}
 
         # these are the current values of the desvars
         if desvar_values is None:
             desvar_values = {key : min(max(desvar.value + 0.1, desvar.xlb), desvar.xub)
-                             for key, desvar in iteritems(self.desvars)}
+                             for key, desvar in self.desvars.items()}
 
         # Relates one design variable to one or more other design variables.
-        for desvar_id, dlink in iteritems(self.dlinks):
+        for dlink_id, dlink in self.dlinks.items():
             value = dlink.c0
-            desvar = self.desvars[desvar_id]
+            desvar = dlink.dependent_desvar
+            desvar_ref = self.desvars[desvar]
             for coeff, desvar_idi in zip(dlink.coeffs, dlink.IDv):
                 valuei = desvar_values[desvar_idi]
                 value += coeff * valuei
-            value2 = min(max(value, desvar.xlb), desvar.xub)
-            desvar_values[desvar_id] = value2
+            value2 = min(max(value, desvar_ref.xlb), desvar_ref.xub)
+            desvar_values[dlink_id] = value2
 
         # calculates the real delta to be used by DVGRID
         desvar_delta = {key : (desvar_init[key] - desvar_values[key])
                         for key in self.desvars}
 
-
         #min(max(self.xinit, self.xlb), self.xub)
 
         # DVxREL1
         dvxrel2s = {}
-        for dvid, dvprel in iteritems(self.dvprels):
+        for dvid, dvprel in self.dvprels.items():
             if dvprel.type == 'DVPREL2':
                 dvxrel2s[('DVPREL2', dvid)] = dvprel
                 continue
             dvprel.update_model(self, desvar_values)
 
-        for dvid, dvmrel in iteritems(self.dvmrels):
+        for dvid, dvmrel in self.dvmrels.items():
             if dvmrel.type == 'DVPREL2':
                 dvxrel2s[('DVMREL2', dvid)] = dvmrel
                 continue
             dvmrel.update_model(self, desvar_values)
 
-        for dvid, dvcrel in iteritems(self.dvcrels):
+        for dvid, dvcrel in self.dvcrels.items():
             if dvcrel.type == 'DVPREL2':
                 dvxrel2s[('DVMREL2', dvid)] = dvcrel
                 continue
@@ -806,13 +700,13 @@ class BDFMethods(BDFAttributes):
 
         # grid_i - grid_i0 = sum(coeffj * (x_desvar_j - x0_desvar_j)) * {Nxyz_f}
         dxyzs = defaultdict(list)
-        for dvid, dvgrids in iteritems(self.dvgrids):
+        for dvid, dvgrids in self.dvgrids.items():
             for dvgrid in dvgrids:
                 dxyz_cid = dvgrid.coeff * desvar_delta[dvid] * dvgrid.dxyz
                 dxyzs[(dvgrid.nid, dvgrid.cid)].append(dxyz_cid)
 
         # TODO: could be vectorized
-        for (nid, cid), dxyz in iteritems(dxyzs):
+        for (nid, cid), dxyz in dxyzs.items():
             dxyz2 = np.linalg.norm(dxyz, axis=0)
             assert len(dxyz2) == 3, len(dxyz2)
             grid = self.nodes[nid]
@@ -822,7 +716,7 @@ class BDFMethods(BDFAttributes):
                 coord_to, dxyz2)
 
         if xref:
-            for key, dvxrel2 in iteritems(dvxrel2s):
+            for key, dvxrel2 in dvxrel2s.items():
                 dvxrel2.update_model(self, desvar_values)
         #self.nid = nid
         #self.cid = cid

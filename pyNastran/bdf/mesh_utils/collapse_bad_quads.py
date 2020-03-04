@@ -2,9 +2,8 @@
 defines:
  - convert_bad_quads_to_tris(model, eids_to_check=None, xyz_cid0=None,
                              min_edge_length=0.0)
+
 """
-from __future__ import print_function
-from six import iteritems
 import numpy as np
 from pyNastran.bdf.cards.elements.shell import CTRIA3
 
@@ -29,6 +28,7 @@ def convert_bad_quads_to_tris(model, eids_to_check=None, xyz_cid0=None, min_edge
     .. warning::  Don't cross reference properties/loads
 
     .. todo::  check for bad xref
+
     """
     out = model.get_card_ids_by_card_types('CQUAD4')
     cquad4s = out['CQUAD4']
@@ -38,11 +38,11 @@ def convert_bad_quads_to_tris(model, eids_to_check=None, xyz_cid0=None, min_edge
         cquad4s_to_check = list(set(eids_to_check).intersection(set(cquad4s)))
 
     elements = model.elements
-    eids_to_remove = []
+    unused_eids_to_remove = []
 
     if xyz_cid0 is None:
         xyz_cid0 = model.get_xyz_in_coord(cid=0)
-    nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(iteritems(model.nodes))])
+    nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(model.nodes.items())])
     all_nids = nid_cd[:, 0]
 
     if len(cquad4s_to_check) == 0:

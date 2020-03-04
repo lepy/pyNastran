@@ -1,19 +1,16 @@
-from __future__ import print_function
-import os
-#from pyNastran.op2.fortran_format import FortranFormat
 import numpy as np
-from pyNastran.utils import print_bad_path
-from pyNastran.utils.log import get_logger2
+from cpylog import get_logger2
+from pyNastran.utils import check_path
 
 
-def read_fgrid(fgrid_filename, dimension_flag, log=None, debug=False):
+def read_fgrid(fgrid_filename, unused_dimension_flag, log=None, debug=False):
     """loads a *.fgrid file"""
     model = FGridReader(log=log, debug=debug)
-    model.read_fgrid(fgrid_filename, dimension_flag=3)
+    model.read_fgrid(fgrid_filename, unused_dimension_flag=3)
     return model
 
 
-class FGridReader(object):
+class FGridReader:
     """FGRID interface class"""
     def __init__(self, log=None, debug=False):
         """
@@ -37,9 +34,9 @@ class FGridReader(object):
         self.tris = None
         self.tets = None
 
-    def read_fgrid(self, fgrid_filename, dimension_flag=3):
+    def read_fgrid(self, fgrid_filename, unused_dimension_flag=3):
         """extracts the nodes, tris, bcs, tets"""
-        assert os.path.exists(fgrid_filename), print_bad_path(fgrid_filename)
+        check_path(fgrid_filename, 'fgrid_filename')
         with open(fgrid_filename, 'r') as fgrid:
             nnodes, ntris, ntets = fgrid.readline().split()
             nnodes = int(nnodes)
@@ -48,7 +45,7 @@ class FGridReader(object):
 
             self.log.info('nnodes=%s ntris=%s ntets=%s' % (nnodes, ntris, ntets))
             assert nnodes > 0, nnodes
-            inode = 0
+            #inode = 0
             # I think this goes xxx, yyy, zzz
             # instead of x, y, z
             #            x, y, z

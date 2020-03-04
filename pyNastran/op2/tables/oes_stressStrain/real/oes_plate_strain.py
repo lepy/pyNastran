@@ -1,17 +1,10 @@
 # coding: utf-8
 #pylint disable=C0103
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types
-from six.moves import range
+from typing import List
 import numpy as np
-ints = (int, np.int32)
+
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
-from pyNastran.f06.f06_formatting import _eigenvalue_header
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
 
 class RealCPLSTRNPlateArray(OES_Object):
@@ -25,12 +18,7 @@ class RealCPLSTRNPlateArray(OES_Object):
         self.nelements = 0  # result specific
         self.nnodes = None
 
-        if is_sort1:
-            if dt is not None:
-                self.add = self.add_sort1
-                #self.add_new_eid = self.add_new_eid_sort1
-                #self.addNewNode = self.addNewNodeSort1
-        else:
+        if not is_sort1:
             raise NotImplementedError('SORT2')
 
     @property
@@ -59,9 +47,6 @@ class RealCPLSTRNPlateArray(OES_Object):
         """sizes the vectorized attributes of the RealCPLSTRNPlateArray"""
         #print("self.ielement = %s" % self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -101,7 +86,7 @@ class RealCPLSTRNPlateArray(OES_Object):
         #[fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm]
         self.data = np.zeros((self.ntimes, self.ntotal, 5), dtype='float32')
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         self._eq_header(table)
         assert self.is_sort1 == table.is_sort1
         if not np.array_equal(self.data, table.data):
@@ -131,7 +116,7 @@ class RealCPLSTRNPlateArray(OES_Object):
                     raise ValueError(msg)
         return True
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -147,7 +132,7 @@ class RealCPLSTRNPlateArray(OES_Object):
         nelements = self.ntotal // self.nnodes // 2
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msgi = '  type=%s ntimes=%i nelements=%i nnodes_per_element=%i nlayers=%i ntotal=%i\n' % (
                 self.__class__.__name__, ntimes, nelements, nnodes, nlayers, ntotal)
             ntimes_word = 'ntimes'
@@ -246,7 +231,7 @@ class RealCPLSTRNPlateStressArray(RealCPLSTRNPlateArray, StressObject):
         RealCPLSTRNPlateArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['oxx', 'oyy', 'txy', 'von_mises']
         return headers
 
@@ -256,7 +241,7 @@ class RealCPLSTRNPlateStrainArray(RealCPLSTRNPlateArray, StrainObject):
         RealCPLSTRNPlateArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['exx', 'eyy', 'exy', 'von_mises']
         return headers
 

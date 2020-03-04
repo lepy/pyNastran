@@ -1,6 +1,3 @@
-#from six import iteritems
-from six.moves import zip
-
 from numpy import zeros, arange, searchsorted
 
 from pyNastran.bdf.field_writer_8 import print_card_8
@@ -57,8 +54,8 @@ class SPLINE1(VectorizedCard):
             self.box2 = zeros(ncards, dtype='int32')
             self.setg = zeros(ncards, dtype='int32')
             self.dz = zeros(ncards, dtype=float_fmt)
-            self.method = zeros(ncards, dtype='|S8')
-            self.usage = zeros(ncards, dtype='|S8')
+            self.method = zeros(ncards, dtype='|U8')
+            self.usage = zeros(ncards, dtype='|U8')
             self.nelements = zeros(ncards, dtype='int32')
             self.melements = zeros(ncards, dtype='int32')
 

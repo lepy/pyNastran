@@ -1,9 +1,9 @@
-from __future__ import print_function
 import os
 import unittest
+from io import StringIO
 
-from six import iteritems, StringIO
 import numpy as np
+from cpylog import SimpleLogger
 
 import pyNastran
 
@@ -11,7 +11,6 @@ from pyNastran.op2.op2 import OP2
 from pyNastran.op2.op2_geom import read_op2_geom
 
 from pyNastran.op2.tables.ogf_gridPointForces.ogf_objects import RealGridPointForcesArray
-from pyNastran.utils.log import SimpleLogger
 
 test_path = pyNastran.__path__[0]
 model_path = os.path.abspath(os.path.join(test_path, '..', 'models'))
@@ -36,6 +35,7 @@ class TestGridPointForces(unittest.TestCase):
             'table_code' : 1,
             'data_names' : 'cat',
             'device_code' : 1,
+            'size' : 4,
             #'tcode' : 1,
         }
         is_sort1 = True
@@ -66,7 +66,7 @@ class TestGridPointForces(unittest.TestCase):
             [3, 0],
         ])
         from pyNastran.bdf.bdf import CORD2R
-        coord_out = CORD2R(cid=0)
+        coord_out = CORD2R(cid=0, origin=None, zaxis=None, xzplane=None)
         coords = {0 : coord_out}
 
         #eids = [1]
@@ -78,7 +78,7 @@ class TestGridPointForces(unittest.TestCase):
             #summation_point,
             #itime=0,
             #debug=True,
-            #logger=op2.log)
+            #log=op2.log)
 
         #print('------------')
         #eids = [1]
@@ -90,7 +90,7 @@ class TestGridPointForces(unittest.TestCase):
             #summation_point,
             #itime=0,
             #debug=True,
-            #logger=op2.log)
+            #log=op2.log)
         print('------------')
 
         eids = [1]
@@ -102,7 +102,7 @@ class TestGridPointForces(unittest.TestCase):
             summation_point,
             itime=0,
             debug=True,
-            logger=op2.log)
+            log=op2.log)
         #print(gpforce)
 
     def test_op2_solid_shell_bar_01_gpforce(self):
@@ -131,7 +131,7 @@ class TestGridPointForces(unittest.TestCase):
                             xref_sets=False,
                             xref_optimization=False)
         xyz_cid0 = op2.get_xyz_in_coord(cid=0)
-        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(iteritems(op2.nodes))])
+        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(op2.nodes.items())])
         coords = op2.coords
 
         data = _get_gpforce_data()
@@ -145,7 +145,7 @@ class TestGridPointForces(unittest.TestCase):
                 nids, eids,
                 coord_out, coords,
                 nid_cd, icd_transform,
-                xyz_cid0, summation_point, itime=0, debug=False, logger=op2.log)
+                xyz_cid0, summation_point, itime=0, debug=False, log=op2.log)
             total_force_global, total_moment_global, total_force_local, total_moment_local = out
 
             #op2.log.debug('***********')
@@ -190,7 +190,7 @@ class TestGridPointForces(unittest.TestCase):
                               xref_sets=False,
                               xref_optimization=False)
         xyz_cid0 = op2_1.get_xyz_in_coord(cid=0)
-        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(iteritems(op2_1.nodes))])
+        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(op2_1.nodes.items())])
 
         #bdf_filename2 = os.path.join(folder, 'static_solid_shell_bar.bdf')
         op2_filename2 = os.path.join(folder, 'static_solid_shell_bar.op2')
@@ -221,7 +221,7 @@ class TestGridPointForces(unittest.TestCase):
         return
         data = _get_gpforce_data()
         coords = op2_1.coords
-        used_cds = np.unique(nid_cd[:, 1])
+        #used_cds = np.unique(nid_cd[:, 1])
         #for cd in used_cds:
             #coord = op2_1.coords[cd]
             #print(coord)
@@ -237,7 +237,7 @@ class TestGridPointForces(unittest.TestCase):
                 nids, eids,
                 coord_out, coords,
                 nid_cd, icd_transform_1,
-                xyz_cid0, summation_point, itime=0, debug=False, logger=op2_1.log)
+                xyz_cid0, summation_point, itime=0, debug=False, log=op2_1.log)
             total_force_global, total_moment_global, total_force_local, total_moment_local = out
 
             op2_1.log.debug('***********')
@@ -281,7 +281,7 @@ class TestGridPointForces(unittest.TestCase):
                               xref_optimization=False)
         xyz_cid0 = op2_1.get_xyz_in_coord(cid=0)
 
-        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(iteritems(op2_1.nodes))])
+        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(op2_1.nodes.items())])
         #-------------------------------------------------
         #coords = op2_1.coords
         #used_cds = np.unique(nid_cd[:, 1])
@@ -352,7 +352,7 @@ class TestGridPointForces(unittest.TestCase):
                 nids, eids,
                 coord_out, op2_1.coords,
                 nid_cd, icd_transform_1,
-                xyz_cid0, summation_point, itime=0, debug=False, logger=op2_1.log)
+                xyz_cid0, summation_point, itime=0, debug=False, log=op2_1.log)
             total_force_global, total_moment_global, total_force_local, total_moment_local = out
 
             op2_1.log.debug('***********')
@@ -396,7 +396,7 @@ class TestGridPointForces(unittest.TestCase):
                               xref_optimization=False)
         xyz_cid0 = op2_1.get_xyz_in_coord(cid=0)
 
-        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(iteritems(op2_1.nodes))])
+        nid_cd = np.array([[nid, node.Cd()] for nid, node in sorted(op2_1.nodes.items())])
         #-------------------------------------------------
         #coords = op2_1.coords
         #used_cds = np.unique(nid_cd[:, 1])
@@ -462,7 +462,7 @@ class TestGridPointForces(unittest.TestCase):
                 nids, eids,
                 coord_out, op2_1.coords,
                 nid_cd, icd_transform_1,
-                xyz_cid0, summation_point, itime=0, debug=False, logger=op2_1.log)
+                xyz_cid0, summation_point, itime=0, debug=False, log=op2_1.log)
             total_force_global, total_moment_global, total_force_local, total_moment_local = out
 
             op2_1.log.debug('***********')

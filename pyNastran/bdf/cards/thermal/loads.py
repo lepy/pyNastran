@@ -1,10 +1,7 @@
 # pylint: disable=R0902,R0904,R0914,C0111
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import  iteritems
-from six.moves import range
-
-from pyNastran.utils import integer_types
+from __future__ import annotations
+from typing import TYPE_CHECKING
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
@@ -16,16 +13,18 @@ from pyNastran.bdf.cards.collpase_card import collapse_thru_by
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank, integer_or_string,
     integer_double_or_blank, string, fields)
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class ThermalLoadDefault(ThermalCard):
-    def __init__(self, card, data):
-        pass
+#class ThermalLoadDefault(ThermalCard):
+    #def __init__(self, card, data):
+        #ThermalCard.__init__(self)
 
 
 class ThermalLoad(ThermalCard):
     def __init__(self):
-        pass
+        ThermalCard.__init__(self)
 
 class QVOL(ThermalLoad):
     """
@@ -38,8 +37,19 @@ class QVOL(ThermalLoad):
     +------+------+------+---------+------+------+------+------+------+
     |      | EID6 | etc. |         |      |      |      |      |      |
     +------+------+------+---------+------+------+------+------+------+
+
     """
     type = 'QVOL'
+    _properties = ['element_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        #flag = 'LINE'
+        qvol = 1.0
+        control_point = 10
+        elements = [1, 2]
+        return QVOL(sid, qvol, control_point, elements, comment='')
 
     def __init__(self, sid, qvol, control_point, elements, comment=''):
         ThermalLoad.__init__(self)
@@ -65,6 +75,7 @@ class QVOL(ThermalLoad):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         qvol = double(card, 2, 'qvol')
@@ -90,6 +101,7 @@ class QVOL(ThermalLoad):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid, qvol, control_point, eid = data
         return QVOL(sid, qvol, control_point, eid, comment=comment)
@@ -97,7 +109,7 @@ class QVOL(ThermalLoad):
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -105,18 +117,20 @@ class QVOL(ThermalLoad):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by QVOL sid=%s' % self.sid
+        msg = ', which is required by QVOL sid=%s' % self.sid
         self.elements_ref = model.Elements(self.elements, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         try:
             return self.cross_reference(model)
         except KeyError:
             model.log.warning('failed cross-referencing\n%s' % str(self))
             raise
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.elements = self.element_ids
         self.elements_ref = None
 
@@ -141,13 +155,14 @@ class QVOL(ThermalLoad):
         list_fields = ['QVOL', self.sid, self.qvol, self.control_point] + eids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         if is_double:
             return self.comment + print_card_double(card)
         return self.comment + print_card_16(card)
+
 
 class QVECT(ThermalLoad):
     """
@@ -163,8 +178,19 @@ class QVECT(ThermalLoad):
     +-------+------+------+-------+-----+---------+---------+---------+---------+
     |       | EID1 | EID2 |  etc. |     |         |         |         |         |
     +-------+------+------+-------+-----+---------+---------+---------+---------+
+
     """
     type = 'QVECT'
+    _properties = ['element_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        q0 = 1.0
+        eids = [1, 2]
+        return QVECT(sid, q0, eids, t_source=None, ce=0,
+                     vector_tableds=None, control_id=0, comment='')
+
     def __init__(self, sid, q0, eids, t_source=None,
                  ce=0, vector_tableds=None, control_id=0, comment=''):
         """
@@ -195,6 +221,7 @@ class QVECT(ThermalLoad):
             CHBDYP entry
         comment : str; default=''
             a comment for the card
+
         """
         ThermalLoad.__init__(self)
         if comment:
@@ -227,6 +254,7 @@ class QVECT(ThermalLoad):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         q0 = double(card, 2, 'q0')
@@ -254,7 +282,7 @@ class QVECT(ThermalLoad):
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -262,17 +290,19 @@ class QVECT(ThermalLoad):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by QVECT sid=%s' % self.sid
+        msg = ', which is required by QVECT sid=%s' % self.sid
         self.eids_ref = model.Elements(self.eids, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         try:
             return self.cross_reference(model)
         except KeyError:
             model.log.warning('failed cross-referencing\n%s' % str(self))
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.eids = self.element_ids
         self.eids_ref = None
 
@@ -301,7 +331,7 @@ class QVECT(ThermalLoad):
             ] + self.vector_tableds + [self.control_id] + eids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -313,8 +343,17 @@ class QVECT(ThermalLoad):
 class QBDY1(ThermalLoad):
     """
     Defines a uniform heat flux into CHBDYj elements.
+
     """
     type = 'QBDY1'
+    _properties = ['element_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        qflux = 1.0
+        eids = [1, 2]
+        return QBDY1(sid, qflux, eids, comment='')
 
     def __init__(self, sid, qflux, eids, comment=''):
         ThermalLoad.__init__(self)
@@ -341,6 +380,7 @@ class QBDY1(ThermalLoad):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         qflux = double(card, 2, 'qflux')
@@ -363,6 +403,7 @@ class QBDY1(ThermalLoad):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
         qflux = data[1]
@@ -372,7 +413,7 @@ class QBDY1(ThermalLoad):
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -380,17 +421,19 @@ class QBDY1(ThermalLoad):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by QBDY1 sid=%s' % self.sid
+        msg = ', which is required by QBDY1 sid=%s' % self.sid
         self.eids_ref = model.Elements(self.eids, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         try:
             return self.cross_reference(model)
         except KeyError:
             model.log.warning('failed cross-referencing\n%s' % str(self))
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.eids = self.element_ids
         self.eids_ref = None
 
@@ -418,7 +461,7 @@ class QBDY1(ThermalLoad):
         list_fields = ['QBDY1', self.sid, self.qflux] + eids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -430,8 +473,16 @@ class QBDY1(ThermalLoad):
 class QBDY2(ThermalLoad):  # not tested
     """
     Defines a uniform heat flux load for a boundary surface.
+
     """
     type = 'QBDY2'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        eids = [1]
+        qflux = [1.0]
+        return QBDY2(sid, qflux, eids, comment='')
 
     def __init__(self, sid, eid, qfluxs, comment=''):
         ThermalLoad.__init__(self)
@@ -460,6 +511,7 @@ class QBDY2(ThermalLoad):  # not tested
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         eid = integer(card, 2, 'eid')
@@ -486,6 +538,7 @@ class QBDY2(ThermalLoad):  # not tested
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
         eid = data[1]
@@ -495,7 +548,7 @@ class QBDY2(ThermalLoad):  # not tested
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -503,17 +556,19 @@ class QBDY2(ThermalLoad):  # not tested
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by QBDY2 sid=%s' % self.sid
+        msg = ', which is required by QBDY2 sid=%s' % self.sid
         self.eid_ref = model.Element(self.eid, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         try:
             return self.cross_reference(model)
         except KeyError:
             model.log.warning('failed cross-referencing\n%s' % str(self))
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.eid = self.Eid()
         self.eid_ref = None
 
@@ -532,7 +587,7 @@ class QBDY2(ThermalLoad):  # not tested
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -544,8 +599,18 @@ class QBDY2(ThermalLoad):  # not tested
 class QBDY3(ThermalLoad):
     """
     Defines a uniform heat flux load for a boundary surface.
+
     """
     type = 'QBDY3'
+    _properties = ['element_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        q0 = 1.0
+        cntrlnd = 10
+        eids = [1, 2]
+        return QBDY3(sid, q0, cntrlnd, eids, comment='')
 
     def __init__(self, sid, q0, cntrlnd, eids, comment=''):
         """
@@ -564,6 +629,7 @@ class QBDY3(ThermalLoad):
             CHBDYP entry
         comment : str; default=''
             a comment for the card
+
         """
         ThermalLoad.__init__(self)
         if comment:
@@ -593,6 +659,7 @@ class QBDY3(ThermalLoad):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         q0 = double(card, 2, 'q0')
@@ -613,6 +680,7 @@ class QBDY3(ThermalLoad):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
         q0 = data[1]
@@ -620,7 +688,7 @@ class QBDY3(ThermalLoad):
         eids = list(data[3:])
         return QBDY3(sid, q0, cntrlnd, eids, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -628,20 +696,22 @@ class QBDY3(ThermalLoad):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by QBDY3 sid=%s' % self.sid
+        msg = ', which is required by QBDY3 sid=%s' % self.sid
         eids = []
         for eid in self.eids:
             eids.append(model.Element(eid, msg=msg))
         self.eids_ref = eids
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         try:
             return self.cross_reference(model)
         except KeyError:
             model.log.warning('failed cross-referencing\n%s' % str(self))
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.eids = self.element_ids
         self.eids_ref = None
 
@@ -674,7 +744,7 @@ class QBDY3(ThermalLoad):
     def get_loads(self):
         return [self]
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -686,8 +756,10 @@ class QBDY3(ThermalLoad):
 class QHBDY(ThermalLoad):
     """
     Defines a uniform heat flux into a set of grid points.
+
     """
     type = 'QHBDY'
+    _properties = ['flag_to_nnodes']
     flag_to_nnodes = {
         'POINT' : (1, 1),
         'LINE' : (2, 2),
@@ -697,6 +769,14 @@ class QHBDY(ThermalLoad):
         'AREA6' : (4, 6), # 4-6
         'AREA8' : (5, 8), # 5-8
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        flag = 'LINE'
+        q0 = 1.0
+        grids = [1, 2]
+        return QHBDY(sid, flag, q0, grids, af=None, comment='')
 
     def __init__(self, sid, flag, q0, grids, af=None, comment=''):
         """
@@ -717,6 +797,7 @@ class QHBDY(ThermalLoad):
             Grid point identification of connected grid points
         comment : str; default=''
             a comment for the card
+
         """
         ThermalLoad.__init__(self)
         if comment:
@@ -737,7 +818,7 @@ class QHBDY(ThermalLoad):
         #: (Integer > 0 or blank)
         self.grids = grids
 
-        assert flag in ['POINT', 'LINE', 'REV', 'AREA3', 'AREA4', 'AREA6', 'AREA8'], self
+        assert flag in ['POINT', 'LINE', 'REV', 'AREA3', 'AREA4', 'AREA6', 'AREA8'], str(self)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -750,6 +831,7 @@ class QHBDY(ThermalLoad):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'eid')
         flag = string(card, 2, 'flag')
@@ -786,27 +868,49 @@ class QHBDY(ThermalLoad):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
-        flag = data[1]
+        flag_int = data[1]
         q0 = data[2]
         af = data[3]
-        grids = data[4:]
-        return QHBDY(sid, flag, q0, grids, af=af, comment=comment)
+        grids = list(data[4:])
+
+        if flag_int == 1:
+            flag = 'POINT'
+            nnodes = 1
+        elif flag_int == 2:
+            flag = 'LINE'
+            nnodes = 2
+        elif flag_int == 3:
+            flag = 'REV'
+            nnodes = 2
+        elif flag_int == 5:
+            flag = 'AREA4'
+            nnodes = 4
+        elif flag_int == 9:
+            flag = 'AREA8'
+            nnodes = 8
+        else:  # pragma: no cover
+            raise NotImplementedError(f'QHBDY sid={sid} flag_int={flag_int} data={data[2:]}')
+        grids2 = grids[:nnodes]
+        #print(sid, flag_int, flag, q0, af, grids, grids2)
+        return QHBDY(sid, flag, q0, grids2, af=af, comment=comment)
 
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         try:
             return self.cross_reference(model)
         except KeyError:
             model.log.warning('failed cross-referencing\n%s' % str(self))
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def raw_fields(self):
@@ -816,7 +920,7 @@ class QHBDY(ThermalLoad):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -824,6 +928,176 @@ class QHBDY(ThermalLoad):
             return self.comment + print_card_double(card)
         return self.comment + print_card_16(card)
 
+
+class TEMPRB(ThermalLoad):
+    """
+
+    +--------+-----+----+-------+----+-------+----+----+
+    |    1   |  2  |  3 |   4   |  5 |   6   |  7 |  8 |
+    +========+=====+====+=======+====+=======+====+====+
+    | TEMPRB | SID | G1 |  T1   | G2 |  T2   | G3 | T3 |
+    +--------+-----+----+-------+----+-------+----+----+
+    TEMPRB SID  EID1   TA   TB TP1A TP1B TP2A TP2B
+           TCA   TDA  TEA  TFA  TCB  TDB  TEB TFB
+           EID2 EID3 EID4 EID5 EID6 EID7 -etc.-
+    TEMPRB 200 1 68.0 23.0 0.0 28.0 2.5
+           68.0 91.0 45.0 48.0 80.0 20.0
+           9 10
+    """
+
+    type = 'TEMPRB'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        eids = [1]
+        ta = 1.0
+        tb = 1.0
+        tp1 = [1.0, 1.0]
+        tp2 = [1.0, 1.0]
+        tai = [1.0, 1.0, 1.0, 1.0]
+        tbi = [1.0, 1.0, 1.0, 1.0]
+        return TEMPRB(sid, ta, tb, tp1, tp2, tai, tbi, eids, comment='')
+
+    #@classmethod
+    #def export_to_hdf5(cls, h5_file, model, loads):
+        #"""exports the loads in a vectorized way"""
+        ##encoding = model._encoding
+        ##comments = []
+        #unused_sid = loads[0].sid
+        ##h5_file.create_dataset('sid', data=sid)
+        #for i, load in enumerate(loads):
+            #sub_group = h5_file.create_group(str(i))
+            ##comments.append(loads.comment)
+
+            #node = []
+            #temp = []
+            #for nid, tempi in load.temperatures.items():
+                #node.append(nid)
+                #temp.append(tempi)
+            #sub_group.create_dataset('node', data=node)
+            #sub_group.create_dataset('temperature', data=temp)
+        #h5_file.create_dataset('_comment', data=comments)
+
+    def __init__(self, sid, ta, tb, tp1, tp2,
+                 tai, tbi, eids, comment=''):
+        """
+        Creates a TEMPRB card
+
+        Parameters
+        ----------
+        sid : int
+            Load set identification number
+        comment : str; default=''
+            a comment for the card
+
+        """
+        ThermalLoad.__init__(self)
+        if comment:
+            self.comment = comment
+        #: Load set identification number. (Integer > 0)
+        self.sid = sid
+
+        # temperatures at end A/B
+        self.ta = ta
+        self.tb = tb
+
+        # gradients at A/B
+        self.tp1 = tp1
+        self.tp2 = tp2
+
+        # temperatures at points C/D/E/F at A/B
+        self.tai = tai
+        self.tbi = tbi
+        self.eids = eids
+
+    @classmethod
+    def add_card(cls, card, comment=''):
+        """
+        Adds a TEMPRB card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        sid = integer(card, 1, 'sid')
+
+        #TEMPRB SID  EID1   TA   TB TP1A TP1B TP2A TP2B
+               #TCA   TDA  TEA  TFA  TCB  TDB  TEB TFB
+               #EID2 EID3 EID4 EID5 EID6 EID7 -etc.-
+        #TEMPRB 200 1 68.0 23.0 0.0 28.0 2.5
+               #68.0 91.0 45.0 48.0 80.0 20.0
+               #9 10
+        eid1 = integer(card, 2, 'EID1')
+        ta = double(card, 3, 'T(A)')
+        tb = double(card, 4, 'T(B)')
+        tp1a = double_or_blank(card, 5, 'TP1(A)')
+        tp1b = double_or_blank(card, 6, 'TP1(B)')
+        tp2a = double_or_blank(card, 7, 'TP2(A)')
+        tp2b = double_or_blank(card, 8, 'TP2(B)')
+        tp1 = [tp1a, tp1b]
+        tp2 = [tp2a, tp2b]
+
+        tca = double(card, 9, 'TC(A)')
+        tda = double(card, 10, 'TD(A)')
+        tea = double(card, 11, 'TE(A)')
+        tfa = double(card, 12, 'TF(A)')
+
+        tcb = double(card, 13, 'TC(B)')
+        tdb = double(card, 14, 'TD(B)')
+        teb = double(card, 15, 'TE(B)')
+        tfb = double(card, 16, 'TF(B)')
+        eids = [eid1]
+
+        nfields = len(card)
+        #assert nfields <= 16, 'len(card)=%i card=%s' % (len(card), card)
+        for ifield in range(17, nfields):
+            eid = integer(card, ifield, f'eid{ifield-15}')
+            eids.append(eid)
+
+        tai = [tca, tda, tea, tfa]
+        tbi = [tcb, tdb, teb, tfb]
+        return TEMPRB(sid, ta, tb, tp1, tp2,
+                      tai, tbi, eids, comment=comment)
+
+    def cross_reference(self, model: BDF) -> None:
+        pass
+
+    def safe_cross_reference(self, model, debug=True):
+        pass
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        pass
+
+    def raw_fields(self):
+        """Writes the TEMPRB card"""
+        eid = self.eids[0]
+        list_fields = [
+            'TEMPRB', self.sid, eid, self.ta, self.tb,
+            self.tp1[0], self.tp1[1],
+            self.tp2[0], self.tp2[1],
+        ] + self.tai + self.tbi + self.eids[1:]
+        return list_fields
+
+    def repr_fields(self):
+        """Writes the TEMPRB card"""
+        return self.raw_fields()
+
+    def get_loads(self):
+        return [self]
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        card = self.repr_fields()
+        if size == 8:
+            return self.comment + print_card_8(card)
+        if is_double:
+            return self.comment + print_card_double(card)
+        return self.comment + print_card_16(card)
 
 class TEMP(ThermalLoad):
     """
@@ -837,8 +1111,35 @@ class TEMP(ThermalLoad):
     +------+-----+----+-------+----+-------+----+----+
     | TEMP |  3  | 94 | 316.2 | 49 | 219.8 |    |    |
     +------+-----+----+-------+----+-------+----+----+
+
     """
     type = 'TEMP'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        temperatures = {1 : 1.0}
+        return TEMP(sid, temperatures, comment='')
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, loads):
+        """exports the loads in a vectorized way"""
+        #encoding = model._encoding
+        #comments = []
+        unused_sid = loads[0].sid
+        #h5_file.create_dataset('sid', data=sid)
+        for i, load in enumerate(loads):
+            sub_group = h5_file.create_group(str(i))
+            #comments.append(loads.comment)
+
+            node = []
+            temp = []
+            for nid, tempi in load.temperatures.items():
+                node.append(nid)
+                temp.append(tempi)
+            sub_group.create_dataset('node', data=node)
+            sub_group.create_dataset('temperature', data=temp)
+        #h5_file.create_dataset('_comment', data=comments)
 
     def __init__(self, sid, temperatures, comment=''):
         """
@@ -855,6 +1156,7 @@ class TEMP(ThermalLoad):
                 the nodal temperature
         comment : str; default=''
             a comment for the card
+
         """
         ThermalLoad.__init__(self)
         if comment:
@@ -877,6 +1179,7 @@ class TEMP(ThermalLoad):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
 
@@ -906,6 +1209,7 @@ class TEMP(ThermalLoad):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
         temperatures = {data[1]: data[2]}
@@ -913,23 +1217,24 @@ class TEMP(ThermalLoad):
 
     def add(self, temp_obj):
         assert self.sid == temp_obj.sid
-        for (gid, temp) in iteritems(temp_obj.temperatures):
+        for (gid, temp) in temp_obj.temperatures.items():
             self.temperatures[gid] = temp
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def safe_cross_reference(self, model, debug=True):
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def raw_fields(self):
         """Writes the TEMP card"""
         list_fields = ['TEMP', self.sid]
         ntemps = len(self.temperatures) - 1
-        for i, (gid, temp) in enumerate(sorted(iteritems(self.temperatures))):
+        for i, (gid, temp) in enumerate(sorted(self.temperatures.items())):
             list_fields += [gid, temp]
             if i % 3 == 2 and ntemps > i:  # start a new TEMP card
                 list_fields += [None, 'TEMP', self.sid]
@@ -942,7 +1247,7 @@ class TEMP(ThermalLoad):
     def get_loads(self):
         return [self]
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -973,9 +1278,21 @@ class TEMPP1(BaseCard):
     +--------+------+------+------+--------+------+------+------+
     |        |  1   | THRU |  10  |   30   | THRU |  61  |      |
     +--------+------+------+------+--------+------+------+------+
+
     """
     type = 'TEMPP1'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        eid = 1
+        tbar = 2.0
+        tprime = 1.0
+        t_stress = 10.
+        return TEMPP1(sid, eid, tbar, tprime, t_stress, comment='')
+
     def __init__(self, sid, eid, tbar, tprime, t_stress, comment=''):
+        BaseCard.__init__(self)
         self.comment = comment
         self.sid = sid
         self.eid = eid
@@ -998,8 +1315,146 @@ class TEMPP1(BaseCard):
         sid, eid, t, tprime, ts1, ts2 = data
         return TEMPP1(sid, eid, t, tprime, [ts1, ts2], comment=comment)
 
-    def write_card(self, size=8, is_double=False):
+    def raw_fields(self):
+        """Writes the TEMP card"""
         list_fields = ['TEMPP1', self.sid, self.eid, self.tbar] + self.t_stress
+        return list_fields
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        list_fields = ['TEMPP1', self.sid, self.eid, self.tbar] + self.t_stress
+        return print_card_8(list_fields)
+
+
+class TEMPB3(BaseCard):
+    """
+    +--------+--------+--------+--------+-------+-------+--------+--------+--------+
+    |   1    |    2   |    3   |    4   |   5   |   6   |    7   |    8   |   9    |
+    +========+========+========+========+=======+=======+========+========+========+
+    | TEMPB3 |   SID  |   EID  |  T(A)  |  T(B) |  T(C) | TPY(A) | TPZ(A) | TPY(B) |
+    +--------+--------+--------+--------+-------+-------+--------+--------+--------+
+    |        | TPZ(B) | TPY(C) | TPZ(C) | TC(A) | TD(A) |  TE(A) |  TF(A) |  TC(B) |
+    +--------+--------+--------+--------+-------+-------+--------+--------+--------+
+    |        |  TD(B) |  TE(B) |  TF(B) | TC(C) | TD(C) |  TE(C) |  TF(C) |        |
+    +--------+--------+--------+--------+-------+-------+--------+--------+--------+
+    |        | Element ID List
+    +--------+--------+--------+--------+-------+-------+--------+--------+--------+
+    """
+    type = 'TEMPB3'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        eid = 1
+        t = [0., 0., 0.]
+        tpy = [0., 0., 0.]
+        tpz = [0., 0., 0.]
+        tc = [0., 0., 0.]
+        td = [0., 0., 0.]
+        te = [0., 0., 0.]
+        tf = [0., 0., 0.]
+        eids = [1, 2]
+        return TEMPB3(sid, eid, t, tpy, tpz, tc, td, te, tf, eids, comment='')
+
+    def __init__(self, sid, eid, t, tpy, tpz, tc, td, te, tf, eids, comment=''):
+        BaseCard.__init__(self)
+        self.comment = comment
+        self.sid = sid
+        self.eid = eid
+        self.t = t
+        self.tpy = tpy
+        self.tpz = tpz
+        self.tc = tc
+        self.td = td
+        self.te = te
+        self.tf = tf
+        self.eids = eids
+        assert len(eids) > 0, str(self)
+        self.eid_ref = None
+        self.eids_ref = None
+
+    @classmethod
+    def add_card(cls, card, icard=0, comment=''):
+        """
+        Adds a TEMPD card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        icard : int; default=0
+            sid to be parsed
+        comment : str; default=''
+            a comment for the card
+
+        """
+        sid = integer(card, 1, 'sid')
+        eid = integer(card, 2, 'eid')
+
+        t = []
+        ifield = 3
+        for var in ['A', 'B', 'C']:
+            ti = double_or_blank(card, ifield, 'T(%s)' % var, default=0.0)
+            t.append(ti)
+            ifield += 1
+
+        tpy = []
+        tpz = []
+        for var in ['A', 'B', 'C']:
+            tpyi = double_or_blank(card, ifield, 'TPY(%s)' % var, default=0.0)
+            tpzi = double_or_blank(card, ifield + 1, 'TPZ(%s)' % var, default=0.0)
+            tpy.append(tpyi)
+            tpz.append(tpzi)
+            ifield += 2
+        tc = []
+        td = []
+        te = []
+        tf = []
+        for var in ['A', 'B', 'C']:
+            tci = double_or_blank(card, ifield, 'TC(%s)' % var, default=0.0)
+            tdi = double_or_blank(card, ifield + 1, 'TD(%s)' % var, default=0.0)
+            tei = double_or_blank(card, ifield + 2, 'TE(%s)' % var, default=0.0)
+            tfi = double_or_blank(card, ifield + 3, 'TF(%s)' % var, default=0.0)
+            tc.append(tci)
+            td.append(tdi)
+            te.append(tei)
+            tf.append(tfi)
+            ifield += 4
+        ifield += 1 # skip the None
+
+        list_fields = card[ifield:]
+        eids = expand_thru_by(list_fields, set_fields=True, sort_fields=True,
+                              require_int=True, allow_blanks=False)
+        return TEMPB3(sid, eid, t, tpy, tpz, tc, td, te, tf, eids, comment=comment)
+
+    def cross_reference(self, model: BDF) -> None:
+        self.eid_ref = model.Element(self.eid)
+        self.eids_ref = model.Elements(self.eids)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        self.eid_ref = None
+        self.eids_ref = None
+
+    def get_loads(self):
+        return [self]
+
+    def raw_fields(self):
+        """Writes the TEMP card"""
+        list_fields = ['TEMPB3', self.sid, self.eid, ] + self.t
+        for tpyi, tpzi in zip(self.tpy, self.tpz):
+            list_fields.append(tpyi)
+            list_fields.append(tpzi)
+        for tci, tdi, tei, tfi in zip(self.tc, self.td, self.tf, self.tf):
+            list_fields.append(tci)
+            list_fields.append(tdi)
+            list_fields.append(tei)
+            list_fields.append(tfi)
+        list_fields.append(None)
+        list_fields += self.eids
+        return list_fields
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        list_fields = self.raw_fields()
         return print_card_8(list_fields)
 
 # Loads
@@ -1017,8 +1472,15 @@ class TEMPD(BaseCard):
     +=======+======+====+======+====+======+====+======+====+
     | TEMPD | SID1 | T1 | SID2 | T2 | SID3 | T3 | SID4 | T4 |
     +-------+------+----+------+----+------+----+------+----+
+
     """
     type = 'TEMPD'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        temperatures = {1 : 1.0}
+        return TEMPD(sid, temperatures, comment='')
 
     def __init__(self, sid, temperature, comment=''):
         """
@@ -1032,6 +1494,7 @@ class TEMPD(BaseCard):
             default temperature
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -1052,6 +1515,7 @@ class TEMPD(BaseCard):
             sid to be parsed
         comment : str; default=''
             a comment for the card
+
         """
         nfields = len(card) - 1
         assert nfields % 2 == 0, 'card=%s' % card
@@ -1071,19 +1535,24 @@ class TEMPD(BaseCard):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
         temperature = data[1]
         return TEMPD(sid, temperature, comment=comment)
 
     def add(self, tempd_obj):
-        for (lid, tempd) in iteritems(tempd_obj.temperature):
+        for (lid, tempd) in tempd_obj.temperature.items():
             self.temperature[lid] = tempd
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        pass
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def raw_fields(self):
@@ -1091,7 +1560,7 @@ class TEMPD(BaseCard):
         list_fields = ['TEMPD', self.sid, self.temperature]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         if size == 8:
             return self.comment + print_card_8(card)

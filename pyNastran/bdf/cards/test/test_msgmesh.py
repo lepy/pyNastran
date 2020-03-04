@@ -1,8 +1,8 @@
 import unittest
-from six import StringIO
+from io import StringIO
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.cards.test.utils import save_load_deck
-from pyNastran.utils.log import SimpleLogger
+from cpylog import SimpleLogger
 
 class TestMsgMesh(unittest.TestCase):
     def test_msgmesh_1(self):
@@ -30,7 +30,7 @@ class TestMsgMesh(unittest.TestCase):
         bdf_filename = StringIO()
         bdf_filename2 = StringIO()
         bdf_filename3 = StringIO()
-        bdf_filename4 = StringIO()
+        #bdf_filename4 = StringIO()
 
         model.validate()
         model._verify_bdf(xref=False)
@@ -59,7 +59,7 @@ class TestMsgMesh(unittest.TestCase):
         #model2 = read_bdf(bdf_filename2, xref=False)
         #print('---------------')
         #model2.safe_cross_reference()
-        save_load_deck(model, run_convert=False)
+        save_load_deck(model, run_convert=False, run_quality=False)
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

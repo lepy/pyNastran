@@ -5,7 +5,6 @@ https://en.wikipedia.org/wiki/Barycentric_coordinate_system
 http://en.wikipedia.org/wiki/Line-plane_intersection
 http://math.stackexchange.com/questions/544946/determine-if-projection-of-3d-point-onto-plane-is-within-a-triangle
 """
-from __future__ import print_function
 import numpy as np
 
 from pyNastran.converters.stl.stl import read_stl
@@ -24,11 +23,11 @@ def projected_barycentric_coord(p, q, u, v):
     u = p2 - p1
     v = p3 - p1
     """
-    n = cross(u, v)
-    one_over_4_area_squared = 1.0 / np.dot(n, n)
+    n = np.cross(u, v)
+    one_over_4_area_squared = 1.0 / (n @ n)
     w = p - q
-    b[2] = np.dot(crnp.oss(u, w), n) * one_over_4_area_squared
-    b[1] = np.dot(np.cross(w, v), n) * one_over_4_area_squared
+    b[2] = (np.cross(u, w) @ n) * one_over_4_area_squared
+    b[1] = (np.cross(w, v) @ n) * one_over_4_area_squared
     b[0] = 1.0 - b[1] - b[2]
     return b
 
@@ -90,8 +89,8 @@ def project_points_onto_stl(stl, points):
     #w = points_rotated - p1
     n = np.cross(u, v)
     #n2 = 1 / n**2
-    #gamma_a = np.dot(np.cross(u, w), n) / n2
-    #gamma_b = np.dot(np.cross(u, w), n) / n2
+    #gamma_a = (np.cross(u, w) @ n) / n2
+    #gamma_b = (np.cross(u, w) @ n) / n2
     try:
         nmag = np.linalg.norm(n, axis=1)
     except ValueError:
@@ -193,12 +192,12 @@ def project_curve_onto_stl(stl, points, npoints=11):
     out_points = project_points_onto_stl(stl, points)
     return out_points
 
-def main():
+def main():  # pragma: no cover
     import os
     import pyNastran
 
-    pkg_path = pyNastran.__path__[0]
-    stl_filename = os.path.join(pkg_path, 'converters', 'stl', 'sphere.stl')
+    PKG_PATH = pyNastran.__path__[0]
+    stl_filename = os.path.join(PKG_PATH, 'converters', 'stl', 'sphere.stl')
 
     stl = read_stl(stl_filename)
     #XYZ Global = (2.0035907914418716, 1.3287668328026303, 2.873731014735773)

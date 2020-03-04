@@ -1,11 +1,7 @@
 # pylint: disable=C0103,R0902,R0904,R0914
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import iteritems, string_types
-from six.moves import zip, range
 import numpy as np
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import (BaseCard, expand_thru_by)
 from pyNastran.bdf.cards.deqatn import fortran_to_python_short
@@ -19,6 +15,8 @@ from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
 from pyNastran.bdf.cards.utils import build_table_lines
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 def validate_dvcrel(validate, Type, cp_name):
@@ -316,7 +314,7 @@ class DCONSTR(OptConstraint):
         #else:
             #return self.uid_ref.tid
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #"""
         #Cross links the card so referenced cards can be extracted directly
 
@@ -348,7 +346,7 @@ class DCONSTR(OptConstraint):
         list_fields = ['DCONSTR', self.oid, self.dresp_id, lid, uid, lowfq, highfq]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -465,7 +463,7 @@ class DESVAR(OptConstraint):
                        xub, self.delx, self.ddval]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -540,7 +538,7 @@ class DDVAL(OptConstraint):
         list_fields = ['DDVAL', self.oid] + self.ddvals
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -619,7 +617,7 @@ class DOPTPRM(OptConstraint):
         +=========+========+======+========+======+========+======+========+======+
         | DOPTPRM | PARAM1 | VAL1 | PARAM2 | VAL2 | PARAM3 | VAL3 | PARAM4 | VAL4 |
         +---------+--------+------+--------+------+--------+------+--------+------+
-        |         | PARAM5 | VAL5 | -etc.- |      |        |      |        |      |
+        |         | PARAM5 | VAL5 |  etc.  |      |        |      |        |      |
         +---------+--------+------+--------+------+--------+------+--------+------+
         """
         if comment:
@@ -653,11 +651,11 @@ class DOPTPRM(OptConstraint):
 
     def raw_fields(self):
         list_fields = ['DOPTPRM']
-        for param, val in sorted(iteritems(self.params)):
+        for param, val in sorted(self.params.items()):
             list_fields += [param, val]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -679,7 +677,7 @@ class DLINK(OptConstraint):
         +=======+======+=======+========+=======+======+====+======+====+
         | DLINK |  ID  | DDVID |   C0   | CMULT | IDV1 | C1 | IDV2 | C2 |
         +-------+------+-------+--------+-------+------+----+------+----+
-        |       | IDV3 |   C3  | -etc.- |       |      |    |      |    |
+        |       | IDV3 |   C3  |  etc.  |       |      |    |      |    |
         +-------+------+-------+--------+-------+------+----+------+----+
         """
         if comment:
@@ -735,7 +733,7 @@ class DLINK(OptConstraint):
             list_fields += [idv, ci]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1267,7 +1265,7 @@ class DRESP1(OptConstraint):
     #def DRespID(self):
         #return self.dresp_id
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #"""
         #Cross links the card so referenced cards can be extracted directly
 
@@ -1416,7 +1414,7 @@ class DRESP1(OptConstraint):
                        self.region, self.atta, self.attb] + self.atti
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1549,7 +1547,7 @@ class DRESP2(OptConstraint):
                     assert isinstance(field, integer_types), 'field=%i value=%r type=%s should be an integer...\ncard=%s' % (i+9, field, name, card)
                 elif name == 'DTABLE':
                     #print('field=%s value=%r type=%r should be an string...\ncard=%s' % (i+9, field, name, card))
-                    assert isinstance(field, string_types), 'field=%i value=%r type=%s should be an string...\ncard=%s' % (i+9, field, name, card)
+                    assert isinstance(field, str), 'field=%i value=%r type=%s should be an string...\ncard=%s' % (i+9, field, name, card)
                 elif name == 'DFRFNC':
                     pass
                 else:
@@ -1558,7 +1556,7 @@ class DRESP2(OptConstraint):
         params[key] = value_list
 
         #print("--DRESP2 Params--")
-        #for key, value_list in sorted(iteritems(params)):
+        #for key, value_list in sorted(params.items()):
             #print("  key=%s value_list=%s" %(key, value_list))
         return DRESP2(dresp_id, label, dequation, region, params,
                       method, c1, c2, c3, comment=comment)
@@ -1571,13 +1569,13 @@ class DRESP2(OptConstraint):
 
     def _verify(self, xref=True):
         pass
-        #for (j, name), value_list in sorted(iteritems(self.params)):
+        #for (j, name), value_list in sorted(self.params.items()):
             #print('  DRESP2 verify - key=%s values=%s' % (name,
                 #self._get_values(name, value_list)))
 
     def calculate(self, op2_model, subcase_id):
         argsi = []
-        for key, vals in sorted(iteritems(self.params)):
+        for key, vals in sorted(self.params.items()):
             j, name = key
             if name in ['DRESP1', 'DRESP2']:
                 for val in vals:
@@ -1614,7 +1612,7 @@ class DRESP2(OptConstraint):
         """
         msg = ', which is required by %s ID=%s' % (self.type, self.dresp_id)
         default_values = {}
-        for key, vals in sorted(iteritems(self.params)):
+        for key, vals in sorted(self.params.items()):
             #assert key is not None, str(self)
             try:
                 j, name = key
@@ -1652,7 +1650,7 @@ class DRESP2(OptConstraint):
             raise NotImplementedError(self.dequation)
 
     #def DEquation(self):
-        #if isinstance(self.dequation, (int, string_types)):
+        #if isinstance(self.dequation, (int, str)):
             #return self.dequation
         #return self.dequation_ref.equation_id
 
@@ -1726,7 +1724,7 @@ class DRESP2(OptConstraint):
             'DRESP2' : [1, 0],
         }
         list_fields = []
-        for (j, name), value_list in sorted(iteritems(self.params)):
+        for (j, name), value_list in sorted(self.params.items()):
             values_list2 = self._get_values(name, value_list)
             fields2 = [name] + values_list2
             #try:
@@ -1753,7 +1751,7 @@ class DRESP2(OptConstraint):
         list_fields += self._pack_params()
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1884,7 +1882,7 @@ class DRESP3(OptConstraint):
             'USRDATA' : [1, 0],
         }
         list_fields = []
-        for key, value_list in sorted(iteritems(self.params)):
+        for key, value_list in sorted(self.params.items()):
             value_list2 = self._get_values(key, value_list)
             fields2 = [key] + value_list2
 
@@ -1907,7 +1905,7 @@ class DRESP3(OptConstraint):
         """
         msg = ', which is required by DRESP3 ID=%s' % (self.dresp_id)
         default_values = {}
-        for name, vals in sorted(iteritems(self.params)):
+        for name, vals in sorted(self.params.items()):
             if name in ['DRESP1', 'DRESP2']:
                 for i, val in enumerate(vals):
                     self.params[name][i] = model.DResp(val, msg)
@@ -1951,7 +1949,7 @@ class DRESP3(OptConstraint):
         list_fields += self._pack_params()
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2004,7 +2002,7 @@ class DCONADD(OptConstraint):
         list_fields = ['DCONADD', self.oid] + self.dconstrs
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2056,7 +2054,7 @@ class DSCREEN(OptConstraint):
         list_fields = ['DSCREEN', self.rType, trs, nstr]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2076,7 +2074,7 @@ class DVCREL1(OptConstraint):  # similar to DVMREL1
         +=========+========+========+========+===========+=======+========+=====+===+
         | DVCREL1 |   ID   |  TYPE  |  EID   |   CPNAME  | CPMIN |  CPMAX |  C0 |   |
         +---------+--------+--------+--------+-----------+-------+--------+-----+---+
-        |         | DVID1  | COEF1  | DVID2  |   COEF2   | DVID3 | -etc.- |     |   |
+        |         | DVID1  | COEF1  | DVID2  |   COEF2   | DVID3 |  etc.  |     |   |
         +---------+--------+--------+--------+-----------+-------+--------+-----+---+
 
         +---------+--------+--------+--------+-------+-----+------+
@@ -2224,7 +2222,7 @@ class DVCREL1(OptConstraint):  # similar to DVMREL1
             list_fields.append(coeff)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2380,7 +2378,7 @@ class DVCREL2(OptConstraint):
     #def DEquation(self):
         #if isinstance(self.dequation, integer_types):
             #return self.dequation
-        #elif isinstance(self.dequation, string_types):
+        #elif isinstance(self.dequation, str):
             #return self.dequation
         #else:
             #return self.dequation_ref.equation_id
@@ -2391,8 +2389,8 @@ class DVCREL2(OptConstraint):
         see the PBEAM for an example of get/set_opt_value
         """
         try:
-            get = pid_ref.get_optimization_value(self.pNameFid)
-            out = pid_ref.set_optimization_value(self.pNameFid, get)
+            get = pid_ref.get_optimization_value(self.pname_fid)
+            out = pid_ref.set_optimization_value(self.pname_fid, get)
         except:
             print('DVCREL2 calculate : %s[%r] = ???' % (self.Type, self.cp_name))
             raise
@@ -2416,7 +2414,7 @@ class DVCREL2(OptConstraint):
         op2_model.log.info('  deqatn out = %s' % out)
         return out
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -2488,7 +2486,7 @@ class DVCREL2(OptConstraint):
         """
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2509,7 +2507,7 @@ class DVMREL1(OptConstraint):  # similar to DVPREL1
         +=========+=======+=======+=======+========+=======+=======+========+
         | DVMREL1 |  ID   | TYPE  |  MID  | MPNAME | MPMIN | MPMAX |   C0   |
         +---------+-------+-------+-------+--------+-------+-------+--------+
-        |         | DVID1 | COEF1 | DVID2 | COEF2  | DVID3 | COEF3 | -etc.- |
+        |         | DVID1 | COEF1 | DVID2 | COEF2  | DVID3 | COEF3 |  etc.  |
         +---------+-------+-------+-------+--------+-------+-------+--------+
         """
         if comment:
@@ -2551,8 +2549,8 @@ class DVMREL1(OptConstraint):  # similar to DVPREL1
             #self.mp_min = double_or_blank(card, 5, 'mpMin', 1e-15)
         #else: # negative
             #self.mp_min = double_or_blank(card, 5, 'mpMin', -1e-35)
-        mp_min = double_or_blank(card, 5, 'mpMin')  #: .. todo:: bad default
-        mp_max = double_or_blank(card, 6, 'mpMax', 1e20)
+        mp_min = double_or_blank(card, 5, 'mp_min')  #: .. todo:: bad default
+        mp_max = double_or_blank(card, 6, 'mp_max', 1e20)
         c0 = double_or_blank(card, 7, 'c0', 0.0)
 
         dvids = []
@@ -2576,7 +2574,7 @@ class DVMREL1(OptConstraint):  # similar to DVPREL1
         return DVMREL1(oid, mat_type, mid, mp_name, dvids, coeffs,
                        mp_min=mp_min, mp_max=mp_max, c0=c0, comment=comment)
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #"""
         #Cross links the card so referenced cards can be extracted directly
 
@@ -2624,7 +2622,7 @@ class DVMREL1(OptConstraint):  # similar to DVPREL1
             list_fields.append(coeff)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2647,11 +2645,11 @@ class DVMREL2(OptConstraint):
         +---------+--------+--------+-------+---------+-------+-------+-------+-------+
         |         | DESVAR | DVID1  | DVID2 | DVID3   | DVID4 | DVID5 | DVID6 | DVID7 |
         +---------+--------+--------+-------+---------+-------+-------+-------+-------+
-        |         | DVID8  | -etc.- |       |         |       |       |       |       |
+        |         | DVID8  |  etc.  |       |         |       |       |       |       |
         +---------+--------+--------+-------+---------+-------+-------+-------+-------+
         |         | DTABLE | LABL1  | LABL2 | LABL3   | LABL4 | LABL5 | LABL6 | LABL7 |
         +---------+--------+--------+-------+---------+-------+-------+-------+-------+
-        |         | LABL8  | -etc.- |       |         |       |       |       |       |
+        |         | LABL8  |  etc.  |       |         |       |       |       |       |
         +---------+--------+--------+-------+---------+-------+-------+-------+-------+
         """
         if comment:
@@ -2663,7 +2661,7 @@ class DVMREL2(OptConstraint):
 
         if labels is None:
             labels = []
-        elif isinstance(labels, string_types):
+        elif isinstance(labels, str):
             labels = [labels]
 
         #: Unique identification number
@@ -2809,7 +2807,7 @@ class DVMREL2(OptConstraint):
         #dequation_ref = model.DEQATN(self.dequation, msg=msg)
         #return dequation_ref
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -2828,7 +2826,7 @@ class DVMREL2(OptConstraint):
         dequation_ref = model.DEQATN(self.dequation)
 
     #def OptValue(self):  #: .. todo:: not implemented
-        #self.pid_ref.OptValue(self.pNameFid)
+        #self.pid_ref.OptValue(self.pname_fid)
 
     def raw_fields(self):
         list_fields = ['DVMREL2', self.oid, self.mat_ype, self.mid,
@@ -2847,7 +2845,7 @@ class DVMREL2(OptConstraint):
         """
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2874,7 +2872,7 @@ class DVPREL1(OptConstraint):  # similar to DVMREL1
     +=========+========+========+========+===========+=======+========+=====+===+
     | DVPREL1 |   ID   |  TYPE  |  PID   | PNAME/FID | PMIN  |  PMAX  |  C0 |   |
     +---------+--------+--------+--------+-----------+-------+--------+-----+---+
-    |         | DVID1  | COEF1  | DVID2  |   COEF2   | DVID3 | -etc.- |     |   |
+    |         | DVID1  | COEF1  | DVID2  |   COEF2   | DVID3 |  etc.  |     |   |
     +---------+--------+--------+--------+-----------+-------+--------+-----+---+
 
     +---------+--------+--------+--------+-----+
@@ -3002,8 +3000,8 @@ class DVPREL1(OptConstraint):  # similar to DVMREL1
 
         #: Minimum value allowed for this property.
         #: .. todo:: bad default (see DVMREL1)
-        p_min = double_or_blank(card, 5, 'pMin', None)
-        p_max = double_or_blank(card, 6, 'pMax', 1e20)
+        p_min = double_or_blank(card, 5, 'p_min', None)
+        p_max = double_or_blank(card, 6, 'p_max', 1e20)
         c0 = double_or_blank(card, 7, 'c0', 0.0)
 
         dvids = []
@@ -3041,7 +3039,7 @@ class DVPREL1(OptConstraint):  # similar to DVMREL1
     #def OptID(self):
         #return self.oid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -3113,7 +3111,7 @@ class DVPREL1(OptConstraint):  # similar to DVMREL1
             list_fields.append(coeff)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -3198,7 +3196,7 @@ class DVPREL2(OptConstraint):
 
         if labels is None:
             labels = []
-        elif isinstance(labels, string_types):
+        elif isinstance(labels, str):
             labels = [labels]
 
         #: Unique identification number
@@ -3255,8 +3253,8 @@ class DVPREL2(OptConstraint):
         Type = string(card, 2, 'Type')
         pid = integer(card, 3, 'pid')
         pname_fid = integer_or_string(card, 4, 'pName_FID')
-        p_min = double_or_blank(card, 5, 'pMin', None)
-        p_max = double_or_blank(card, 6, 'pMax', 1e20)
+        p_min = double_or_blank(card, 5, 'p_min', None)
+        p_max = double_or_blank(card, 6, 'p_max', 1e20)
         dequation = integer_or_blank(card, 7, 'dequation') #: .. todo:: or blank?
 
         fields = [interpret_value(field) for field in card[9:]]
@@ -3356,7 +3354,7 @@ class DVPREL2(OptConstraint):
         op2_model.log.info('  deqatn out = %s' % out)
         return out
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -3386,7 +3384,7 @@ class DVPREL2(OptConstraint):
         self.dequation_ref = self.dequation
         assert pid_ref.type not in ['PBEND', 'PBARL', 'PBEAML'], self.pid
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #self.pid = self.Pid()
         #self.dequation = self.DEquation()
         #del self.pid_ref, self.dequation_ref
@@ -3403,7 +3401,7 @@ class DVPREL2(OptConstraint):
         pass
 
     #def OptValue(self):  #: .. todo:: not implemented
-        #self.pid_ref.OptValue(self.pNameFid)
+        #self.pid_ref.OptValue(self.pname_fid)
 
     def raw_fields(self):
         list_fields = ['DVPREL2', self.oid, self.Type, self.pid,
@@ -3422,7 +3420,7 @@ class DVPREL2(OptConstraint):
         """
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -3465,7 +3463,7 @@ class DVGRID(OptConstraint):
         ]
         return DVGRID(dvid, nid, dxyz, cid=cid, coeff=coeff, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -3478,7 +3476,7 @@ class DVGRID(OptConstraint):
         #self.dconstrs_ref = [model.dconstrs[oid] for oid in self.dconstr_ids]
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         return
         #self.dconstrs = self.dconstr_ids
         #del self.dconstrs_ref
@@ -3487,7 +3485,7 @@ class DVGRID(OptConstraint):
         list_fields = ['DVGRID', self.dvid, self.nid, self.cid, self.coeff] + list(self.dxyz)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

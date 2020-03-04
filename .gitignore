@@ -12,6 +12,7 @@ htmlcov
 # Other
 *.pyc
 *.pyd
+*.exe
 *.whl
 *.dll
 *.log
@@ -24,6 +25,7 @@ htmlcov
 *.pdf
 *.h5
 *.gz
+*.json
 
 # C extensions
 *.so
@@ -100,3 +102,13 @@ nosetests.xml
 *structMan*
 *CoFE*
 
+.mypy_cache
+/pyNastran/env
+.idea/*
+*/.ipynb_checkpoints/*
+*checkpoint.ipynb
+
+# virtualenvs
+*/tcl/*
+*/Include/*
+*/Scripts/*

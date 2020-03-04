@@ -2,10 +2,9 @@
 OP4 Demo
 --------
 
-The iPython notebook for this demo can be found in: -
-docs:raw-latex:`\quick`\_start:raw-latex:`\demo`:raw-latex:`\op`4\_demo.ipynb
--
-https://github.com/SteveDoyle2/pyNastran/tree/master/docs/quick\_start/demo/op4\_demo.ipynb
+The Jupyter notebook for this demo can be found in: -
+docs/quick_start/demo/op4_demo.ipynb -
+https://github.com/SteveDoyle2/pyNastran/tree/master/docs/quick_start/demo/op4_demo.ipynb
 
 The OP4 is a Nastran input/output format that can store matrices.
 
@@ -14,9 +13,13 @@ The OP2 can as well, but is less validated in regards to matrices.
 Import pyNastran
 ^^^^^^^^^^^^^^^^
 
-.. code:: python
+.. code:: ipython3
 
     import os
+    
+    import pyNastran
+    pkg_path = pyNastran.__path__[0]
+    
     from pyNastran.utils import print_bad_path
     from pyNastran.op4.op4 import read_op4
     import numpy as np
@@ -28,7 +31,7 @@ Import pyNastran
 Print the docstring
 ^^^^^^^^^^^^^^^^^^^
 
-.. code:: python
+.. code:: ipython3
 
     help(read_op4)
 
@@ -37,7 +40,7 @@ Print the docstring
 
     Help on function read_op4 in module pyNastran.op4.op4:
     
-    read_op4(op4_filename=None, matrix_names=None, precision='default', debug=False)
+    read_op4(op4_filename=None, matrix_names=None, precision='default', debug=False, log=None)
         Reads a NASTRAN OUTPUT4 file, and stores the
         matrices as the output arguments.  The number of
         matrices read is defined by the list matrix_names.  By default, all
@@ -118,14 +121,14 @@ Print the docstring
 So as you can see, Nastran has many matrix formats.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code:: python
+.. code:: ipython3
 
     # read the op4, will pop open a dialog box
     #matrices = read_op4()
 
-.. code:: python
+.. code:: ipython3
 
-    op4_filename = r'C:\Users\Steve\Desktop\ISat_Launch_Sm_4pt.op4'
+    op4_filename = os.path.join(pkg_path, '..', 'models', 'iSat', 'ISat_Launch_Sm_4pt.op4')
     assert os.path.exists(op4_filename), print_bad_path(op4_filename)
     
     #specify the file
@@ -134,7 +137,7 @@ So as you can see, Nastran has many matrix formats.
 There are more ways to read an OP4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code:: python
+.. code:: ipython3
 
     # only 1 matrix
     matrices = read_op4(op4_filename, matrix_names='FLAMA', debug=False)
@@ -142,7 +145,7 @@ There are more ways to read an OP4
     # 1 or more matrices
     matrices = read_op4(op4_filename, matrix_names=['FLAMA','UGEXT'])
 
-.. code:: python
+.. code:: ipython3
 
     # extract a matrix
     form, flama = matrices['FLAMA']
@@ -153,20 +156,20 @@ There are more ways to read an OP4
 .. parsed-literal::
 
     form = 2
-    type = <type 'numpy.ndarray'>
+    type = <class 'numpy.ndarray'>
     
 
-.. code:: python
+.. code:: ipython3
 
     print("keys = %s" % matrices.keys())
 
 
 .. parsed-literal::
 
-    keys = ['FLAMA', 'UGEXT']
+    keys = dict_keys(['FLAMA', 'UGEXT'])
     
 
-.. code:: python
+.. code:: ipython3
 
     print(matrices.keys())
     form_flama, flama = matrices['FLAMA']
@@ -182,15 +185,15 @@ There are more ways to read an OP4
 
 .. parsed-literal::
 
-    ['FLAMA', 'UGEXT']
-    shape = (3L, 167L)
+    dict_keys(['FLAMA', 'UGEXT'])
+    shape = (3, 167)
     flamat nvals = 501
-    form_ugext=2 type=<type 'numpy.float64'>
-    ugext.shape = (32274L, 167L)
+    form_ugext=2 type=<class 'numpy.float64'>
+    ugext.shape = (32274, 167)
     ugext nvals = 5389758
     
 
-.. code:: python
+.. code:: ipython3
 
     print(ugext[:,:])
     #print(flama)
@@ -198,17 +201,11 @@ There are more ways to read an OP4
 
 .. parsed-literal::
 
-    [[  5.548e-03   4.671e-06   1.818e-04 ...,   1.037e-01  -6.919e-02
-        1.904e-02]
-     [ -2.133e-04   5.699e-03  -2.392e-02 ...,   1.050e-02   5.252e-02
-       -1.187e-01]
-     [  8.469e-04   1.512e-03  -7.038e-03 ...,  -2.626e-01   2.141e-01
-        1.473e-01]
-     ..., 
-     [ -3.006e-07   5.476e-05  -6.343e-04 ...,   8.221e-03   2.789e-02
-        2.645e-02]
-     [ -1.723e-06   1.278e-06   1.805e-06 ...,  -4.867e-03   4.639e-03
-       -6.872e-03]
-     [  7.271e-06   3.394e-06   2.722e-06 ...,  -7.772e-03   7.160e-03
-       -8.942e-03]]
+    [[-5.548e-03  4.671e-06 -1.816e-04 ... -1.037e-01  6.919e-02  1.904e-02]
+     [ 2.133e-04  5.699e-03  2.393e-02 ... -1.050e-02 -5.252e-02 -1.187e-01]
+     [-8.469e-04  1.512e-03  7.038e-03 ...  2.626e-01 -2.141e-01  1.472e-01]
+     ...
+     [ 3.006e-07  5.476e-05  6.343e-04 ... -8.222e-03 -2.789e-02  2.645e-02]
+     [ 1.723e-06  1.278e-06 -1.805e-06 ...  4.866e-03 -4.639e-03 -6.872e-03]
+     [-7.271e-06  3.394e-06 -2.717e-06 ...  7.772e-03 -7.160e-03 -8.942e-03]]
     

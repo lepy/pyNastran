@@ -8,29 +8,24 @@ All spring elements are defined in this file.  This includes:
  * CELAS4
 
 All spring elements are SpringElement and Element objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Element
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class SpringElement(Element):
     def __init__(self):
         Element.__init__(self)
         self.nodes = [None, None]
-
-    def Centroid(self):
-        p = (self.nodes_ref[1].get_position() - self.nodes_ref[0].get_position()) / 2.
-        return p
-
-    def center_of_mass(self):
-        return self.Centroid()
 
     def Mass(self):
         return 0.0
@@ -88,9 +83,28 @@ class CELAS1(SpringElement):
         #: component number
         self.c1 = c1
         self.c2 = c2
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         self.nodes_ref = None
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+            components.append([element.c1, element.c2])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('components', data=components)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -171,7 +185,7 @@ class CELAS1(SpringElement):
     def K(self):
         return self.pid_ref.k
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -184,7 +198,21 @@ class CELAS1(SpringElement):
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CELAS1 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -196,7 +224,7 @@ class CELAS1(SpringElement):
                        self.c1, nodes[1], self.c2]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -257,9 +285,34 @@ class CELAS2(SpringElement):
         self.ge = ge
         #: stress coefficient
         self.s = s
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         self.nodes_ref = None
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        k = []
+        ge = []
+        s = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            k.append(element.k)
+            ge.append(element.ge)
+            s.append(element.s)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+            components.append([element.c1, element.c2])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('K', data=k)
+        h5_file.create_dataset('ge', data=ge)
+        h5_file.create_dataset('s', data=s)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('components', data=components)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -323,7 +376,7 @@ class CELAS2(SpringElement):
     def get_edge_ids(self):
         return [tuple(sorted(self.node_ids))]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -335,7 +388,20 @@ class CELAS2(SpringElement):
         msg = ', which is required by CELAS2 eid=%s' % (self.eid)
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CELAS2 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.nodes_ref = None
 
@@ -376,7 +442,7 @@ class CELAS2(SpringElement):
                        nodes[1], self.c2, ge, s]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -421,6 +487,22 @@ class CELAS3(SpringElement):
         self.pid_ref = None
 
     @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+
+    @classmethod
     def add_card(cls, card, comment=''):
         """
         Adds a CELAS3 card from ``BDF.add_card(...)``
@@ -461,7 +543,7 @@ class CELAS3(SpringElement):
     def K(self):
         return self.pid_ref.k
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -471,10 +553,25 @@ class CELAS3(SpringElement):
             the BDF object
         """
         msg = ', which is required by CELAS3 eid=%s' % (self.eid)
-        self.nodes_ref = model.Nodes(self.nodes, msg=msg)
+        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CELAS3 eid=%s' % (self.eid)
+        #self.nodes_ref = model.safe_empty_nodes(self.node_ids, msg=msg)
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -519,7 +616,7 @@ class CELAS3(SpringElement):
         #list_fields = ['CELAS3', self.eid, self.Pid(), s1, s2]
         #return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -536,6 +633,7 @@ class CELAS4(SpringElement):
     _field_map = {
         1: 'eid', 2:'k', #4:'s1', 6:'s2',
     }
+    cp_name_map = {'K': 'k',}
 
     def __init__(self, eid, k, nodes, comment=''):
         """
@@ -560,8 +658,24 @@ class CELAS4(SpringElement):
         self.k = k
         #: Scalar point identification numbers
         #self.nodes = nodes
-        self.prepare_node_ids(nodes, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nodes, allow_empty_nodes=True)
         self.nodes_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        k = []
+        nodes = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            k.append(element.k)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('K', data=k)
+        h5_file.create_dataset('nodes', data=nodes)
 
     def validate(self):
         if self.nodes[0] is not None and self.nodes[1] is not None:
@@ -617,7 +731,7 @@ class CELAS4(SpringElement):
     def get_edge_ids(self):
         return []
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -629,7 +743,21 @@ class CELAS4(SpringElement):
         msg = ', which is required by CELAS4 eid=%s' % (self.eid)
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CELAS4 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        #self.nodes_ref = model.safe_empty_nodes(self.node_ids, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.nodes_ref = None
 
@@ -637,6 +765,6 @@ class CELAS4(SpringElement):
         list_fields = ['CELAS4', self.eid, self.k] + self.node_ids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)

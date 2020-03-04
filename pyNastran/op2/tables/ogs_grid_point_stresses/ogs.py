@@ -1,10 +1,12 @@
-from __future__ import print_function
 from struct import Struct
-from six.moves import range
 from numpy import frombuffer
 from pyNastran.op2.op2_interface.op2_common import OP2Common
+from pyNastran.op2.op2_interface.op2_reader import mapfmt
 from pyNastran.op2.tables.ogs_grid_point_stresses.ogs_surface_stresses import (
-    GridPointStressesArray, GridPointStressesVolumeArray)
+    GridPointSurfaceStressesArray,
+    GridPointStressesVolumeDirectArray, GridPointStressesVolumePrincipalArray,
+    GridPointStressesSurfaceDiscontinutiesArray,
+    GridPointStressesVolumeDiscontinutiesArray)
 
 
 class OGS(OP2Common):
@@ -12,7 +14,7 @@ class OGS(OP2Common):
         OP2Common.__init__(self)
 
     def _read_ogs1_3(self, data, ndata):
-        three = self.parse_approach_code(data)
+        unused_three = self.parse_approach_code(data)
         self.words = [
             'aCode', 'tCode', '???', 'isubcase',
             '???', '???', '???', 'dLoadID',
@@ -108,38 +110,50 @@ class OGS(OP2Common):
             n = self._read_ogs1_table27(data, ndata)
         elif self.table_code == 28:
             #OGS1- grid point stresses - principal
-                assert self.table_name in [b'OGS1'], 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
-                n = self._read_ogs1_table28(data, ndata)
-        #elif self.table_code == 35:
+            assert self.table_name in [b'OGS1'], 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+            n = self._read_ogs1_table28(data, ndata)
+        elif self.table_code == 35:
             # OGS - Grid point stress discontinuities (plane strain)
-            #assert self.table_name in [b'OGS1'], 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
-            #n = self._read_ogs1_table35(data, ndata)
+            assert self.table_name in [b'OGS1'], 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+            n = self._read_ogs1_table35(data, ndata)
         else:
             msg = self.code_information()
-            n = self._not_implemented_or_skip(data, ndata, msg)
+            raise RuntimeError(self.code_information())
+            #n = self._not_implemented_or_skip(data, ndata, msg)
         del self.ogs
         return n
 
     def _read_ogs1_table28(self, data, ndata):
         if self.num_wide == 15:
-            pass
+            n = self._read_ogs1_table28_numwide15(data, ndata)
         else:
-            raise NotImplementedError(self.num_wide)
-        return ndata
-
-    def _read_ogs1_table26(self, data, ndata):
-        result_name = 'grid_point_stresses'
-        if self.num_wide == 11:  # real/random
-            n = self._read_ogs1_table26_numwide11(data, ndata)
-        else:
-            msg = 'only num_wide=11 is allowed  num_wide=%s' % self.num_wide
-            raise RuntimeError(msg)
+            raise RuntimeError(self.code_information())
         return n
 
-    def _read_ogs1_table26_numwide11(self, data, ndata):
-        """surface stresses"""
-        result_name = 'grid_point_stresses'
-        obj_vector_real = GridPointStressesArray
+    def _read_ogs1_table28_numwide15(self, data, ndata):
+        """
+        TCODE =28 Volume with principal
+        1 EKEY I 10*grid point identification number + device code
+        2 LXA RS Direction cosine from x to a
+        3 LXB RS Direction cosine from x to b
+        4 LXC RS Direction cosine from x to c
+
+        5 LYA RS Direction cosine from y to a
+        6 LYB RS Direction cosine from y to b
+        7 LYC RS Direction cosine from y to c
+
+        8 LZA RS Direction cosine from z to a
+        9 LZB RS Direction cosine from z to b
+        10 LZC RS Direction cosine from z to c
+
+        11 SA RS Principal in a
+        12 SB RS Principal in b
+        13 SC RS Principal in c
+        14 EPR RS Mean pressure
+        15 EHVM RS Hencky-von Mises or octahedral
+        """
+        result_name = 'grid_point_stresses_volume_principal'
+        obj_vector_real = GridPointStressesVolumePrincipalArray
         if self._results.is_not_saved(result_name):
             return ndata
         self._results._found_result(result_name)
@@ -147,25 +161,99 @@ class OGS(OP2Common):
         n = 0
 
         #result_name, is_random = self._apply_oes_ato_crm_psd_rms_no(result_name)
-        ntotal = 11 * 4
+        ntotal = 60 * self.factor # 15 * 4
+        nelements = ndata // ntotal
+        assert ndata % ntotal == 0
+        auto_return, is_vectorized = self._create_oes_object4(
+            nelements, result_name, slot, obj_vector_real)
+        if auto_return:
+            return nelements * ntotal
+
+        obj = self.obj
+        dt = self.nonlinear_factor
+        if self.use_vector and is_vectorized and 0:
+            n = nelements * ntotal
+            #itotal = obj.ielement
+            #ielement2 = obj.itotal + nelements
+            #itotal2 = ielement2
+
+            #floats = frombuffer(data, dtype=self.fdtype).reshape(nelements, 11).copy()
+            #obj._times[obj.itime] = dt
+            #if obj.itime == 0:
+                #ints = frombuffer(data, dtype=self.idtype).reshape(nelements, 11).copy()
+                #nids = ints[:, 0] // 10
+                #eids = ints[:, 1]
+                #assert nids.min() > 0, nids.min()
+                #obj.node_element[itotal:itotal2, 0] = nids
+                #obj.node_element[itotal:itotal2, 1] = eids
+
+            ##[lxa, lxb, lxc, lya, lyb, lyc, lza, lzb, lzc, sa, sb, sc, epr, ovm]
+            #strings = frombuffer(data, dtype=self._uendian + 'S4').reshape(nelements, 11)[:, 2].copy()
+            #obj.location[itotal:itotal2] = strings
+            #obj.data[obj.itime, itotal:itotal2, :] = floats[:, 3:]#.copy()
+            #obj.itotal = itotal2
+            #obj.ielement = ielement2
+            #n = ndata
+        else:
+            s = Struct(mapfmt(self._endian + b'i14f', self.size))
+            #nelements = ndata // 60  # 15*4
+            for unused_i in range(nelements):
+                edata = data[n:n+ntotal]
+                out = s.unpack(edata)
+                (eid_device, lxa, lxb, lxc, lya, lyb, lyc, lza, lzb, lzc, sa, sb, sc, epr, ovm) = out
+                eid = eid_device // 10
+                assert eid > 0, eid
+                #self.obj.add_sort1(dt, eid, lxa, lxb, lxc, lya, lyb, lyc, lza, lzb, lzc,
+                                   #sa, sb, sc, epr, ovm)
+                n += ntotal
+
+        assert ndata > 0, ndata
+        assert nelements > 0, 'nelements=%r element_type=%s element_name=%r' % (nelements, self.element_type, self.element_name)
+        #assert ndata % ntotal == 0, '%s n=%s nwide=%s len=%s ntotal=%s' % (self.element_name, ndata % ntotal, ndata % self.num_wide, ndata, ntotal)
+        assert self.num_wide * 4 * self.factor == ntotal, 'numwide*4=%s ntotal=%s' % (self.num_wide * 4, ntotal)
+        assert n > 0, "n = %s result_name=%s" % (n, result_name)
+        return n
+    #-----------------------------------------------------------------------------------
+    def _read_ogs1_table26(self, data, ndata):
+        """reads grid point stresses"""
+        if self.num_wide == 11:  # real/random
+            n = self._read_ogs1_table26_numwide11(data, ndata)
+        else:
+            msg = 'only num_wide=11 is allowed  num_wide=%s' % self.num_wide
+            raise NotImplementedError(msg)
+        return n
+
+    def _read_ogs1_table26_numwide11(self, data, ndata):
+        """surface stresses"""
+        result_name = 'grid_point_surface_stresses'
+        obj_vector_real = GridPointSurfaceStressesArray
+        if self._results.is_not_saved(result_name):
+            return ndata
+        self._results._found_result(result_name)
+        slot = getattr(self, result_name)
+        n = 0
+
+        #result_name, is_random = self._apply_oes_ato_crm_psd_rms_no(result_name)
+        ntotal = 44 * self.factor # 4*11
         nelements = ndata // ntotal
         auto_return, is_vectorized = self._create_oes_object4(
             nelements, result_name, slot, obj_vector_real)
         if auto_return:
-            return nelements * self.num_wide * 4
+            return nelements * ntotal
 
         obj = self.obj
         dt = self.nonlinear_factor
+
         if self.use_vector and is_vectorized:
-            n = nelements * 4 * self.num_wide
+            n = nelements * ntotal
             itotal = obj.ielement
             ielement2 = obj.itotal + nelements
             itotal2 = ielement2
 
-            floats = frombuffer(data, dtype=self.fdtype).reshape(nelements, 11).copy()
+            floats = frombuffer(data, dtype=self.fdtype8).reshape(nelements, 11).copy()
             obj._times[obj.itime] = dt
             if obj.itime == 0:
-                ints = frombuffer(data, dtype=self.idtype).reshape(nelements, 11).copy()
+                ints = frombuffer(data, dtype=self.idtype8).reshape(nelements, 11).copy()
                 nids = ints[:, 0] // 10
                 eids = ints[:, 1]
                 assert nids.min() > 0, nids.min()
@@ -173,30 +261,32 @@ class OGS(OP2Common):
                 obj.node_element[itotal:itotal2, 1] = eids
 
             #[fiber, nx, ny, txy, angle, major, minor, tmax, ovm]
-            strings = frombuffer(data, dtype=self._uendian + 'S4').reshape(nelements, 11)[:, 2].copy()
+            s4 = 'S%i' % self.size
+            strings = frombuffer(data, dtype=self._uendian + s4).reshape(nelements, 11)[:, 2].copy()
             obj.location[itotal:itotal2] = strings
             obj.data[obj.itime, itotal:itotal2, :] = floats[:, 3:]#.copy()
             obj.itotal = itotal2
             obj.ielement = ielement2
             n = ndata
         else:
-            s = Struct(self._endian + b'2i4s8f')
-            nelements = ndata // 44  # 11*4
-            for i in range(nelements):
-                edata = data[n:n+44]
+            fmt = self._endian + (b'2i4s8f' if self.size == 4 else b'2q8s8d')
+            s = Struct(fmt)
+            nelements = ndata // ntotal  # 11*4
+            for unused_i in range(nelements):
+                edata = data[n:n+ntotal]
                 out = s.unpack(edata)
-                (ekey, eid, fiber, nx, ny, txy, angle, major, minor, tmax, ovm) = out
-                nid = ekey // 10
+                (nid_device, eid, fiber, nx, ny, txy, angle, major, minor, tmax, ovm) = out
+                nid = nid_device // 10
                 fiber = fiber.decode('utf-8').strip()
                 assert nid > 0, nid
                 self.obj.add_sort1(dt, nid, eid, fiber, nx, ny, txy,
                                    angle, major, minor, tmax, ovm)
-                n += 44
+                n += ntotal
 
         assert ndata > 0, ndata
         assert nelements > 0, 'nelements=%r element_type=%s element_name=%r' % (nelements, self.element_type, self.element_name)
         #assert ndata % ntotal == 0, '%s n=%s nwide=%s len=%s ntotal=%s' % (self.element_name, ndata % ntotal, ndata % self.num_wide, ndata, ntotal)
-        assert self.num_wide * 4 == ntotal, 'numwide*4=%s ntotal=%s' % (self.num_wide * 4, ntotal)
+        assert self.num_wide * 4 *self.factor == ntotal, 'numwide*4=%s ntotal=%s' % (self.num_wide * 4, ntotal)
         assert n > 0, "n = %s result_name=%s" % (n, result_name)
         return n
 
@@ -204,7 +294,7 @@ class OGS(OP2Common):
         """OGS1 - grid point stresses - volume direct"""
         #is_sort1 = self.is_sort1
         if self.num_wide == 9:  # real/random
-            #result_name = 'grid_point_volume_stresses'
+            #result_name = 'grid_point_stresses_volume_direct'
             n = self._read_ogs1_table27_numwide9(data, ndata)
         else:
             msg = self.code_information()
@@ -213,37 +303,49 @@ class OGS(OP2Common):
         return n
 
     def _read_ogs1_table27_numwide9(self, data, ndata):
-        """volume stresses"""
-        result_name = 'grid_point_volume_stresses'
-        obj_vector_real = GridPointStressesVolumeArray
+        """
+        TCODE =27 Volume with direct
+        1 EKEY I 10*grid point identification number + Device Code
+        2 NX RS Normal in x
+        3 NY RS Normal in y
+        4 NZ RS Normal in z
+        5 TXY RS Shear in xy
+        6 TYZ RS Shear in yz
+        7 TZX RS Shear in zx
+        8 PR RS Mean pressure
+        9 HVM RS Hencky-von Mises or Octahedral
+        """
+        result_name = 'grid_point_stresses_volume_direct'
         if self._results.is_not_saved(result_name):
             return ndata
+
+        obj_vector_real = GridPointStressesVolumeDirectArray
         self._results._found_result(result_name)
         slot = getattr(self, result_name)
         n = 0
 
         #result_name, is_random = self._apply_oes_ato_crm_psd_rms_no(result_name)
-        ntotal = 9 * 4
+        ntotal = 36 * self.factor  # 9 * 4
         nelements = ndata // ntotal
-        assert ndata % (nelements * 36) == 0, ndata % (nelements * 36)
+        assert ndata % (nelements * ntotal) == 0, ndata % (nelements * ntotal)
         auto_return, is_vectorized = self._create_oes_object4(
             nelements, result_name, slot, obj_vector_real)
         if auto_return:
-            return nelements * self.num_wide * 4
+            return nelements * ntotal
 
         obj = self.obj
         dt = self.nonlinear_factor
 
         if self.use_vector and is_vectorized:
-            n = nelements * 4 * self.num_wide
+            n = nelements * ntotal
             itotal = obj.ielement
             ielement2 = obj.itotal + nelements
             itotal2 = ielement2
 
-            floats = frombuffer(data, dtype=self.fdtype).reshape(nelements, 9)#.copy()
+            floats = frombuffer(data, dtype=self.fdtype8).reshape(nelements, 9)#.copy()
             obj._times[obj.itime] = dt
             if obj.itime == 0:
-                ints = frombuffer(data, dtype=self.idtype).reshape(nelements, 9)
+                ints = frombuffer(data, dtype=self.idtype8).reshape(nelements, 9)
                 nids = ints[:, 0] // 10
                 assert nids.min() > 0, nids.min()
                 obj.node[itotal:itotal2] = nids
@@ -256,39 +358,83 @@ class OGS(OP2Common):
             obj.ielement = ielement2
             n = ndata
         else:
-            s = Struct(self._endian + b'i8f')
-            for i in range(nelements):
-                edata = data[n:n+36]
+            fmt = mapfmt(self._endian + b'i8f', self.size)
+            s = Struct(fmt)
+            for unused_i in range(nelements):
+                edata = data[n:n+ntotal]
                 out = s.unpack(edata)
-                (ekey, nx, ny, nz, txy, tyz, txz, pressure, ovm) = out
-                nid = ekey // 10
+                (nid_device, nx, ny, nz, txy, tyz, txz, pressure, ovm) = out
+                nid = nid_device // 10
                 assert nid > 0, nid
-                #print(self.ogs, nid, nx, ny, nz, txy, tyz, txz, pressure, ovm)
                 self.obj.add_sort1(dt, nid, nx, ny, nz, txy, tyz, txz, pressure, ovm)
-                n += 36
+                n += ntotal
         return n
 
+
     def _read_ogs1_table35(self, data, ndata):
-        """grid point stress discontinuities (plane stress/strain)"""
-        result_name = 'grid_point_stresses'
+        """
+        grid point stress discontinuities (plane stress/strain)
+
+        TCODE =35 Grid point stresses for surfaces with plane strain
+        1 EKEY I 10*grid point identification number and grid code
+        2 NX RS Normal in x
+        3 NY RS Normal in y
+        4 NZ RS Normal in z (always -1)
+        5 TXY RS Shear in xy
+        6 PR RS Mean pressure (always -1)
+        """
+        result_name = 'grid_point_stress_discontinuities'
+        if self._results.is_not_saved(result_name):
+            return ndata
+        self._results._found_result(result_name)
+        slot = getattr(self, result_name)
+        n = 0
+
         if self.num_wide == 6:
-            #self.create_transient_object(self.gridPointStresses, GridPointStresses)
-            n = self._read_ogs1_table35_numwide6(data, ndata)
+            obj_vector_real = GridPointStressesSurfaceDiscontinutiesArray
+
+            #result_name, is_random = self._apply_oes_ato_crm_psd_rms_no(result_name)
+            ntotal = 6 * 4 * self.factor
+            nelements = ndata // ntotal
+            assert ndata % (nelements * ntotal) == 0, ndata % (nelements * ntotal)
+            auto_return, is_vectorized = self._create_oes_object4(
+                nelements, result_name, slot, obj_vector_real)
+            if auto_return:
+                return nelements * ntotal
+
+            obj = self.obj
+            dt = self.nonlinear_factor
+
+            if self.use_vector and is_vectorized:
+                n = nelements * ntotal
+                itotal = obj.ielement
+                ielement2 = obj.itotal + nelements
+                itotal2 = ielement2
+
+                floats = frombuffer(data, dtype=self.fdtype).reshape(nelements, 6)#.copy()
+                obj._times[obj.itime] = dt
+                if obj.itime == 0:
+                    ints = frombuffer(data, dtype=self.idtype).reshape(nelements, 6)
+                    nids = ints[:, 0] // 10
+                    assert nids.min() > 0, nids.min()
+                    obj.node[itotal:itotal2] = nids
+
+                #[nid, nx, ny, nz, txy, pressure]
+                obj.data[obj.itime, itotal:itotal2, :] = floats[:, 1:]#.copy()
+                obj.itotal = itotal2
+                obj.ielement = ielement2
+                n = ndata
+            else:
+                s = Struct(mapfmt(self._endian + b'i5f', self.size))
+                nelements = ndata // ntotal  # 6*4
+                for unused_i in range(nelements):
+                    out = s.unpack(data[n:n+ntotal])
+                    (nid_device, nx, ny, nz, txy, pressure) = out
+                    nid = nid_device // 10
+                    assert nid > 0, nid
+                    self.obj.add_sort1(dt, nid, nx, ny, nz, txy, pressure)
+                    n += ntotal
         else:
             msg = 'only num_wide=11 is allowed  num_wide=%s' % self.num_wide
             raise RuntimeError(msg)
-        return n
-
-    def _read_ogs1_table35_numwide6(self, data, ndata):
-        """grid point stress discontinuities (plane stress/strain)"""
-        s = Struct(self._endian + b'i5f')
-        n = 0
-        nelements = ndata // 24  # 6*4
-        for i in range(nelements):
-            out = s.unpack(data[n:n+24])
-            (ekey, nx, ny, nz, txy, pressure) = out
-            nid = ekey // 10
-            assert nid > 0, nid
-            self.obj.add(dt, nid, nx, ny, nz, txy, tyz, txz, pressure, ovm)
-            n += 24
         return n

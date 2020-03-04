@@ -1,7 +1,5 @@
-from __future__ import print_function
 import os
 import multiprocessing as mp
-from six import iteritems
 from numpy import savetxt, arange, zeros
 
 from pyNastran.converters.usm3d.usm3d_reader import Usm3d
@@ -10,6 +8,7 @@ def get_n_list(dirname, model_name):
     """
     gets files of the form:
      - modelname + '_xxx.flo'
+
     """
     flo_filenames = os.listdir(dirname)
 
@@ -27,9 +26,7 @@ def get_n_list(dirname, model_name):
     return n_list
 
 def get_flo_files(dirname, model_name, nstart=0, nlimit=None, include_dirname_in_path=True):
-    """
-    get the flo files in ascending order
-    """
+    """get the flo files in ascending order"""
     if dirname == '':
         dirname = os.getcwd()
     n_list = get_n_list(dirname, model_name)
@@ -146,7 +143,7 @@ def write_loads(csv_filename, loads, node_id):
     f.write('time\t')
     savetxt(f, t, delimiter='', newline=',')
     f.write('\n')
-    for node_id, Cpi in sorted(iteritems(Cp)):
+    for node_id, Cpi in sorted(Cp.items()):
         f.write("\nnode_id=%i\n" % node_id)
 
         f.write('Cp[%s],' % node_id)

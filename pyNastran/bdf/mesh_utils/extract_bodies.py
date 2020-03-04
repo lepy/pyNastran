@@ -1,10 +1,9 @@
 """
 defines:
   - extract_bodies(bdf_filename)
+
 """
-from __future__ import print_function
 from collections import defaultdict
-from six import iteritems, iterkeys
 import numpy as np
 from pyNastran.bdf.bdf import BDF, read_bdf, print_card_16
 
@@ -23,22 +22,20 @@ def extract_bodies(bdf_filename, mpc_id=0):
         not supported
 
     Considers:
-    ----------
      - elements
      - rigid_elements
 
     Doesn't consider:
-    -----------------
       - elements_mass
       - MPC
       - MPCADD
       - DMIx
 
     Doesn't support:
-    ----------------
       - xref
       - duplicate element ids
       - large values
+
     """
     if isinstance(bdf_filename, BDF):
         model = bdf_filename
@@ -60,7 +57,7 @@ def extract_bodies(bdf_filename, mpc_id=0):
 
     nid_to_eid_map = defaultdict(list)
     eid_to_nid_map = defaultdict(list)
-    for eid, elem in iteritems(model.elements):
+    for eid, elem in model.elements.items():
         if debug:  # pragma: no cover
             print(print_card_16(elem.repr_fields()))
         node_ids = elem.node_ids
@@ -73,7 +70,7 @@ def extract_bodies(bdf_filename, mpc_id=0):
     rigid_offset = 0
     if len(model.elements):
         rigid_offset = max(model.elements)
-    for eid, elem in iteritems(model.rigid_elements):
+    for eid, elem in model.rigid_elements.items():
         if debug:  # pragma: no cover
             print(print_card_16(elem.repr_fields()))
         eid += rigid_offset
@@ -91,14 +88,16 @@ def extract_bodies(bdf_filename, mpc_id=0):
         raise RuntimeError(model.get_bdf_stats())
         #return {}
 
-    nids_used = set([])
-    eids_used = set([])
+    nids_used = set()
+    eids_used = set()
     ibody = 0
-    all_nids_to_check = set(list(nid_to_eid_map.keys()))
-    nids_to_check = set([next(iterkeys(nid_to_eid_map))])
+    keys = list(nid_to_eid_map.keys())
+    all_nids_to_check = set(keys)
+    key0 = keys[0]
+    nids_to_check = set([key0])
     if debug:  # pragma: no cover
         print('all_nids_to_check= ', all_nids_to_check)
-    body_eids = {ibody : set([])}
+    body_eids = {ibody : set()}
     nbodies_max = 3
     while all_nids_to_check:
         if debug:  # pragma: no cover
@@ -161,7 +160,7 @@ def extract_bodies(bdf_filename, mpc_id=0):
                 #break
             #continue
             #msg = 'cannot find a new body...nbodies=%s\nelements:' % ibody
-            #for nid, eids in sorted(iteritems(nid_to_eid_map)):
+            #for nid, eids in sorted(nid_to_eid_map.items()):
                 #msg += '  nid=%r eids=%s\n' % (nid, eids)
                 #for eid in eids:
                     #try:
@@ -177,13 +176,13 @@ def extract_bodies(bdf_filename, mpc_id=0):
         ibody += 1
         if ibody > nbodies_max:
             raise RuntimeError('Too many bodies...\n' + model.get_bdf_stats())
-        body_eids[ibody] = set([])
+        body_eids[ibody] = set()
         #print('--------------------------------------')
     if len(body_eids[ibody]) == 0:
         del body_eids[ibody]
 
     body_eids2 = {}
-    for ibody, body in sorted(iteritems(body_eids)):
+    for ibody, body in sorted(body_eids.items()):
         abody = np.unique(np.array(list(body), dtype='int64'))
         ielem = np.where(abody <= rigid_offset)
         irigid = np.where(abody > rigid_offset)
@@ -198,5 +197,3 @@ def extract_bodies(bdf_filename, mpc_id=0):
     if nbodies > 1:
         print('nbodies = %i' % nbodies)
     return body_eids2
-
-

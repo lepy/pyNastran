@@ -8,19 +8,22 @@ All trim aero cards are defined in this file.  This includes:
  * TRIM
 
 All cards are BaseCard objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+from __future__ import annotations
 from itertools import count
+from typing import TYPE_CHECKING
 
 from pyNastran.bdf.cards.aero.dynamic_loads import Aero
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank, string,
     string_or_blank,
 )
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class AEROS(Aero):
@@ -40,6 +43,14 @@ class AEROS(Aero):
         1: 'acsid', 2:'rcsid', 3:'cRef', 4:'bRef', 5:'Sref',
         6:'symXZ', 7:'symXY',
     }
+    _properties = ['is_anti_symmetric_xy', 'is_anti_symmetric_xz', 'is_symmetric_xy', 'is_symmetric_xz']
+
+    @classmethod
+    def _init_from_empty(cls):
+        cref = 1.
+        bref = 1.
+        sref = 1.
+        return AEROS(cref, bref, sref, acsid=0, rcsid=0, sym_xz=0, sym_xy=0, comment='')
 
     def __init__(self, cref, bref, sref, acsid=0, rcsid=0, sym_xz=0, sym_xy=0, comment=''):
         """
@@ -68,6 +79,7 @@ class AEROS(Aero):
             xy symmetry flag (+1=symmetry; -1=antisymmetric)
         comment : str; default=''
             a comment for the card
+
         """
         Aero.__init__(self)
         if comment:
@@ -139,7 +151,7 @@ class AEROS(Aero):
         if msg:
             raise TypeError('There are errors on the AEROS card:\n%s%s' % (msg, self))
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross refernece aerodynamic coordinate system.
 
@@ -147,12 +159,13 @@ class AEROS(Aero):
         ----------
         model : BDF
             The BDF object.
+
         """
-        msg = ' which is required by AEROS'
+        msg = ', which is required by AEROS'
         self.acsid_ref = model.Coord(self.acsid, msg=msg)
         self.rcsid_ref = model.Coord(self.rcsid, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         """
         Safe cross refernece aerodynamic coordinate system.
 
@@ -160,10 +173,11 @@ class AEROS(Aero):
         ----------
         model : BDF
             The BDF object.
+
         """
-        msg = ' which is required by AEROS'
-        self.acsid_ref = model.Coord(self.acsid, msg=msg)
-        self.rcsid_ref = model.Coord(self.rcsid, msg=msg)
+        msg = ', which is required by AEROS'
+        self.acsid_ref = model.safe_coord(self.acsid, None, xref_errors, msg=msg)
+        self.rcsid_ref = model.safe_coord(self.rcsid, None, xref_errors, msg=msg)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -176,6 +190,7 @@ class AEROS(Aero):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         acsid = integer_or_blank(card, 1, 'acsid', 0)
         rcsid = integer_or_blank(card, 2, 'rcsid', 0)
@@ -201,7 +216,8 @@ class AEROS(Aero):
         return AEROS(cref, bref, sref, acsid, rcsid, sym_xz, sym_xy,
                      comment=comment)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.acsid_ref = None
         self.rcsid_ref = None
 
@@ -210,6 +226,7 @@ class AEROS(Aero):
         maps = {
             'coord' : cid_map,
         }
+
         """
         cid_map = maps['coord']
         self.acsid = cid_map[self.acsid]
@@ -223,6 +240,7 @@ class AEROS(Aero):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         list_fields = ['AEROS', self.Acsid(), self.Rcsid(), self.cref,
                        self.bref, self.sref, self.sym_xz, self.sym_xy]
@@ -236,6 +254,7 @@ class AEROS(Aero):
         -------
         fields : List[varies]
           the fields that define the card
+
         """
         sym_xz = set_blank_if_default(self.sym_xz, 0)
         sym_xy = set_blank_if_default(self.sym_xy, 0)
@@ -243,7 +262,7 @@ class AEROS(Aero):
                        self.bref, self.sref, sym_xz, sym_xy]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -266,6 +285,10 @@ class AESTAT(BaseCard):
     _field_map = {
         1: 'id', 2:'label',
     }
+    @classmethod
+    def _init_from_empty(cls):
+        return AESTAT(1, 'name', comment='')
+
     def __init__(self, aestat_id, label, comment=''):
         """
         Creates an AESTAT card, which is a variable to be used in a TRIM analysis
@@ -278,6 +301,7 @@ class AESTAT(BaseCard):
             name for the id
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -296,6 +320,7 @@ class AESTAT(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         aestat_id = integer(card, 1, 'ID')
         label = string(card, 2, 'label')
@@ -309,22 +334,11 @@ class AESTAT(BaseCard):
         assert len(data) == 2, 'data = %s' % data
         return AESTAT(aestat_id, label, comment=comment)
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #pass
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
-
-
-    @property
-    def id(self):
-        self.deprecated('id', 'aestat_id', '1.1')
-        return self.aestat_id
-
-    @id.setter
-    def id(self, aestat_id):
-        self.deprecated('id', 'aestat_id', '1.1')
-        self.aestat_id = aestat_id
 
     def raw_fields(self):
         """
@@ -334,11 +348,12 @@ class AESTAT(BaseCard):
         -------
         fields : List[int/str]
             the fields that define the card
+
         """
         list_fields = ['AESTAT', self.aestat_id, self.label]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -360,6 +375,14 @@ class CSSCHD(Aero):
     _field_map = {
         1: 'sid', 2:'aesid', 3:'lalpha', 4:'lmach', 5:'lschd',
     }
+    _properties = ['is_anti_symmetric_xy', 'is_anti_symmetric_xz', 'is_symmetric_xy', 'is_symmetric_xz'] ## TODO: remove these
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        aesid = 0
+        lschd = 2
+        return CSSCHD(sid, aesid, lschd, lalpha=None, lmach=None, comment='')
 
     def __init__(self, sid, aesid, lschd, lalpha=None, lmach=None, comment=''):
         """
@@ -380,6 +403,7 @@ class CSSCHD(Aero):
             the control surface deflection profile (AEFACT) id
         comment : str; default=''
             a comment for the card
+
         """
         Aero.__init__(self)
         if comment:
@@ -417,6 +441,7 @@ class CSSCHD(Aero):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         aesid = integer(card, 2, 'aesid')             # AESURF
@@ -435,7 +460,7 @@ class CSSCHD(Aero):
         lschd = data[4]   # AEFACT
         return CSSCHD(sid, aesid, lalpha, lmach, lschd, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -443,36 +468,27 @@ class CSSCHD(Aero):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by CSSCHD sid=%s' % self.sid
+        msg = ', which is required by CSSCHD sid=%s' % self.sid
         self.aesid_ref = model.AESurf(self.aesid, msg=msg)
         self.lalpha_ref = model.AEFact(self.lalpha, msg=msg)
         self.lmach_ref = model.AEFact(self.lmach, msg=msg)
         self.lschd_ref = model.AEFact(self.lschd, msg=msg)
 
-    def safe_cross_reference(self, model):
-        msg = ' which is required by CSSCHD sid=%s' % self.sid
+    def safe_cross_reference(self, model, xref_errors):
+        msg = ', which is required by CSSCHD sid=%s' % self.sid
         try:
             self.aesid_ref = model.AESurf(self.aesid, msg=msg)
         except KeyError:
             pass
 
-        try:
-            self.lalpha_ref = model.AEFact(self.lalpha, msg=msg)
-        except KeyError:
-            pass
+        self.lalpha_ref = model.safe_aefact(self.lalpha, self.sid, xref_errors, msg=msg)
+        self.lmach_ref = model.safe_aefact(self.lmach, self.sid, xref_errors, msg=msg)
+        self.lschd_ref = model.safe_aefact(self.lschd, self.sid, xref_errors, msg=msg)
 
-        try:
-            self.lmach_ref = model.AEFact(self.lmach, msg=msg)
-        except KeyError:
-            pass
-
-        try:
-            self.lschd_ref = model.AEFact(self.lschd, msg=msg)
-        except KeyError:
-            pass
-
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.aesid = self.AESid()
         self.lalpha = self.LAlpha()
         self.lmach = self.LMach()
@@ -510,12 +526,13 @@ class CSSCHD(Aero):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         list_fields = ['CSSCHD', self.sid, self.AESid(), self.LAlpha(),
                        self.LMach(), self.LSchd()]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -538,8 +555,17 @@ class DIVERG(BaseCard):
         the number of roots
     machs : List[float, ..., float]
         list of Mach numbers
+
     """
     type = 'DIVERG'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nroots = 10
+        machs = [0.5, 0.75]
+        return DIVERG(sid, nroots, machs, comment='')
+
     def __init__(self, sid, nroots, machs, comment=''):
         """
         Creates an DIVERG card, which is used in divergence
@@ -555,6 +581,7 @@ class DIVERG(BaseCard):
             list of Mach numbers
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -574,6 +601,7 @@ class DIVERG(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         nroots = integer(card, 2, 'nroot')
@@ -585,23 +613,25 @@ class DIVERG(BaseCard):
             j += 1
         return DIVERG(sid, nroots, machs, comment=comment)
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #pass
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #pass
 
     def raw_fields(self):
         list_fields = ['DIVERG', self.sid, self.nroots] + list(self.machs)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
 
 class TRIM(BaseCard):
     """
+    Specifies constraints for aeroelastic trim variables.
+
     +------+--------+------+--------+--------+-----+--------+-----+----------+
     |   1  |   2    |   3  |    4   |    5   |  6  |    7   |  8  |     9    |
     +======+========+======+========+========+=====+========+=====+==========+
@@ -628,6 +658,7 @@ class TRIM(BaseCard):
         -------
         value : varies
             the value for the appropriate field
+
         """
         ni = 4
         for i in range(len(self.labels)):
@@ -654,6 +685,7 @@ class TRIM(BaseCard):
             the field number to update
         value : varies
             the value for the appropriate field
+
         """
         ni = 4
         for i in range(len(self.labels)):
@@ -667,6 +699,15 @@ class TRIM(BaseCard):
             if i == 1:
                 ni += 1
         raise KeyError('Field %r=%r is an invalid TRIM entry.' % (n, value))
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        mach = 0.6
+        q = 300.
+        labels = ['ALPHA']
+        uxs = [1.0]
+        return TRIM(sid, mach, q, labels, uxs, aeqr=1.0, comment='')
 
     def __init__(self, sid, mach, q, labels, uxs, aeqr=1.0, comment=''):
         """
@@ -689,6 +730,7 @@ class TRIM(BaseCard):
             1.0 : elastic trim analysis (default)
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -730,15 +772,13 @@ class TRIM(BaseCard):
 
         .. warning ::  This probably gets AELINKs/AEPARMs/AESURFSs wrong.
 
-        The TRIM equality
-        -----------------
+        **The TRIM equality**
         ndelta = (naestat + naesurf + naeparm) - (
                - (ntrim + ntrim_aesurf? + naelink + nsuport_dofs + nsuport1_dofs)
         ndelta = 0
         ntrim_aesurf is not included, but it might exist...
 
-        Steps to a TRIM analysis
-        ------------------------
+        **Steps to a TRIM analysis**
         1.  Define the number of independent control surfaces (naesurf)
             Make an AESURF for each.  Dual link the AESURFs if you can
             to avoid needing an AELINK (e.g., +roll is left aileron down,
@@ -783,8 +823,7 @@ class TRIM(BaseCard):
             certain DOFs (e.g., z-motion).  Add enough to satisfy the TRIM
             equality.
 
-        Doesn't Consider
-        ----------------
+        **Doesn't Consider**
          - AELINK
          - AEPARM
          - AESURFS
@@ -824,44 +863,58 @@ class TRIM(BaseCard):
                         suport_dofs.add(dof)
                         nsuport_dofs += 1
 
+            suport_dof_msg2 = ''
             if suport1:
                 #unused_conid = suport1.conid
                 nids = suport1.node_ids
-                for nid, cs in zip(nids, suport1.Cs):
-                    for ci in cs:
-                        #print('  SUPORT1: id=%r nid=%r C=%r' % (conid, nid, ci))
-                        dof = (nid, ci)
+                suport_dof_msg = ''
+                for nid, components in zip(nids, suport1.Cs):
+                    for componenti in components:
+                        dof = (nid, componenti)
+                        suport_dof_msg += '    (%s, %s)\n' % (nid, componenti)
                         if dof in suport_dofs:
                             msg = 'dof=%s suport_dofs=%s' % (str(dof), str(suport_dofs))
                             raise RuntimeError(msg)
                         suport_dofs.add(dof)
                         nsuport1_dofs += 1
+                suport_dof_msg2 = '\nsuport_dofs (nid, comp):\n%s\n' % suport_dof_msg.rstrip(',')
 
             aesurf_names = [aesurfi.label for aesurfi in aesurf.values()]
             aestat_labels = [aestat.label for aestat in aestats.values()]
             aeparm_labels = [aeparm.label for aeparm in aeparms.values()]
             naestat = len(aestat_labels)
             ntrim = len(self.labels)
+            trim_aesurf_common = list(set(self.labels).intersection(set(aesurf_names)))
+            trim_aesurf_common.sort()
+            ntrim_aesurfs = len(trim_aesurf_common)
             naesurf = len(aesurf_names)
             naeparm = len(aeparm_labels)
-            naelink = 0
-            if self.sid in aelinks:
-                naelink = len(aelinks[self.sid])
+
+            aelinksi = []
             if 0 in aelinks:
-                #  TODO: what is this...is 0 the global subcase?
-                naelink += len(aelinks[0])
+                aelinksi += [aelink.label for aelink in aelinks[0]]
+            #if 'ALWAYS' in aelinks:
+                #aelinksi += [aelink.label for aelink in aelinks['ALWAYS']]
+
+            if self.sid in aelinks:
+                aelinksi += [aelink.label for aelink in aelinks[self.sid]]
+            naelink = len(aelinksi)
+
 
             ntrim_aesurf = 0
             labels = aestat_labels + aesurf_names + aeparm_labels
+            msg = ''
             for label in self.labels:
                 if label not in labels:
-                    msg = 'label=%r\n aestat_labels=%s\n aeparm_labels=%s\n aesurf_names=%s' % (
-                        label, aestat_labels, aeparm_labels, aesurf_names)
-                    raise RuntimeError(msg)
+                    msg += 'TRIM label=%r is not defined\n' % label
 
                 if label in aesurf_names:
                     #print('AESTAT/AESURF label = %r' % label)
                     ntrim_aesurf += 1
+            if msg:
+                msg += '\n aestat_labels=%s\n aeparm_labels=%s\n aesurf_names=%s\n%s' % (
+                    aestat_labels, aeparm_labels, aesurf_names, str(self))
+                raise RuntimeError(msg)
 
             # TODO: this doesn't work for multiple subcases
             #ntotal_suport_dofs = nsuport_dofs, nsuport1_dofs
@@ -883,21 +936,53 @@ class TRIM(BaseCard):
                         #naestat, naesurf, naeparms, ntrim_aesurf,
                         #ntrim, naelink, nsuport_dofs, nsuport1_dofs))
 
-            ndelta = (naestat + naesurf + naeparm) - (ntrim + naelink + nsuport_dofs + nsuport1_dofs) #+ ntrim_aesurfs
+            nplus = (naestat + naesurf + naeparm)
+            nminus = ntrim + naelink + nsuport_dofs + nsuport1_dofs
+
+            ndelta = nplus - nminus + 0*2*ntrim_aesurfs
             if ndelta != 0:
+                #msg = (
+                    #'(naestat + naesurf + naeparm) - (ntrim + ntrim_aesurf? + naelink + '
+                    #'nsuport_dofs + nsuport1_dofs) = ndelta = %s; ndelta != 0\n'
+                    #'naestat=%s naesurf=%s naeparm=%s ntrim=%s ntrim_aesurf=%s '
+                    #'naelink=%s nsuport_dofs=%s nsuport1_dofs=%s\n' % (
+                        #ndelta,
+                        #naestat, naesurf, naeparm, ntrim, ntrim_aesurf,
+                        #naelink, nsuport_dofs, nsuport1_dofs)
+                #)
                 msg = (
-                    '(naestat + naesurf + naeparm) - (ntrim + ntrim_aesurf? + naelink + '
-                    'nsuport_dofs + nsuport1_dofs) = ndelta = %s; ndelta != 0\n'
-                    'naestat=%s naesurf=%s naeparm=%s ntrim=%s ntrim_aesurf=%s '
-                    'naelink=%s nsuport_dofs=%s nsuport1_dofs=%s\n' % (
+                    'Invalid trim state (ndelta != 0):\n'
+                    '   (naestat + naesurf + naeparm + 0*2*ntrim_aesurf?) = (%s + %s + %s + 0*2*%s) = %s\n'
+                    ' - (ntrim + naelink + nsuport_dofs + nsuport1_dofs) = (%s + %s + %s + %s) = %s\n'
+                    '===================================================================\n'
+                    '  ndelta = %s\n\n'
+                    'Summary\n'
+                    '-------\n'
+                    '  +naestat = %s; %s\n'
+                    '  +naesurf = %s; %s\n'
+                    '  +naeparm = %s; %s\n'
+                    '  +0*2*ntrim_aesurf? = %s -> 0; %s\n'
+                    '  -ntrim = %s; %s\n'
+                    '  -naelink = %s; %s\n'
+                    '  -nsuport_dofs = %s\n'
+                    '  -nsuport1_dofs = %s\n'
+                    '%s\n\n' % (
+                        naestat, naesurf, naeparm, ntrim_aesurf, nplus,
+                        ntrim, naelink, nsuport_dofs, nsuport1_dofs, nminus,
+
                         ndelta,
-                        naestat, naesurf, naeparm, ntrim, ntrim_aesurf,
-                        naelink, nsuport_dofs, nsuport1_dofs)
+                        naestat, aestat_labels,
+                        naesurf, aesurf_names,
+                        naeparm, aeparm_labels,
+                        2*ntrim_aesurf, trim_aesurf_common,
+                        ntrim, self.labels,
+                        naelink, aelinksi,
+                        nsuport_dofs, nsuport1_dofs, suport_dof_msg2)
                 )
                 msg += str(self)
                 raise RuntimeError(msg)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
         #self.suport = model.suport
         #self.suport1 = model.suport1
@@ -908,7 +993,8 @@ class TRIM(BaseCard):
     def safe_cross_reference(self, model):
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     @classmethod
@@ -922,6 +1008,7 @@ class TRIM(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         mach = double(card, 2, 'mach')
@@ -950,6 +1037,7 @@ class TRIM(BaseCard):
             labels.append(label)
             uxs.append(ux)
             i += 2
+            n += 1
         return TRIM(sid, mach, q, labels, uxs, aeqr, comment=comment)
 
     def raw_fields(self):
@@ -960,6 +1048,7 @@ class TRIM(BaseCard):
         -------
         fields : list[varies]
             the fields that define the card
+
         """
         list_fields = ['TRIM', self.sid, self.mach, self.q]
         nlabels = len(self.labels)
@@ -980,6 +1069,92 @@ class TRIM(BaseCard):
         list_fields[8] = aeqr
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
+
+
+class TRIM2(TRIM):
+    """
+    Defines the state of the aerodynamic extra points for a trim analysis.
+    All undefined extra points will be set to zero.
+
+    +-------+--------+------+--------+--------+-----+--------+-----+----------+
+    |   1   |   2    |   3  |    4   |    5   |  6  |    7   |  8  |     9    |
+    +=======+========+======+========+========+=====+========+=====+==========+
+    | TRIM2 |   ID   | MACH |    Q   |        |     |        |     | IS_RIGID |
+    +-------+--------+------+--------+--------+-----+--------+-----+----------+
+    |       | LABEL1 |  UX1 | LABEL2 |   UX2  | ... |        |     |          |
+    +-------+--------+------+--------+--------+-----+--------+-----+----------+
+    """
+    type = 'TRIM2'
+    _field_map = {
+        1: 'sid', 2:'mach', 3:'q', 8:'aeqr',
+    }
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        mach = 0.6
+        q = 300.
+        labels = ['ALPHA']
+        uxs = [1.0]
+        return TRIM2(sid, mach, q, labels, uxs, aeqr=1.0, comment='')
+
+    def __init__(self, sid, mach, q, labels, uxs, aeqr=1.0, comment=''):
+        TRIM.__init__(self, sid, mach, q, labels, uxs, aeqr=1.0, comment='')
+
+    @classmethod
+    def add_card(cls, card, comment=''):  # TODO: not done...
+        """
+        Adds a TRIM2 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        sid = integer(card, 1, 'sid')
+        mach = double(card, 2, 'mach')
+        q = double(card, 3, 'q')
+        aeqr = double_or_blank(card, 8, 'aeqr', 1.0)
+
+        i = 9
+        n = 3
+        labels = []
+        uxs = []
+        while i < len(card):
+            label = string(card, i, 'label%i' % n)
+            ux = double(card, i + 1, 'ux%i' % n)
+            labels.append(label)
+            uxs.append(ux)
+            i += 2
+        return TRIM2(sid, mach, q, labels, uxs, aeqr, comment=comment)
+
+    def raw_fields(self):
+        """
+        Gets the fields in their unmodified form
+
+        Returns
+        -------
+        fields : list[varies]
+            the fields that define the card
+
+        """
+        list_fields = ['TRIM2', self.sid, self.mach, self.q, None, None, None, None, self.aeqr]
+        nlabels = len(self.labels)
+        assert nlabels > 0, self.labels
+        for label, ux in zip(self.labels, self.uxs):
+            list_fields += [label, ux]
+        return list_fields
+
+    def repr_fields(self):
+        # fixes a Nastran bug
+        aeqr = set_blank_if_default(self.aeqr, 1.0)
+
+        list_fields = self.raw_fields()
+        list_fields[8] = aeqr
+        return list_fields

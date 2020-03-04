@@ -1,17 +1,17 @@
 # pylint: disable=C0103
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six.moves import range
-
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from numpy.linalg import norm  # type: ignore
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Element #, Mid
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class RodElement(Element):  # CROD, CONROD, CTUBE
@@ -58,6 +58,22 @@ class CROD(RodElement):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+
     def __init__(self, eid, pid, nids, comment=''):
         """
         Creates a CROD card
@@ -78,7 +94,7 @@ class CROD(RodElement):
             self.comment = comment
         self.eid = eid
         self.pid = pid
-        self.prepare_node_ids(nids)
+        self.nodes = self.prepare_node_ids(nids)
         assert len(self.nodes) == 2
         self.nodes_ref = None
         self.pid_ref = None
@@ -120,12 +136,26 @@ class CROD(RodElement):
         return CROD(eid, pid, nids, comment=comment)
 
 
-    def cross_reference(self, model):
-        msg = ' which is required by CROD eid=%s' % (self.eid)
+    def cross_reference(self, model: BDF) -> None:
+        msg = ', which is required by CROD eid=%s' % (self.eid)
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CROD eid=%s' % self.eid
+        self.nodes_ref = model.Nodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -236,10 +266,13 @@ class CROD(RodElement):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
+    def write_card_16(self, is_double=False):
+        card = self.raw_fields()
+        return self.comment + print_card_16(card)
 
 class CTUBE(RodElement):
     """
@@ -262,6 +295,22 @@ class CTUBE(RodElement):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+
     def __init__(self, eid, pid, nids, comment=''):
         """
         Creates a CTUBE card
@@ -282,7 +331,7 @@ class CTUBE(RodElement):
             self.comment = comment
         self.eid = eid
         self.pid = pid
-        self.prepare_node_ids(nids)
+        self.nodes = self.prepare_node_ids(nids)
         assert len(self.nodes) == 2
         self.nodes_ref = None
         self.pid_ref = None
@@ -323,12 +372,27 @@ class CTUBE(RodElement):
         nids = data[2:4]
         return CTUBE(eid, pid, nids, comment=comment)
 
-    def cross_reference(self, model):
-        msg = ' which is required by CTUBE eid=%s' % (self.eid)
+    def cross_reference(self, model: BDF) -> None:
+        msg = ', which is required by CTUBE eid=%s' % (self.eid)
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CTUBE eid=%s' % self.eid
+        self.nodes_ref = model.Nodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+        ## TODO: xref coord
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -432,7 +496,7 @@ class CTUBE(RodElement):
         list_fields = ['CTUBE', self.eid, self.Pid()] + self.node_ids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -458,6 +522,34 @@ class CONROD(RodElement):
             self.nodes[1] = value
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        nodes = []
+        mids = []
+        A = []
+        J = []
+        c = []
+        nsm = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            mids.append(element.mid)
+            nodes.append(element.nodes)
+            A.append(element.A)
+            J.append(element.j)
+            c.append(element.c)
+            nsm.append(element.nsm)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('A', data=A)
+        h5_file.create_dataset('J', data=J)
+        h5_file.create_dataset('c', data=c)
+        h5_file.create_dataset('nsm', data=nsm)
 
     def __init__(self, eid, mid, nids, A=0.0, j=0.0, c=0.0, nsm=0.0, comment=''):
         """
@@ -491,7 +583,7 @@ class CONROD(RodElement):
         self.j = j
         self.c = c
         self.nsm = nsm
-        self.prepare_node_ids(nids)
+        self.nodes = self.prepare_node_ids(nids)
         assert len(self.nodes) == 2
         self.nodes_ref = None
         self.mid_ref = None
@@ -540,7 +632,7 @@ class CONROD(RodElement):
         nsm = data[7]
         return CONROD(eid, mid, nids, A, j, c, nsm, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -549,11 +641,25 @@ class CONROD(RodElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CONROD eid=%s' % (self.eid)
+        msg = ', which is required by CONROD eid=%s' % (self.eid)
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.mid_ref = model.Material(self.mid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CONROD eid=%s' % self.eid
+        self.nodes_ref = model.Nodes(self.node_ids, msg=msg)
+        self.mid_ref = model.safe_material(self.mid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.mid = self.Mid()
         self.nodes_ref = None
@@ -601,12 +707,14 @@ class CONROD(RodElement):
         return self.mid_ref.rho
 
     def Centroid(self):
+        """Get the centroid of the element (save as the center of mass for the CONROD)"""
         if self.mid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
         return (self.nodes_ref[0].get_position() + self.nodes_ref[1].get_position()) / 2.
 
     def center_of_mass(self):
+        """Get the center of mass of the element (save as the centroid for the CONROD)"""
         return self.Centroid()
 
     def Mid(self):
@@ -618,9 +726,11 @@ class CONROD(RodElement):
         return self.mid_ref.mid
 
     def Pid(self):
+        """Spoofs the property id for the CONROD"""
         return self.pid
 
     def MassPerLength(self):
+        """Gets the mass per length of the CONROD"""
         if self.mid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
@@ -683,7 +793,7 @@ class CONROD(RodElement):
             'CONROD', self.eid] + self.node_ids + [self.Mid(), self.A, j, c, nsm]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

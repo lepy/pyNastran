@@ -1,4 +1,3 @@
-from __future__ import print_function
 from sympy import Symbol, solve
 #from sympy import Matrix
 
@@ -7,7 +6,7 @@ b = Symbol('b')
 c = Symbol('c')
 
 
-class FEM(object):
+class FEM:
     def solve_abc(self, N, k, av, bv=0., cv=0.):
         N2 = self.subABC(N, av, bv, cv)
         #N2 = N.subs(a,av).subs(b,bv).subs(c,cv)

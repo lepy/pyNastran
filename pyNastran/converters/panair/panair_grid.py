@@ -1,15 +1,11 @@
 """
 defines:
  - PanairGrid(log=None, debug=False)
+
 """
-from __future__ import print_function
 import os
 from itertools import count
 from math import ceil, sin, cos, radians
-
-from six import iteritems
-from six import PY2
-from six.moves import zip, range
 
 import numpy as np
 
@@ -18,8 +14,8 @@ from pyNastran.converters.panair.panair_grid_patch import (
     PanairPatch, PanairWakePatch, print_float)
 from pyNastran.converters.panair.assign_type import (
     integer, double, integer_or_blank, double_or_blank, fortran_value)
-from pyNastran.utils.log import get_logger2
-from pyNastran.utils import print_bad_path
+from cpylog import get_logger2
+from pyNastran.utils import check_path
 
 #from pyNastran.utils import list_print
 
@@ -28,7 +24,7 @@ from pyNastran.utils import print_bad_path
 #CY =  Fx*sin(beta) +Fy*cos(beta)
 
 
-class PanairGrid(object):
+class PanairGrid:
     """defines the PanairGrid class"""
     model_type = 'panair'
 
@@ -46,6 +42,7 @@ class PanairGrid(object):
         log : logging module object / None
             if log is set, debug is ignored and uses the
             settings the logging object has
+
         """
         self.infilename = None
         self.title_lines = []
@@ -118,7 +115,7 @@ class PanairGrid(object):
             npatches = len(self.patches)
             npatches = 1
             msg = '%i\n' % npatches
-            for patch_id, patch in sorted(iteritems(self.patches)):
+            for patch_id, patch in sorted(self.patches.items()):
                 #if patchID == 1:
                 print("patch_id = %s" % patch_id)
                 ni, nj = patch.xyz.shape[:2]
@@ -129,7 +126,7 @@ class PanairGrid(object):
                 break
 
             p3d_file.write(msg)
-            for patch_id, patch in sorted(iteritems(self.patches)):
+            for patch_id, patch in sorted(self.patches.items()):
                 #if patch_id == 1:
                 patch.write_plot3d(p3d_file, 1) # x
                 patch.write_plot3d(p3d_file, 2) # y
@@ -196,12 +193,7 @@ class PanairGrid(object):
     def write_panair(self, out_filename):
         """writes the panair file"""
         self.update_cases()
-        if PY2:
-            wb = 'wb'
-        else:
-            wb = 'w'
-
-        with open(out_filename, wb) as panair_file:
+        with open(out_filename, 'w') as panair_file:
             panair_file.write(self.title_section)
             panair_file.write(self.write_data_check())
             panair_file.write(self.symmetry_section)
@@ -213,7 +205,7 @@ class PanairGrid(object):
 
             #panair_file.write(self.alphaSection)
             #panair_file.write(self.caseSection)
-            for unused_patch_name, patch in sorted(iteritems(self.patches)):
+            for unused_patch_name, patch in sorted(self.patches.items()):
                 panair_file.write(str(patch))
 
             panair_file.write(self.xyz_section)
@@ -308,7 +300,7 @@ class PanairGrid(object):
 
     def find_patch_by_name(self, network_name):
         names = []
-        for unused_patch_id, patch in iteritems(self.patches):
+        for unused_patch_id, patch in self.patches.items():
             #self.log.debug("patch_id=%s" % (patch_id))
             #self.log.debug("*get_patch = %s" %(get_patch))
             #self.log.debug("get_patch.network_name=%s" % (get_patch.network_name))
@@ -331,6 +323,7 @@ class PanairGrid(object):
           11.       3.                                                          winga
           =x(1,1)   y(1,1)    z(1,1)    x(*,*)    y(*,*)    z(*,*)
              69.4737    9.2105    0.0000   63.7818    9.5807    0.7831
+
         """
         nnetworks = integer(section[1][0:10], 'nnetworks')
         cp_norm = section[1][50:60].strip()
@@ -398,6 +391,7 @@ class PanairGrid(object):
           5.
           =th(1)    th(2)     th(3)     th(4)     th(5)
           -90.      -45.      0.        45.       90.
+
         """
         nnetworks = integer(section[1][0:10], 'nnetworks')
         cp_norm = section[1][50:60].strip()
@@ -486,34 +480,34 @@ class PanairGrid(object):
             for line in lines:
                 #print(line)
                 if len(line[0:60].rstrip()) > 0:
-                    (theta1) = double(line[0:10], 'theta%i' % ipoint)
+                    theta1 = double(line[0:10], 'theta%i' % ipoint)
                     theta.append(theta1)
                     ipoint += 1
                 else:  # pragma: no cover
                     raise RuntimeError(line.rstrip())
 
                 if len(line[0:60].rstrip()) > 0:
-                    (theta2) = double(line[10:20], 'theta%i' % ipoint)
+                    theta2 = double(line[10:20], 'theta%i' % ipoint)
                     theta.append(theta2)
                     ipoint += 1
 
                 if len(line[20:60].rstrip()) > 0:
-                    (theta3) = double(line[20:30], 'theta%i' % ipoint)
+                    theta3 = double(line[20:30], 'theta%i' % ipoint)
                     theta.append(theta3)
                     ipoint += 1
 
                 if len(line[30:60].rstrip()) > 0:
-                    (theta4) = double(line[30:40], 'theta%i' % ipoint)
+                    theta4 = double(line[30:40], 'theta%i' % ipoint)
                     theta.append(theta4)
                     ipoint += 1
 
                 if len(line[40:60].rstrip()) > 0:
-                    (theta5) = double(line[40:50], 'theta%i' % ipoint)
+                    theta5 = double(line[40:50], 'theta%i' % ipoint)
                     theta.append(theta5)
                     ipoint += 1
 
                 if len(line[50:60].rstrip()) > 0:
-                    (theta6) = double(line[50:60], 'theta%i' % ipoint)
+                    theta6 = double(line[50:60], 'theta%i' % ipoint)
                     theta.append(theta6)
                     ipoint += 1
             n += ntheta_lines
@@ -556,6 +550,7 @@ class PanairGrid(object):
 
           isings  igeomp  isingp  icontp  ibconp  iedgep
           ipraic  nexdgn  ioutpr  ifmcpr  icostp
+
         """
         #self.printoutSection = '\n'.join(section)+'\n'
 
@@ -642,6 +637,7 @@ class PanairGrid(object):
           =inat     insd      xwake     twake                                   netname
           bodyl     3.        100.      .0                                      bodylwk
           bodyu     3.        100.      .0                                      bodyuwk
+
         """
         #return True  # disable wakes
         nnetworks = integer_or_blank(section[1][0:10], 'nnetworks', 0)
@@ -829,7 +825,7 @@ class PanairGrid(object):
 
     def read_panair(self, infilename):
         """reads a panair input file"""
-        assert os.path.exists(infilename), print_bad_path(infilename)
+        check_path(infilename, 'panair_input_Filename')
         self.infilename = infilename
 
         with open(self.infilename, 'r') as infile:
@@ -851,7 +847,7 @@ class PanairGrid(object):
         kt = []
         cp_norm = []
         npoints = 0
-        for unused_name, panel in sorted(iteritems(self.patches)):
+        for unused_name, panel in sorted(self.patches.items()):
             if not get_wakes:
                 if panel.is_wake():
                     continue
@@ -987,6 +983,7 @@ class PanairGrid(object):
         46.       0.        0.
         =sref     bref      cref      dref
         2400.     60.       40.       90.
+
         """
         self.xref = float(section[1][0:10])  # 0
         self.yref = float(section[1][10:20])
@@ -1044,7 +1041,7 @@ class PanairGrid(object):
         msg += '        9   1st p-o-s   0    -1.0       bodyl      12     3.4+\n'
         msg += '            bodyl      12     3.4-      1st p-o-s   0    -1.0\n'
 
-        for patch_id, patch in iteritems(self.patches):
+        for patch_id, patch in self.patches.items():
             (p1, unused_xyz1) = patch.get_edges()
             self.log.debug("p[%s] = %s" % (patch_id, p1))
         return msg
@@ -1281,7 +1278,7 @@ def remove_comments(lines, log):
         line = line.rstrip().lower()
         if '=' in line:
             #print "line -> %r" % (line)
-            if '=' is not line[0]:
+            if line[0] != '=':
                 log.debug("line[0] -> %s" % line[0])
                 line = line.split('=')[0]
                 #log.debug("******")

@@ -1,4 +1,3 @@
-from six.moves import zip
 from numpy import zeros, where, unique, transpose, dot, array, arange
 
 from pyNastran.bdf.field_writer_8 import print_card_8
@@ -7,7 +6,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
 
 
-class TEMPD(object):
+class TEMPD:
     type = 'TEMPD'
     def __init__(self, model):
         """
@@ -60,7 +59,7 @@ class TEMPD(object):
                     bdf_file.write(print_card_16(card))
 
 
-class TEMP(object):
+class TEMP:
     type = 'TEMP'
     def __init__(self, model):
         """

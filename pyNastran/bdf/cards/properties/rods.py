@@ -8,9 +8,10 @@ All beam properties are defined in this file.  This includes:
 
 All beams are Property objects.
 Multi-segment beams are IntegratedLineProperty objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from numpy import pi
 
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
@@ -19,6 +20,8 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     integer, double, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 class PROD(Property):
     """
@@ -36,6 +39,32 @@ class PROD(Property):
         5 : 'J', 'J' : 'j',
         6 : 'C', 'C' : 'c',
     }
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, pids):
+        """exports the properties in a vectorized way"""
+        #comments = []
+        mids = []
+        A = []
+        J = []
+        c = []
+        nsm = []
+        for pid in pids:
+            prop = model.properties[pid]
+            #comments.append(prop.comment)
+            mids.append(prop.mid)
+            A.append(prop.A)
+            J.append(prop.j)
+            c.append(prop.c)
+            nsm.append(prop.nsm)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('A', data=A)
+        h5_file.create_dataset('J', data=J)
+        h5_file.create_dataset('c', data=c)
+        h5_file.create_dataset('nsm', data=nsm)
+        #h5_file.create_dataset('_comment', data=comments)
 
     def __init__(self, pid, mid, A, j=0., c=0., nsm=0., comment=''):
         """
@@ -162,7 +191,7 @@ class PROD(Property):
         nsm = self.nsm
         return area * rho + nsm
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -171,10 +200,23 @@ class PROD(Property):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by PROD mid=%s' % self.mid
+        msg = ', which is required by PROD mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by PROD mid=%s' % self.mid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         # type: () -> None
         self.mid = self.Mid()
         self.mid_ref = None
@@ -191,10 +233,14 @@ class PROD(Property):
         list_fields = ['PROD', self.pid, self.Mid(), self.A, j, c, nsm]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
+        return self.comment + print_card_16(card)
+
+    def write_card_16(self, is_double=False):
+        card = self.raw_fields()
         return self.comment + print_card_16(card)
 
 
@@ -214,6 +260,29 @@ class PTUBE(Property):
         5 : 't', 'T' : 't',
         7 : 'OD2', 'OD2' : 'OD2',
     }
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, pids):
+        """exports the properties in a vectorized way"""
+        #comments = []
+        mids = []
+        OD = []
+        t = []
+        nsm = []
+        for pid in pids:
+            prop = model.properties[pid]
+            #comments.append(prop.comment)
+            mids.append(prop.mid)
+            OD.append([prop.OD1, prop.OD2])
+            t.append(prop.t)
+            nsm.append(prop.nsm)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('OD', data=OD)
+        h5_file.create_dataset('t', data=t)
+        h5_file.create_dataset('nsm', data=nsm)
+        #h5_file.create_dataset('_comment', data=comments)
 
     def __init__(self, pid, mid, OD1, t=None, nsm=0., OD2=None, comment=''):
         """
@@ -314,7 +383,7 @@ class PTUBE(Property):
         """
         return self.nsm
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -323,11 +392,23 @@ class PTUBE(Property):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by PTUBE mid=%s' % self.mid
+        msg = ', which is required by PTUBE mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
-    def uncross_reference(self):
-        # type: () -> None
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by PTUBE mid=%s' % self.mid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 
@@ -430,7 +511,7 @@ class PTUBE(Property):
         list_fields = ['PTUBE', self.pid, self.Mid(), self.OD1, t, nsm, OD2]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

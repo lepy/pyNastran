@@ -1,4 +1,3 @@
-from six.moves import range
 from pyNastran.bdf.bdf_interface.assign_type import interpret_value
 #from pyNastran.bdf.caseControlDeck import CaseControlDeck
 
@@ -20,7 +19,7 @@ def parse_set_sline(list_a):
                 else:
                     by = 1
                 #print("BY = %s" % by)
-                vals = set([])
+                vals = set()
                 start_value = interpret_value(sline[0])
                 end_value = interpret_value(sline[2]) + 1
                 for i in range(start_value, end_value, by):
@@ -96,11 +95,11 @@ def _parse_entry(lines):
     line_upper = line.upper()
 
     if line_upper.startswith('SUBCASE'):
-        #print("line = |%r|" % line)
+        #print("line = %r" % line)
         line2 = line.replace('=', '')
         sline = line2.split()
         if len(sline) != 2:
-            msg = "trying to parse |%s|..." % line
+            msg = "trying to parse %r..." % line
             raise SyntaxError("Invalid Subcase: %s" % msg)
         (key, isubcase) = sline
         #print("key=%r isubcase=%r" % (key, isubcase))

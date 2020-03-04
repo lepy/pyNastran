@@ -1,8 +1,6 @@
 # pylint: disable=C0103,C0111,E1101
-from __future__ import print_function
 import os
-from six import iteritems
-from six.moves import zip
+from collections import OrderedDict
 
 #VTK_TRIANGLE = 5
 #VTK_QUADRATIC_TRIANGLE = 22
@@ -40,6 +38,7 @@ from pyNastran.dev.bdf_vectorized.bdf import BDF
 from pyNastran.op2.test.test_op2 import OP2
 from pyNastran.f06.f06 import F06
 from pyNastran.converters.nastran.nastranIO import NastranIO as NastranIO_xref
+from pyNastran.utils.numpy_utils import integer_types
 
 class NastranIO(NastranIO_xref):
     def __init__(self):
@@ -55,14 +54,14 @@ class NastranIO(NastranIO_xref):
             self.turn_text_off()
             self.grid.Reset()
 
-            self.result_cases = {}
+            self.result_cases = OrderedDict()
             self.ncases = 0
         for i in ('case_keys', 'icase', 'isubcase_name_map'):
             if hasattr(self, i):
                 del i
 
-        self.scalarBar.VisibilityOff()
-        self.scalarBar.Modified()
+        self.scalar_bar_actor.VisibilityOff()
+        self.scalar_bar_actor.Modified()
 
         fname_base, ext = os.path.splitext(bdf_filename)
         punch = False
@@ -94,7 +93,7 @@ class NastranIO(NastranIO_xref):
             if self.is_sub_panels:
                 nsub_elements_caeros = 0
                 nsub_points_caeros = 0
-                for key, caero in iteritems(model.caeros):
+                for key, caero in model.caeros.items():
                     if hasattr(caero, 'panel_points_elements'):
                         npoints, nelements = caero.get_npanel_points_elements()
                         nsub_elements_caeros += npoints
@@ -152,7 +151,7 @@ class NastranIO(NastranIO_xref):
             self.nid_map[node_id] = i
 
         dim_max = max(xmax-xmin, ymax-ymin, zmax-zmin)
-        self.create_global_axes(dim_max)
+        self.gui.create_global_axes(dim_max)
 
 
         # add the CAERO/CONM2 elements
@@ -165,7 +164,7 @@ class NastranIO(NastranIO_xref):
                 #'CBUSH', 'CBUSH1D', 'CFAST', 'CROD', 'CONROD',
                 #'CELAS1', 'CELAS2', 'CELAS3', 'CELAS4',
                 #'CDAMP1', 'CDAMP2', 'CDAMP3', 'CDAMP4', 'CDAMP5', 'CVISC', ]
-            #for (eid, element) in sorted(iteritems(model.elements)):
+            #for (eid, element) in sorted(model.elements.items()):
                 #if (isinstance(element, (LineElement, SpringElement)) or
                     #element.type in elements_no_mass):
                         #node_ids = element.node_ids
@@ -173,7 +172,7 @@ class NastranIO(NastranIO_xref):
                             #nsprings += 1
 
         points2.SetNumberOfPoints(nCAerosPoints * 4 + nCONM2 + nsprings)
-        for (eid, element) in sorted(iteritems(model.caeros)):
+        for (eid, element) in sorted(model.caeros.items()):
             if isinstance(element, (CAERO1, CAERO3, CAERO4, CAERO5)):
                 if self.is_sub_panels:
                     pointsi, elementsi = element.panel_points_elements()
@@ -211,7 +210,7 @@ class NastranIO(NastranIO_xref):
 
         sphere_size = self._get_sphere_size(dim_max)
         #if 0:
-            #for (eid, element) in sorted(iteritems(model.elements.mass)):
+            #for (eid, element) in sorted(model.elements.mass.items()):
                 #if isinstance(element, CONM2):
                     ##del self.eid_map[eid]
 
@@ -452,7 +451,7 @@ class NastranIO(NastranIO_xref):
                 ie += 1
 
         if 0:
-            for (eid, element) in sorted(iteritems(model.elements)):
+            for (eid, element) in sorted(model.elements.items()):
                 self.eid_map[eid] = i
                 #print(element.type)
                 pid = 0
@@ -733,14 +732,14 @@ class NastranIO(NastranIO_xref):
         self.grid2.Update()
         self.log_info("updated grid")
 
-        cases = {}
+        cases = OrderedDict()
 
         if 0:
             nelements = len(model.elements)
             pids = array(pids, 'int32')
             if not len(pids) == len(self.eid_map):
                 msg = 'ERROR:  len(pids)=%s len(eidMap)=%s\n' % (len(pids), len(self.eid_map))
-                for eid, pid in sorted(iteritems(pids_dict)):
+                for eid, pid in sorted(pids_dict.items()):
                     if eid not in self.eid_map:
                         msg += 'eid=%s %s' % (eid, str(model.elements[eid]))
                 raise RuntimeError(msg)
@@ -751,7 +750,7 @@ class NastranIO(NastranIO_xref):
         #nzs = []
         #i = 0
 
-        #for eid, element in sorted(iteritems(model.elements)):
+        #for eid, element in sorted(model.elements.items()):
             #if isinstance(element, ShellElement):
                 #(nx, ny, nz) = element.Normal()
             #else:
@@ -769,7 +768,7 @@ class NastranIO(NastranIO_xref):
         nidsSet = True
         if nidsSet:
             nids = model.grid.node_id
-            #for (nid, nid2) in iteritems(self.nid_map):
+            #for (nid, nid2) in self.nid_map.items():
             #    nids[nid2] = nid
             cases[(0, 'Node_ID', 1, 'node', '%i')] = nids
             nidsSet = True
@@ -779,8 +778,8 @@ class NastranIO(NastranIO_xref):
         Types, eids, pids = model.elements.get_element_properties()
         if eidsSet:
             #eids = zeros(nElements, dtype='int32')
-            #for (eid, eid2) in iteritems(self.eid_map):
-            #    eids[eid2] = eid
+            #for (eid, eid2) in self.eid_map.items():
+               #eids[eid2] = eid
             #eids = model.elements.element_id
             cases[(0, 'Element_ID', 1, 'centroid', '%i')] = eids
             eidsSet = True
@@ -822,8 +821,8 @@ class NastranIO(NastranIO_xref):
 
         self.cycle_results_explicit()  # start at ncase=0
         if self.ncases:
-            self.scalarBar.VisibilityOn()
-            self.scalarBar.Modified()
+            self.scalar_bar_actor.VisibilityOn()
+            self.scalar_bar_actor.Modified()
 
     def _plot_pressures(self, model, cases):
         """
@@ -883,6 +882,10 @@ class NastranIO(NastranIO_xref):
             if subcase_id == 0:
                 continue
             load_case_id, options = model.case_control_deck.get_subcase_parameter(subcase_id, 'LOAD')
+            if not isinstance(load_case_id, integer_types):
+                msg = 'subcase_id LOAD=%r type=%s' % (
+                    subcase_id, load_case_id, type(load_case_id))
+                raise TypeError(msg)
             loadCase = model.loads[load_case_id]
 
             # account for scale factors
@@ -933,13 +936,13 @@ class NastranIO(NastranIO_xref):
         """
         Loads the Nastran results into the GUI
         """
-        self.scalarBar.VisibilityOn()
-        self.scalarBar.Modified()
+        self.scalar_bar_actor.VisibilityOn()
+        self.scalar_bar_actor.Modified()
 
         print('trying to read...%s' % op2_filename)
         if '.op2' in op2_filename:  # TODO: do this based on lower & file extension
             model = OP2(log=self.log, debug=True)
-            model._results.saved = set([])
+            model._results.saved = set()
             all_results = model.get_all_results()
             desired_results = [
                 # nodal
@@ -979,11 +982,11 @@ class NastranIO(NastranIO_xref):
 
         #case = model.displacements[1]
         #print("case = %s" % case)
-        #for nodeID,translation in sorted(iteritems(case.translations)):
+        #for nodeID,translation in sorted(case.translations.items()):
             #print("nodeID=%s t=%s" % (nodeID, translation))
         #self.isubcase_name_map[self.isubcase] = [Subtitle, Label]
 
-        cases = {}
+        cases = OrderedDict()
         subcase_ids = model.isubcase_name_map.keys()
         self.isubcase_name_map = model.isubcase_name_map
 
@@ -1036,7 +1039,7 @@ class NastranIO(NastranIO_xref):
                 res = getattr(case, word)
 
                 self.log.debug('case.type =', case.__class__.__name__)
-                for (nid, txyz) in iteritems(res):
+                for (nid, txyz) in res.items():
                     nid2 = self.nid_map[nid]
                     displacements[nid2] = txyz
                     xyz_displacements[nid2] = norm(txyz)
@@ -1058,7 +1061,7 @@ class NastranIO(NastranIO_xref):
                 if case.nonlinear_factor is not None: # transient
                     return
                 temperatures = zeros(nnodes, dtype='float32')
-                for (nid, txyz) in iteritems(case.translations):
+                for (nid, txyz) in case.translations.items():
                     nid2 = self.nid_map[nid]
                     displacements[nid2] = txyz
                     temperatures[nid2] = norm(txyz)

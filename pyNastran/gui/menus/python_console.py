@@ -1,8 +1,6 @@
-from __future__ import print_function
 from pyNastran.gui.qt_version import qt_version, is_pygments
 
-from qtpy.QtCore import Qt
-from qtpy.QtGui import QFont, QFontMetrics, QColor, QCursor
+from qtpy.QtGui import QFont, QFontMetrics, QColor
 from qtpy import QtCore
 #from qtpy.QtCore import QSci
 #import QScintilla
@@ -11,24 +9,24 @@ from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QWidget, qApp, QMenu)
 #import qtpy.Qsci as Qsci
 
-if qt_version == 4:
-    try:
-        import PyQt4.Qsci as Qsci
-        IS_SCINTILLA = True
-    except ImportError:
-        IS_SCINTILLA = False
-
-elif qt_version == 5:
+if qt_version == 'pyqt5':
     try:
         import PyQt5.Qsci as Qsci
         IS_SCINTILLA = True
     except ImportError:
         IS_SCINTILLA = False
-    #import PyQt5.qsci
-elif qt_version == 'pyside':
+elif qt_version == 'pyside2':
     IS_SCINTILLA = False
 else:
     raise NotImplementedError('qt_version = %r' % qt_version)
+
+# hack for pyinstaller...if QScintilla isn't working in the exe, but it is in
+# gui, enable this print block and diff the outputs
+#
+#import sys
+#with open('modules.txt', 'w') as f:
+    #mods = sorted(sys.modules.keys())
+    #f.write('\n'.join(mods))
 
 
 #class QSyntaxHighlighting(Qsci.QsciScintilla):
@@ -42,11 +40,14 @@ else:
 
 
 if IS_SCINTILLA:
-    print('using scintilla')
     class SimplePythonEditorWidget(Qsci.QsciScintilla):
         ARROW_MARKER_NUM = 8
 
         def __init__(self, parent=None):
+            """
+            very similar to:
+            https://stackoverflow.com/questions/40002373/qscintilla-based-text-editor-in-pyqt5-with-clickable-functions-and-variables
+            """
             super(SimplePythonEditorWidget, self).__init__(parent)
 
             # Set the default font
@@ -56,19 +57,20 @@ if IS_SCINTILLA:
             font.setPointSize(10)
             self.setFont(font)
             self.setMarginsFont(font)
+            self.set_font(font)
 
-            # Margin 0 is used for line numbers
-            fontmetrics = QFontMetrics(font)
-            self.setMarginsFont(font)
-            self.setMarginWidth(0, fontmetrics.width("00000") + 6)
             self.setMarginLineNumbers(0, True)
             self.setMarginsBackgroundColor(QColor("#cccccc"))
 
             # Clickable margin 1 for showing markers
             self.setMarginSensitivity(1, True)
-            self.connect(self,
-                         QtCore.SIGNAL('marginClicked(int, int, Qt::KeyboardModifiers)'),
-                         self.on_margin_clicked)
+            if qt_version == 'pyqt4':
+                self.connect(self,
+                             QtCore.SIGNAL('marginClicked(int, int, Qt::KeyboardModifiers)'),
+                             self.on_margin_clicked)
+            else:
+                self.marginClicked.connect(self.on_margin_clicked)
+
             self.markerDefine(Qsci.QsciScintilla.RightArrow,
                               self.ARROW_MARKER_NUM)
             self.setMarkerBackgroundColor(QColor("#ee1111"),
@@ -88,7 +90,12 @@ if IS_SCINTILLA:
             lexer = Qsci.QsciLexerPython()
             lexer.setDefaultFont(font)
             self.setLexer(lexer)
-            self.SendScintilla(Qsci.QsciScintilla.SCI_STYLESETFONT, 1, 'Courier')
+
+            if qt_version == 'pyqt4':
+                self.SendScintilla(Qsci.QsciScintilla.SCI_STYLESETFONT, 1, 'Courier')
+            else:
+                font_style = bytearray(str.encode("Courier"))
+                self.SendScintilla(Qsci.QsciScintilla.SCI_STYLESETFONT, 1, font_style)
 
             # Don't want to see the horizontal scrollbar at all
             # Use raw message to Scintilla here (all messages are documented
@@ -98,12 +105,19 @@ if IS_SCINTILLA:
             # not too small
             #self.setMinimumSize(600, 450)
 
+        def set_font(self, font):
+            # Margin 0 is used for line numbers
+            fontmetrics = QFontMetrics(font)
+            self.setMarginsFont(font)
+            self.setMarginWidth(0, fontmetrics.width("00000") + 6)
+
         def on_margin_clicked(self, nmargin, nline, modifiers):
+            return
             # Toggle marker for the line the margin was clicked on
-            if self.markersAtLine(nline) != 0:
-                self.markerDelete(nline, self.ARROW_MARKER_NUM)
-            else:
-                self.markerAdd(nline, self.ARROW_MARKER_NUM)
+            #if self.markersAtLine(nline) != 0:
+                #self.markerDelete(nline, self.ARROW_MARKER_NUM)
+            #else:
+                #self.markerAdd(nline, self.ARROW_MARKER_NUM)
 
         def toPlainText(self):
             data = str(self.text())
@@ -127,14 +141,8 @@ class PythonConsoleWidget(QDockWidget):
         self.execute_python_button = QPushButton('Execute')
         self.execute_and_clear_python_button = QPushButton('Execute and Clear')
 
-        if is_pygments and IS_SCINTILLA:
-            #self.enter_data = QSyntaxHighlighting()
-            self.enter_data = SimplePythonEditorWidget()
-        else:
-            self.enter_data = QTextEdit()
-            font = QFont()
-            font.setFamily('Courier')
-            self.enter_data.setFont(font)
+        self.enter_data = get_code_block()
+
         self.setup_connections()
         self.layout()
 
@@ -147,11 +155,11 @@ class PythonConsoleWidget(QDockWidget):
         hbox.addWidget(self.execute_and_clear_python_button)
         vbox.addLayout(hbox)
 
-        vbox_widget = QWidget()
-        vbox_widget.setLayout(vbox)
+        vbox_widget = layout_to_widget(vbox)
         self.setWidget(vbox_widget)
 
     def setup_connections(self):
+        """sets up the callbacks"""
         self.execute_python_button.clicked.connect(self.on_execute_python_button)
         self.execute_and_clear_python_button.clicked.connect(
             self.on_execute_and_clear_python_button)
@@ -209,7 +217,25 @@ class PythonConsoleWidget(QDockWidget):
     #def on_clear(self):
         #print(4)
 
+def get_code_block():
+    if is_pygments and IS_SCINTILLA:
+        #self.enter_data = QSyntaxHighlighting()
+        enter_data = SimplePythonEditorWidget()
+    else:
+        enter_data = QTextEdit()
+        font = QFont()
+        font.setFamily('Courier')
+        enter_data.setFont(font)
+    return enter_data
+
+def layout_to_widget(layout):
+    widget = QWidget()
+    widget.setLayout(layout)
+    return widget
+
+
 def main():  # pragma: no cover
+    """tests function that doesn't bleed over"""
     # kills the program when you hit Cntl+C from the command line
     # doesn't save the current state as presumably there's been an error
     import signal
@@ -218,7 +244,7 @@ def main():  # pragma: no cover
     from qtpy.QtWidgets import QApplication
 
     import sys
-    import pyNastran
+    #import pyNastran
     app = QApplication(sys.argv)
     main_window = PythonConsoleWidget(None)
     main_window.show()

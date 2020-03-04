@@ -1,16 +1,18 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
-from pyNastran.utils import string_types
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank, integer_double_string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8, set_blank_if_default
 from pyNastran.dev.bdf_vectorized2.cards.elements.bars import init_x_g0
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class BeamElement(object):
+class BeamElement:
     """base class for CBEAM"""
     card_name = ''
     def __init__(self, model):
@@ -105,7 +107,7 @@ class BeamElement(object):
             self._sab_warping = []
             self.is_current = True
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 
@@ -159,6 +161,7 @@ class CBEAMv(BeamElement):
     +-------+-----+-----+-----+-----+-----+-----+-----+----------+
 
     offt/bit are MSC specific fields
+
     """
     card_name = 'CBEAM'
 
@@ -205,6 +208,7 @@ class CBEAMv(BeamElement):
             a comment for the card
 
         offt/bit are MSC specific fields
+
         """
         if g0 is None:
             g0 = -1
@@ -239,6 +243,7 @@ class CBEAMv(BeamElement):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         eid = integer(card, 1, 'eid')
         pid = integer_or_blank(card, 2, 'pid', eid)
@@ -316,6 +321,7 @@ class CBEAMv(BeamElement):
         x_g0 : varies
             g0 : List[int, None, None]
             x : List[float, float, float]
+
         """
         if g0 is not None:
             return (g0, None, None)
@@ -364,14 +370,12 @@ class CBEAMv(BeamElement):
         return msg
 
 
-class Beams(object):
-    """
-    Stores CBEAM elements that exist in 3D space
-    """
+class Beams:
+    """Stores CBEAM elements that exist in 3D space"""
     def __init__(self, model):
         self.model = model
         self.cbeam = model.cbeam
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:
@@ -399,9 +403,7 @@ class Beams(object):
         return self.repr_indent(indent='')
 
 def init_offt_bit(card, eid):
-    """
-    offt doesn't exist in NX nastran
-    """
+    """offt doesn't exist in NX nastran"""
     field8 = integer_double_string_or_blank(card, 8, 'field8')
     if isinstance(field8, float):
         offt = None
@@ -409,7 +411,7 @@ def init_offt_bit(card, eid):
     elif field8 is None:
         offt = 'GGG'  # default
         bit = None
-    elif isinstance(field8, string_types):
+    elif isinstance(field8, str):
         bit = None
         offt = field8
         msg = 'invalid offt parameter of CBEAM...offt=%s' % offt
@@ -421,4 +423,3 @@ def init_offt_bit(card, eid):
                '(float)...field8=%s\n' % (card.field(0), field8))
         raise RuntimeError("Card Instantiation: %s" % msg)
     return offt, bit
-

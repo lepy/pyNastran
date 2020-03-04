@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import print_function, unicode_literals
-from six.moves import range
-
 from numpy import array, arange
-
 
 from pyNastran.gui.qt_version import qt_version
 from qtpy import QtCore, QtGui
@@ -15,7 +11,7 @@ from qtpy.QtWidgets import (
 if qt_version == 4:
     QString = QtCore.QString
 elif qt_version == 5:
-    from six import text_type as QString
+    QString =  str
 else:
     raise NotImplementedError('qt_version = %r' % qt_version)
 
@@ -48,7 +44,7 @@ class GroupsPostView(QDialog):
         self.light_grey = (211, 211, 211)
         self.inames = inames
         self.shown_set = data['shown']
-        self.deleted_groups = set([])
+        self.deleted_groups = set()
         #self.inames = argsort(self.names)
         #print('inames =', inames)
 
@@ -177,6 +173,7 @@ class GroupsPostView(QDialog):
         self.setLayout(vbox)
 
     def set_connections(self):
+        """creates the actions for the menu"""
         self.set_as_main_button.clicked.connect(self.on_set_as_main)
         self.delete_groups_button.clicked.connect(self.on_delete_groups)
         self.revert_groups_button.clicked.connect(self.on_revert_groups)
@@ -248,7 +245,7 @@ class GroupsPostView(QDialog):
     def on_revert_groups(self):
         for irow in range(self.nrows):
             self.table.showRow(irow)
-        self.deleted_groups = set([])
+        self.deleted_groups = set()
 
     def on_create_super_group(self):
         inames = [iname for iname, check in enumerate(self.checks)
@@ -360,7 +357,7 @@ class GroupsPostView(QDialog):
 def on_post_group(data):
     print('hi')
 
-def main():
+def main():  # pragma: no cover
     # kills the program when you hit Cntl+C from the command line
     # doesn't save the current state as presumably there's been an error
     import signal

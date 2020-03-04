@@ -1,16 +1,11 @@
 #!/usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 from setuptools import setup, find_packages
 
-PY2 = False
-if sys.version_info < (3, 0):
-    PY2 = True
-if sys.version_info < (2, 7, 7):
-    imajor, minor1, minor2 = sys.version_info[:3]
-    # makes sure we don't get the following bug:
-    #   Issue #19099: The struct module now supports Unicode format strings.
-    sys.exit('Upgrade your Python to >= 2.7.7; version=(%s.%s.%s)' % (imajor, minor1, minor2))
+from packages import check_python_version, get_package_requirements, update_version_file
+check_python_version()
 
 import pyNastran
 packages = find_packages()+['gui/icons/*.*']
@@ -32,23 +27,29 @@ packages = find_packages(exclude=['ez_setup', 'examples', 'tests'] + exclude_wor
 for exclude_word in exclude_words:
     packages = [package for package in packages if exclude_word not in package]
 #print(packages, len(packages)) # 83
+all_reqs, install_requires = get_package_requirements(is_gui=True)
+
+#revision = get_git_revision_short_hash()
+#__version__ = '1.3.0+%s' % revision
+#__releaseDate__ = '2019/6/xx'
+#__releaseDate2__ = 'JUNE xx, 2019'
+
+update_version_file()
 
 setup(
     name='pyNastran',
     version=pyNastran.__version__,
     description=pyNastran.__desc__,
-    long_description="""\
-""",
+    long_description=pyNastran.__longdesc__,
     classifiers=[
         'Natural Language :: English',
         'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: BSD License (BSD-3)',
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.4',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
+        'License :: OSI Approved :: BSD License',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
         ], # Get strings from http://pypi.python.org/pypi?%3Aaction=list_classifiers
     keywords='',
+    python_requires='>=3.7',
     author=pyNastran.__author__,
     author_email=pyNastran.__email__,
     url=pyNastran.__website__,
@@ -67,24 +68,26 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'run_nastran_double_precision = pyNastran.bdf.test.run_nastran_double_precision:cmd_line',
+            #'run_nastran_double_precision = pyNastran.bdf.test.run_nastran_double_precision:cmd_line',
             'test_bdf  = pyNastran.bdf.test.test_bdf:main',
             'test_op2  = pyNastran.op2.test.test_op2:main',
             'test_op4  = pyNastran.op4.test.test_op4:main',
             'test_abaqus = pyNastran.converters.abaqus.test_abaqus:main',
             'test_pynastrangui = pyNastran.gui.test.test_gui:main',
 
-            'format_converter = pyNastran.converters.type_converter:main',
+            'format_converter = pyNastran.converters.format_converter:cmd_line_format_converter',
             'pyNastranGUI = pyNastran.gui.gui:cmd_line',
             'bdf = pyNastran.bdf.mesh_utils.utils:cmd_line',
             'f06 = pyNastran.f06.utils:cmd_line',
 
             #'pyNastranv = pyNastran.dev.bdf_vectorized.solver.solver:main',
             #'test_bdfv = pyNastran.dev.bdf_vectorized.test.test_bdf_vectorized2:main',
-            'test_bdfv = pyNastran.dev.bdf_vectorized2.test.test_bdf:main',
+            #'test_bdfv = pyNastran.dev.bdf_vectorized2.test.test_bdf:main',
             #'nastran_to_code_aster = pyNastran.converters.dev.code_aster.nastran_to_code_aster:main',
         ]
     },
     test_suite='pyNastran.all_tests',
 )
-
+print()
+for package in install_requires:
+    print('did not install %s' % package)

@@ -7,12 +7,10 @@ defines:
    - read_smesh(self, smesh_filename)
    - read_nodes(self, node_filename)
    - read_ele(self, ele_filename, form_flag='1')
+
 """
-from __future__ import print_function
-from codecs import open
-from six.moves import range
 from numpy import array, zeros
-from pyNastran.utils.log import get_logger2
+from cpylog import get_logger2
 from pyNastran.bdf.field_writer_8 import print_card_8
 
 
@@ -22,7 +20,7 @@ def read_tetgen(base, dimension_flag=2, log=None, debug=False):
     model.read_tetgen(base + '.node', base + '.smesh', base + '.ele', dimension_flag)
     return model
 
-class Tetgen(object):
+class Tetgen:
     """
     http://www.wias-berlin.de/preprint/1762/wias_preprints_1762.pdf
     """
@@ -103,10 +101,10 @@ class Tetgen(object):
         """reads a tetgen file"""
         self.nodes = read_nodes(node_filename)
         if dimension_flag == 2:
-            self.log.info('reading the *.smesh')
+            self.log.debug('reading the *.smesh')
             self.tris = self.read_smesh(smesh_filename)
         elif dimension_flag == 3:
-            self.log.info('reading the *.ele')
+            self.log.debug('reading the *.ele')
             self.tets = read_ele(ele_filename)
         else:
             raise RuntimeError('dimension_flag = %r and must be 2 or 3.' % dimension_flag)
@@ -121,7 +119,7 @@ class Tetgen(object):
             iline = 1
             nelements, unused_zero = lines[iline].split() # nelements, 0
             nelements = int(nelements)
-            self.log.info('nelements = %s' % nelements)
+            self.log.debug('nelements = %s' % nelements)
 
             # facet section
             tri_list = []

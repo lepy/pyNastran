@@ -1,20 +1,22 @@
-from __future__ import print_function
-from six.moves import StringIO
+from io import StringIO
 from numpy import (array, searchsorted, array_equal, setdiff1d, int64, argsort,
                    arange, ndarray, asarray)
-from pyNastran.utils import object_attributes, object_methods, integer_types
+from pyNastran.utils import object_attributes, object_methods
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.base_card import _format_comment
 
 
-class BaseMethods(object):
-    def object_attributes(self, mode='public', keys_to_skip=None):
+class BaseMethods:
+    def object_attributes(self, mode='public', keys_to_skip=None,
+                          filter_properties=False):
         """.. seealso:: `pyNastran.utils.object_attributes(...)`"""
         if keys_to_skip is None:
             keys_to_skip = []
 
         my_keys_to_skip = [
         ]
-        return object_attributes(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip)
+        return object_attributes(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip,
+                                 filter_properties=filter_properties)
 
     def object_methods(self, mode='public', keys_to_skip=None):
         """.. seealso:: `pyNastran.utils.object_methods(...)`"""
@@ -27,7 +29,7 @@ class BaseMethods(object):
         return object_methods(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip)
 
 
-class VectorizedCard(object):
+class VectorizedCard:
     type = 'VectorizedCard'
     def __init__(self, model):
         self.model = model

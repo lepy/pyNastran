@@ -32,13 +32,9 @@ The superelement sets start with SE:
 +------------+-----------------+
 |  SEBSETi   | BSETi           |
 +------------+-----------------+
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import string_types
-from six.moves import zip, range
 
-from pyNastran.utils import integer_types
+"""
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.base_card import (
     BaseCard, _node_ids, expand_thru
 )
@@ -48,6 +44,8 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, integer_or_string,
     parse_components, components_or_blank as fcomponents_or_blank,
     fields, string, integer_string_or_blank)
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class Set(BaseCard):
@@ -78,7 +76,7 @@ class Set(BaseCard):
     def __repr__(self):
         return self.comment + print_card_8(self.repr_fields())
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -107,6 +105,7 @@ class ABCQSet(Set):
     +------+-----+----+-----+------+-----+----+-----+----+
     | ASET | 16  |  2 |  23 | 3516 |  1  | 4  |     |    |
     +------+-----+----+-----+------+-----+----+-----+----+
+
     """
     type = 'ABCQSet'
     def __init__(self, ids, components, comment=''):
@@ -143,7 +142,7 @@ class ABCQSet(Set):
         components = [data[1]]
         return cls(ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -151,11 +150,12 @@ class ABCQSet(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
         msg = ' which is required by %s' % self.type
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -187,6 +187,7 @@ class SuperABCQSet(Set):
     +--------+------+-----+----+-----+------+-----+-----+-----+
     | SEBSET | 100  | 16  |  2 |  23 | 3516 |  1  | 4   |     |
     +--------+------+-----+----+-----+------+-----+-----+-----+
+
     """
     type = 'SuperABCQSet'
     def __init__(self, seid, ids, components, comment=''):
@@ -215,7 +216,7 @@ class SuperABCQSet(Set):
             components.append(component)
         return cls(seid, ids, components, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -223,11 +224,12 @@ class SuperABCQSet(Set):
         ----------
         model : BDF()
             the BDF object
+
         """
         msg = ' which is required by %s seid=%s' % (self.type, self.seid)
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -257,6 +259,7 @@ class ASET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     | ASET | 16  |  2 |  23 | 3516 |  1  | 4  |     |    |
     +------+-----+----+-----+------+-----+----+-----+----+
+
     """
     type = 'ASET'
 
@@ -273,6 +276,7 @@ class BSET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     | BSET | 16  |  2 |  23 | 3516 |  1  | 4  |     |    |
     +------+-----+----+-----+------+-----+----+-----+----+
+
     """
     type = 'BSET'
 
@@ -290,6 +294,7 @@ class CSET(ABCQSet):
     +------+-----+----+-----+------+-----+----+-----+----+
     | CSET | 16  |  2 |  23 | 3516 |  1  | 4  |     |    |
     +------+-----+----+-----+------+-----+----+-----+----+
+
     """
     type = 'CSET'
 
@@ -371,7 +376,7 @@ class ABQSet1(Set):
             raise NotImplementedError('thru_flag=%s data=%s' % (thru_flag, data))
         return cls(components, ids, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -383,7 +388,7 @@ class ABQSet1(Set):
         msg = ' which is required by %s' % self.type
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -453,13 +458,13 @@ class SuperABQSet1(Set):
     @classmethod
     def add_op2_data(cls, data, comment=''):
         seid, components, nids = data
-        #assert None not in components, 'Type=%s components=%s' % (self.type, components)
-        assert None not in nids, 'Type=%s nids=%s' % (self.type, nids)
+        #assert None not in components, 'Type=%s components=%s' % (cls.type, components)
+        assert None not in nids, 'Type=%s nids=%s' % (cls.type, nids)
         assert -1 not in nids, 'nids=%s' % (nids.tolist())
         assert 0 not in nids, 'nids=%s' % (nids.tolist())
         return cls(seid, components, nids, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -471,7 +476,7 @@ class SuperABQSet1(Set):
         msg = ' which is required by %s seid=%s' % (self.type, self.seid)
         self.ids_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.ids = self.node_ids
         self.ids_ref = None
 
@@ -596,7 +601,7 @@ class SET1(Set):
     +======+========+========+=====+======+=====+=====+======+=====+
     | SET1 |  SID   |   ID1  | ID2 | ID3  | ID4 | ID5 | ID6  | ID7 |
     +------+--------+--------+-----+------+-----+-----+------+-----+
-    |      |  ID8   | -etc.- |     |      |     |     |      |     |
+    |      |  ID8   |  etc.  |     |      |     |     |      |     |
     +------+--------+--------+-----+------+-----+-----+------+-----+
     | SET1 |   3    |   31   | 62  |  93  | 124 | 16  |  17  | 18  |
     +------+--------+--------+-----+------+-----+-----+------+-----+
@@ -644,7 +649,7 @@ class SET1(Set):
         is_skin = False
         i = 0
         if len(ids) > 0:
-            if isinstance(ids[0], string_types) and ids[0] == 'SKIN':
+            if isinstance(ids[0], str) and ids[0] == 'SKIN':
                 is_skin = True
                 i += 1
         else:
@@ -711,7 +716,7 @@ class SET1(Set):
         """
         self.xref_type = xref_type
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         skin = []
         if self.is_skin:
             skin = ['SKIN']
@@ -875,7 +880,7 @@ class SET3(Set):
             msg += print_card_8(['SET3', self.sid, self.desc] + ids)
         return msg
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         return str(self)
 
 class SESET(SetSuper):
@@ -934,10 +939,10 @@ class SESET(SetSuper):
             cards.append(card)
         return ''.join(cards)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         pass
 
 
@@ -1048,7 +1053,7 @@ class RADSET(Set):  # not integrated
     +========+==========+==========+==========+==========+==========+==========+==========+
     | RADSET | ICAVITY1 | ICAVITY2 | ICAVITY3 | ICAVITY4 | ICAVITY5 | ICAVITY6 | ICAVITY7 |
     +--------+----------+----------+----------+----------+----------+----------+----------+
-    |        | ICAVITY8 | ICAVITY9 | -etc.-   |          |          |          |          |
+    |        | ICAVITY8 | ICAVITY9 |  etc.    |          |          |          |          |
     +--------+----------+----------+----------+----------+----------+----------+----------+
     """
     type = 'RADSET'
@@ -1075,9 +1080,8 @@ class RADSET(Set):  # not integrated
         comment : str; default=''
             a comment for the card
         """
-        seid = integer(card, 1, 'seid')
-        ids = fields(integer_or_string, card, 'ID', i=2, j=len(card))
-        return RADSET(seid, ids, comment=comment)
+        ids = fields(integer_or_string, card, 'Cavity_', i=1, j=len(card))
+        return RADSET(ids, comment=comment)
 
     def add_radset(self, radset):
         self.ids += radset.ids

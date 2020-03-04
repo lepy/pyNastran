@@ -1,7 +1,5 @@
-from __future__ import print_function
 import os
 import sys
-from six import iteritems, PY2
 
 import pyNastran
 from pyNastran.utils.dev import get_files_of_type
@@ -21,6 +19,9 @@ def get_failed_files(filename):
 
 
 def parse_skipped_cards(fname):
+    """
+    An outdated method to read the log file created by this script to
+    determine what was skipped."""
     with open(fname, 'r') as skip_file:
         lines = skip_file.readlines()
 
@@ -28,28 +29,28 @@ def parse_skipped_cards(fname):
     for line in lines:
         if 'OES' in line[0:3]:
             (fore, aft) = line.strip().split('->')
-            (oes, form, element_type_num) = fore.strip().split(' ')
-            (element_type, etype) = element_type_num.strip().split('=')
+            (unused_oes, form, element_type_num) = fore.strip().split(' ')
+            (unused_element_type, etype) = element_type_num.strip().split('=')
             (msg, fpath) = aft.strip().split('-')
             #print("fpath=%r" % fpath)
             fpath = fpath.lstrip()[6:]
             ename = msg.split(' ')[0]
-            #print "eName=%s eType=%s form=%s fpath=|%s|" %(ename, etype, form, fpath)
+            #print "eName=%s eType=%s form=%s fpath=%r" % (ename, etype, form, fpath)
             key = (ename, etype, form)
             if key not in results:
                 results[key] = fpath
 
     files_to_analyze = []
-    for key, value in sorted(iteritems(results)):
+    for key, value in sorted(results.items()):
         files_to_analyze.append(value)
 
-    with open('new_elements.in', 'wb') as new_elements_file:
-        for fname in files_to_analyze:
-            new_elements_file.write(fname + '\n')
+    with open('new_elements.in', 'w') as new_elements_file:
+        for file_to_analyze in files_to_analyze:
+            new_elements_file.write(file_to_analyze + '\n')
     return files_to_analyze
 
 
-def get_all_files(folders_file, file_type):
+def get_all_files(folders_file, file_type, max_size=4.2):
     """
     Gets all the files in the folder and subfolders.  Ignores missing folders.
 
@@ -59,14 +60,16 @@ def get_all_files(folders_file, file_type):
         path to the file with a list of folders
     file_type : str
         a file extension
+    max_size : float; default=4.2
+        size in MB for max file size
 
     Returns
     -------
     filenames : List[str]
         a series of filenames that were found
     """
-    with open(folders_file, 'r') as f:
-        lines = f.readlines()
+    with open(folders_file, 'r') as file_obj:
+        lines = file_obj.readlines()
 
     files2 = []
     for line in lines:
@@ -77,7 +80,7 @@ def get_all_files(folders_file, file_type):
             # "C:\Program Files\Siemens\NX 12.0\NXNASTRAN\nxn12\nast"
             line = line.strip('"')
             pthi = line.split('\\')
-            pth = os.path.join(*pthi)
+            unused_pth = os.path.join(*pthi)
             move_dir = os.path.join(line)
         else:
             # C:\MSC.Software\MSC.Nastran\msc20051\nast\doc
@@ -89,34 +92,36 @@ def get_all_files(folders_file, file_type):
                 continue
             print("move_dir = %s" % move_dir)
             #assert os.path.exists(move_dir), '%s doesnt exist' % move_dir
-            files_in_dir = get_files_of_type(move_dir, file_type, max_size=4.2)
+            files_in_dir = get_files_of_type(move_dir, file_type, max_size=max_size)
             files2 += files_in_dir
             #print('nfiles = %s/%s' % (len(files_in_dir), len(files2)))
     #print('nfiles = %s' % len(files2))
     return files2
 
-def run(regenerate=True, make_geom=False, write_bdf=False, skip_dataframe=False,
-        save_cases=True, debug=False, write_f06=True, compare=True, short_stats=False):
+def run(regenerate=True, make_geom=False, write_bdf=False, build_pandas=True,
+        xref_safe=False,
+        save_cases=True, debug=False, write_f06=True, write_op2=False,
+        compare=True, short_stats=False, write_hdf5=True):
     # works
     files = get_files_of_type('tests', '.op2')
 
-    folders_file = os.path.join(PKG_PATH, 'bdf', 'test', 'tests', 'foldersRead.txt')
+    folders_file1 = os.path.join(PKG_PATH, 'bdf', 'test', 'tests', 'foldersRead.txt')
+    folders_file2 = os.path.join(PKG_PATH, 'op2', 'test', 'folders_read.txt')
 
-    isubcases = []
-    write_op2 = False
+    unused_isubcases = []
     binary_debug = [True, False]  # catch any errors
     quiet = True
 
-    delete_f06 = True
     stop_on_failure = False
     get_skip_cards = False
 
-
+    max_size = 4000. # MB
     failed_cases_filename = 'failed_cases%s%s.in' % (sys.version_info[:2])
     if get_skip_cards:
         files2 = parse_skipped_cards('skipped_cards.out')
-    elif regenerate:
-        files2 = get_all_files(folders_file, '.op2')
+    elif regenerate or not os.path.exists(failed_cases_filename):
+        files2 = get_all_files(folders_file1, '.op2', max_size=max_size)
+        files2 = get_all_files(folders_file2, '.op2', max_size=max_size)
         files2 += files
         assert len(files2) > 0, files2
     else:
@@ -125,16 +130,20 @@ def run(regenerate=True, make_geom=False, write_bdf=False, skip_dataframe=False,
     assert len(files2) > 0, files2
     files = list(set(files2))
     files.sort()
+    files = [filename for filename in files if '.test_op2.' not in filename]
 
     skip_files = []
     #skip_files = ['nltrot99.op2', 'rot12901.op2', 'plan20s.op2'] # giant
 
     nstart = 0
     nstop = 20000
-    try:
+    if os.path.exists('skipped_cards.out'):
         os.remove('skipped_cards.out')
-    except:
-        pass
+
+    #try:
+    #os.remove('skipped_cards.out')
+    #except F:
+        #pass
 
     print("nfiles = %s" % len(files))
     import time
@@ -142,20 +151,18 @@ def run(regenerate=True, make_geom=False, write_bdf=False, skip_dataframe=False,
 
     from pyNastran.op2.test.test_op2 import run_lots_of_files
     failed_files = run_lots_of_files(files, make_geom=make_geom, write_bdf=write_bdf,
-                                     write_f06=write_f06, delete_f06=delete_f06,
-                                     skip_dataframe=skip_dataframe,
-                                     write_op2=write_op2, debug=debug,
+                                     xref_safe=xref_safe,
+                                     write_f06=write_f06, delete_f06=True,
+                                     write_op2=write_op2, delete_op2=True,
+                                     write_hdf5=write_hdf5, delete_hdf5=True,
+                                     build_pandas=build_pandas,
+                                     debug=debug,
                                      skip_files=skip_files, stop_on_failure=stop_on_failure,
                                      nstart=nstart, nstop=nstop, binary_debug=binary_debug,
                                      compare=compare, short_stats=short_stats,
                                      quiet=quiet, dev=True)
     if save_cases:
-        if PY2:
-            write = 'wb'
-        else:
-            write = 'w'
-
-        with open(failed_cases_filename, write) as failed_cases_file:
+        with open(failed_cases_filename, 'w') as failed_cases_file:
             for op2file in failed_files:
                 failed_cases_file.write('%s\n' % op2file)
 
@@ -179,11 +186,14 @@ def main():
     from docopt import docopt
     ver = str(pyNastran.__version__)
 
-    msg = "Usage:\n"
+    msg = "Usage:  "
     #is_release = False
-    msg += "op2_test [-r] [-s] [-c] [-u] [-t] [-g] [-n] [-f] [-d] [-b] [--skip_dataframe]\n"
-    msg += "  op2_test -h | --help\n"
-    msg += "  op2_test -v | --version\n"
+    if 'dev' in ver:
+        msg += "op2_test [-r] [-s] [-c] [-u] [-t] [-g] [-n] [-f] [-o] [-h] [-d] [-b] [--safe] [--skip_dataframe]\n"
+    else:
+        msg += "op2_test [-r] [-s] [-c] [-u] [-t] [-g] [-n] [-f] [-h] [-d] [-b] [--safe] [--skip_dataframe]\n"
+    msg += "        op2_test -h | --help\n"
+    msg += "        op2_test -v | --version\n"
     msg += "\n"
     msg += "Tests to see if an OP2 will work with pyNastran %s.\n" % ver
     msg += "\n"
@@ -199,8 +209,12 @@ def main():
     # n is for NAS
     msg += "  -n, --write_bdf        Writes the bdf to fem.test_op2.bdf (default=False)\n"
     msg += "  -f, --write_f06        Writes the f06 to fem.test_op2.f06\n"
+    if 'dev' in ver:
+        msg += "  -o, --write_op2        Writes the op2 to fem.test_op2.op2\n"
+    msg += "  -h, --write_hdf5       Writes the hdf5 to fem.test_op2.h5\n"
     msg += "  --skip_dataframe       Disables pandas dataframe building; [default: False]\n"
     msg += "  -s, --save_cases       Disables saving of the cases (default=False)\n"
+    msg += "  --safe                 Safe cross-references BDF (default=False)\n"
     #msg += "  -z, --is_mag_phase    F06 Writer writes Magnitude/Phase instead of\n"
     #msg += "                        Real/Imaginary (still stores Real/Imag); [default: False]\n"
     #msg += "  -s <sub>, --subcase   Specify one or more subcases to parse; (e.g. 2_5)\n"
@@ -210,18 +224,25 @@ def main():
 
     data = docopt(msg, version=ver)
     debug = data['--debug']
-    binary_debug = data['--binary_debug']
+    #binary_debug = data['--binary_debug']
     regenerate = data['--regenerate']
     make_geom = data['--geometry']
     write_bdf = data['--write_bdf']
     write_f06 = data['--write_f06']
+    write_op2 = False
+    if 'dev' in ver:
+        write_op2 = data['--write_op2']
+    write_hdf5 = data['--write_hdf5']
     save_cases = not data['--save_cases']
     short_stats = data['--short_stats']
     compare = not data['--disablecompare']
-    skip_dataframe = data['--skip_dataframe']
+    build_pandas = not data['--skip_dataframe']
+    xref_safe = data['--safe']
     run(regenerate=regenerate, make_geom=make_geom, write_bdf=write_bdf,
-        save_cases=save_cases, write_f06=write_f06, short_stats=short_stats,
-        skip_dataframe=skip_dataframe, compare=compare, debug=debug)
+        xref_safe=xref_safe,
+        save_cases=save_cases, write_f06=write_f06, write_op2=write_op2,
+        write_hdf5=write_hdf5, short_stats=short_stats,
+        build_pandas=build_pandas, compare=compare, debug=debug)
 
 if __name__ == '__main__':
     main()

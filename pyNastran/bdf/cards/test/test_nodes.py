@@ -1,11 +1,65 @@
-from __future__ import print_function, unicode_literals
+"""tests nodes.py"""
 import unittest
 
-from pyNastran.bdf.bdf import BDFCard
+import numpy as np
+from pyNastran.bdf.bdf import BDF, BDFCard
 from pyNastran.bdf.cards.nodes import GRID, SPOINTs as SPOINT
 
 class TestNodes(unittest.TestCase):
+    def test_point(self):
+        """tests POINT"""
+        model = BDF(debug=False)
+        card_lines = ['POINT', 10]
+        model.add_card(card_lines, 'POINT', comment='point')
+        point = model.points[10]
+        point.raw_fields()
+        point.write_card(size=8)
+        point.write_card(size=16, is_double=False)
+        point.write_card(size=16, is_double=True)
+        model.validate()
+
+    def test_epoint(self):
+        """tests EPOINT"""
+        model = BDF(debug=False)
+        card_lines = ['EPOINT', 10]
+        model.add_card(card_lines, 'EPOINT', comment='point')
+        epoint = model.epoints[10]
+        epoint.raw_fields()
+        epoint.write_card(size=8)
+        epoint.write_card(size=16, is_double=False)
+        epoint.write_card(size=16, is_double=True)
+        model.validate()
+
+    def test_node_spoint_epoint(self):
+        """tests _get_npoints_nids_allnids"""
+        model = BDF(debug=False)
+        model.add_grid(3, [1., 2., 3.])
+        model.add_spoint(12, comment='spoint')
+        model.add_epoint(10, comment='epoint')
+        npoints, nids, all_nodes = model._get_npoints_nids_allnids()
+        assert npoints == 3, npoints
+        assert np.array_equal(nids, [3]), nids
+        assert np.array_equal(all_nodes, [3, 12, 10]), all_nodes
+
+    def test_seqgp(self):
+        """tests SEQGP"""
+        model = BDF(debug=True)
+        card_lines = ['SEQGP', 10, 20]
+        model.add_card(card_lines, 'SEQGP', comment='seqgp', is_list=True, has_none=True)
+        model.get_bdf_stats()
+        seqgp = model.seqgp
+        seqgp.raw_fields()
+        seqgp.write_card(size=8)
+        seqgp.write_card(size=16, is_double=False)
+        seqgp.write_card(size=16, is_double=True)
+
+        nids = [42]
+        seqids = [32.]
+        model.add_seqgp(nids, seqids, comment='seqgp')
+        model.validate()
+
     def test_grid_01(self):
+        """tests GRID"""
         nid = 1
         cp = 2
         cd = 0
@@ -21,9 +75,10 @@ class TestNodes(unittest.TestCase):
         #print(msg)
         msg = n1.write_card(size=16, is_double=True)
         #print(msg)
-        if 0:
-            msg = n1.write_card(size=8)
-            #print('%r' % msg)
+
+        msg = n1.write_card(size=8)
+        #print('%r' % msg)
+        if 0:  # pragma: no cover
             # small field
             self.assertEqual(msg, 'GRID           1       2      0.      0.      0.                        \n')
             msg = n1.write_card(size=16)
@@ -31,9 +86,9 @@ class TestNodes(unittest.TestCase):
             # large field
             card = ('GRID*                  1               2             .-0             .-0\n'
                     '*                    .-0                                                \n')
-            print('%r' % msg)
+            #print('%r' % msg)
             ref = 'ERROR\n'
-            if card != msg:
+            if card != msg:  # pragma: no cover
                 scard = card.split('\n')
                 smsg = msg.split('\n')
                 i = 0
@@ -47,6 +102,7 @@ class TestNodes(unittest.TestCase):
             self.assertEqual(msg, card), ref
 
     def test_grid_02(self):
+        """tests GRID"""
         nid = 1
         cp = 2
         cd = 0
@@ -87,6 +143,7 @@ class TestNodes(unittest.TestCase):
 
 
     def test_spoint_01(self):
+        """tests SPOINT"""
         #      12345678 2345678 2345678 2345678 2345678 2345678
         msg = 'SPOINT         1       3       5\n'
         card = BDFCard(['SPOINT', 1, 3, 5])
@@ -133,10 +190,9 @@ class TestNodes(unittest.TestCase):
         g = GRID(4, [0., 0., 0.])
         s = SPOINT(4)
         import time
-        import six
 
         time0 = time.time()
-        for i in six.moves.range(5000000):
+        for unused_i in range(5000000):
             if g.type == 'GRID':
                 pass
             if s.type == 'GRID':
@@ -144,7 +200,7 @@ class TestNodes(unittest.TestCase):
         dt_type = time.time() - time0
 
         time1 = time.time()
-        for i in six.moves.range(5000000):
+        for unused_i in range(5000000):
             if isinstance(g, GRID):
                 pass
             if isinstance(s, GRID):

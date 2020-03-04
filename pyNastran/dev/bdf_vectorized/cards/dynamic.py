@@ -14,15 +14,13 @@ All dynamic control cards are defined in this file.  This includes:
  * TSTEPNL
 
 All cards are BaseCard objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from math import log, exp, ceil
-from six.moves import zip, range
 import numpy as np
 from numpy import unique, hstack
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -31,6 +29,8 @@ from pyNastran.bdf.bdf_interface.assign_type import (
 )
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class DELAY(BaseCard):
@@ -95,7 +95,7 @@ class DELAY(BaseCard):
     def get_delay_at_freq(self, freq):
         return self.nodes, self.components, self.delays
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #"""
         #Cross links the card so referenced cards can be extracted directly
 
@@ -136,7 +136,7 @@ class DELAY(BaseCard):
             list_fields += [nidi, comp, delay]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
         if size == 8:
@@ -201,7 +201,7 @@ class DPHASE(BaseCard):
         self.components += dphase.components
         self.phase_leads += dphase.phase_leads
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #"""
         #Cross links the card so referenced cards can be extracted directly
 
@@ -242,7 +242,7 @@ class DPHASE(BaseCard):
             list_fields += [nidi, comp, delay]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
         if size == 8:
@@ -319,7 +319,7 @@ class FREQ(BaseCard):
         list_fields = ['FREQ', self.sid] + list(self.freqs)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -374,7 +374,7 @@ class FREQ1(FREQ):
         assert len(card) <= 5, 'len(FREQ card) = %i\ncard=%s' % (len(card), card)
         return FREQ1(sid, f1, df, ndf, comment=comment)
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -470,7 +470,7 @@ class FREQ3(FREQ):
     def raw_fields(self):
         return ['FREQ3', self.sid, self.f1, self.f2, self.Type, self.nef, self.cluster]
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -532,7 +532,7 @@ class FREQ4(FREQ):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -547,7 +547,7 @@ class FREQ4(FREQ):
             # self.comment = comment
         #raise NotImplementedError()
 
-    #def write_card(self, size=8, is_double=False):
+    #def write_card(self, size: int=8, is_double: bool=False) -> str:
         #card = self.repr_fields()
         #if size == 8:
             #return self.comment + print_card_8(card)
@@ -676,6 +676,8 @@ class NLPARM(BaseCard):
             kmethod = 'ITER'
         elif kmethod == 4:
             kmethod = 'SEMI'
+        elif kmethod == 3:
+            kmethod = 'ADAPT'
         else:
             msg = 'nlparm_id=%s kmethod=%r data=%s' % (nlparm_id, kmethod, data)
             raise NotImplementedError(msg)
@@ -747,7 +749,7 @@ class NLPARM(BaseCard):
                        rtol_b]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card) # having trouble with double precision...
@@ -801,7 +803,7 @@ class NLPCI(BaseCard):
         #minalr = set_blank_if_default(self.minalr, 0.25)
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -818,7 +820,7 @@ class TF(BaseCard):
     +====+=====+=====+======+======+======+========+====+====+
     | TF | SID | GD  |  CD  |  B0  |  B1  |   B2   |    |    |
     +----+-----+-----+------+------+------+--------+----+----+
-    |    | G_1 | C_1 | A0_1 | A1_1 | A2_1 | -etc.- |    |    |
+    |    | G_1 | C_1 | A0_1 | A1_1 | A2_1 |  etc.  |    |    |
     +----+-----+-----+------+------+------+--------+----+----+
 
     """
@@ -840,7 +842,7 @@ class TF(BaseCard):
         pass
         #assert len(self.grids1) > 0, 'ngrids1=%s\n%s' % (len(self.grids1), str(self))
 
-    #def cross_reference(self, model):
+    #def cross_reference(self, model: BDF) -> None:
         #pass
 
     @classmethod
@@ -891,7 +893,7 @@ class TF(BaseCard):
             list_fields += [grid, c, a0, a1, a2, None, None, None]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         # double precision?
         card = self.repr_fields()
         if size == 8:
@@ -993,7 +995,7 @@ class TSTEP(BaseCard):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1284,7 +1286,7 @@ class TSTEPNL(BaseCard):
                        max_r, utol, rtol_b, self.min_iter]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

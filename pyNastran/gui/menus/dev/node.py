@@ -5,11 +5,9 @@ https://wiki.python.org/moin/PyQt/Distinguishing%20between%20click%20and%20doubl
 http://www.saltycrane.com/blog/2007/12/pyqt-43-qtableview-qabstracttablemodel/
 http://stackoverflow.com/questions/12152060/how-does-the-keypressevent-method-work-in-this-program
 """
-from __future__ import print_function
-#from PyQt4 import QtCore, QtGui
 from pyNastran.gui.gui_objects.alt_geometry_storage import AltGeometry
 from pyNastran.gui.menus.manage_actors import Model, SingleChoiceQTableView
-from pyNastran.gui.qt_version import qt_version
+from pyNastran.gui.qt_version import qt_int as qt_version
 
 from qtpy import QtCore#, QtGui
 from qtpy.QtGui import QColor, QPalette
@@ -79,7 +77,7 @@ class EditNodeProperties(QDialog):
         table_model = Model(items, header_labels, self)
         view = SingleChoiceQTableView(self) #Call your custom QTableView here
         view.setModel(table_model)
-        if qt_version in [4, 'pyside']:
+        if qt_version == 4:
             view.horizontalHeader().setResizeMode(QHeaderView.Stretch)
         else:
             view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -332,6 +330,7 @@ class EditNodeProperties(QDialog):
         self.setLayout(vbox)
 
     def set_connections(self):
+        """creates the actions for the menu"""
         if qt_version == 4:
             self.connect(self.opacity_edit, QtCore.SIGNAL('clicked()'), self.on_opacity)
             self.connect(self.point_size, QtCore.SIGNAL('clicked()'), self.on_point_size)
@@ -459,16 +458,6 @@ class EditNodeProperties(QDialog):
         #self.name_edit.setText(str(self._default_name))
         #self.name_edit.setStyleSheet("QLineEdit{background: white;}")
 
-    #def check_float(self, cell):
-        #text = cell.text()
-        #try:
-            #value = eval_float_from_string(text)
-            #cell.setStyleSheet("QLineEdit{background: white;}")
-            #return value, True
-        #except ValueError:
-            #cell.setStyleSheet("QLineEdit{background: red;}")
-            #return None, False
-
     #def check_name(self, cell):
         #text = str(cell.text()).strip()
         #if len(text):
@@ -488,7 +477,7 @@ class EditNodeProperties(QDialog):
         old_obj.is_visible = self.checkbox_show.isChecked()
         return True
         #name_value, flag0 = self.check_name(self.name_edit)
-        #ox_value, flag1 = self.check_float(self.transparency_edit)
+        #ox_value, flag1 = check_float(self.transparency_edit)
         #if flag0 and flag1:
             #self.out_data['clicked_ok'] = True
             #return True
@@ -511,7 +500,7 @@ class EditNodeProperties(QDialog):
         self.close()
 
 
-def main():
+def main():  # pragma: no cover
     # kills the program when you hit Cntl+C from the command line
     # doesn't save the current state as presumably there's been an error
     import signal
@@ -554,5 +543,5 @@ def main():
     # Enter the main loop
     app.exec_()
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

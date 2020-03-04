@@ -2,15 +2,17 @@
 defines:
     * nids_close = find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max, tol)
     * ieq = find_closest_nodes_index(nodes_xyz, xyz_compare, neq_max, tol)
+
 """
-from __future__ import print_function
 from itertools import count
+from typing import List, Optional
 import numpy as np
 
 from pyNastran.bdf.mesh_utils.bdf_equivalence import (
     _get_tree)
 
 def find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max=1, tol=None, msg=''):
+    # type: (np.ndarray, np.ndarray, np.ndarray, int, Optional[float], str) -> np.ndarray
     """
     Finds the closest nodes to an arbitrary set of xyz points
 
@@ -34,6 +36,7 @@ def find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max=1, tol=None, msg=''
     -------
     nids_close: (Ncompare, ) int ndarray
         the close node ids
+
     """
     if not isinstance(neq_max, int):
         msgi = 'neq_max=%r must be an int; type=%s\n%s' % (
@@ -54,6 +57,9 @@ def find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max=1, tol=None, msg=''
     try:
         nids_out = nids[ieq]
     except IndexError:
+        # if you get a crash while trying to create the error message
+        # check to see if your nodes are really far from each other
+        #
         nnids = len(nids)
         msgi = 'Cannot find:\n'
         for i, ieqi, nid in zip(count(), ieq, nids):
@@ -86,6 +92,7 @@ def find_closest_nodes_index(nodes_xyz, xyz_compare, neq_max, tol, msg=''):
     -------
     slots : (Ncompare, ) int ndarray
         the indices of the close nodes corresponding to nodes_xyz
+
     """
     #nodes_xyz, model, nids, inew = _eq_nodes_setup(
         #bdf_filename, tol, renumber_nodes=renumber_nodes,
@@ -96,6 +103,7 @@ def find_closest_nodes_index(nodes_xyz, xyz_compare, neq_max, tol, msg=''):
 
 
 def _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol, neq_max=4, msg=''):
+    # type: (np.ndarray, np.ndarray, float, int, str) -> (Any, np.ndarray, np.ndarray)
     """
     helper function for `bdf_equivalence_nodes`
 
@@ -114,7 +122,7 @@ def _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol, neq_max=4, msg=''):
 
     Returns
     -------
-    kdt : cKDTree() or KDTree()
+    kdt : cKDTree()
         the kdtree object
     ieq : int ndarray
         The indices of nodes_xyz where the nodes in xyz_compare are close???
@@ -130,6 +138,7 @@ def _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol, neq_max=4, msg=''):
             (N, N) int ndarray
     msg : str; default=''
         error message
+
     """
     assert isinstance(xyz_compare, np.ndarray), type(xyz_compare)
     if nodes_xyz.shape[1] != xyz_compare.shape[1]:

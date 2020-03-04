@@ -1,8 +1,7 @@
-from __future__ import print_function
-from six.moves import zip, StringIO
+from io import StringIO
 from numpy import zeros, unique, where, searchsorted, asarray, array
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.bdf_interface.assign_type import (integer, integer_or_blank,
@@ -21,6 +20,7 @@ class PSOLID(Property):
         ----------
         model : BDF
            the BDF object
+
         """
         Property.__init__(self, model)
 
@@ -34,10 +34,10 @@ class PSOLID(Property):
             #: Material ID
             self.material_id = zeros(ncards, 'int32')
             self.cordm = zeros(ncards, 'int32')
-            self.integ = zeros(ncards, dtype='|S8')
-            self.stress = zeros(ncards, dtype='|S8')
-            self.isop = zeros(ncards, dtype='|S8')
-            self.fctn = zeros(ncards, dtype='|S8')
+            self.integ = zeros(ncards, dtype='|U8')
+            self.stress = zeros(ncards, dtype='|U8')
+            self.isop = zeros(ncards, dtype='|U8')
+            self.fctn = zeros(ncards, dtype='|U8')
 
     def add_card(self, card, comment=''):
         i = self.i

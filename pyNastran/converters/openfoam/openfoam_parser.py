@@ -1,5 +1,4 @@
 from collections import OrderedDict
-from six import iteritems
 
 
 def remove_c_comments(lines):
@@ -12,7 +11,7 @@ def remove_c_comments(lines):
 
     lines3 = []
     for line in lines2:
-        line3 = line.split('|')[0].split('/*')[0].split('\*')[0]
+        line3 = line.split('|')[0].split('/*')[0].split('\\*')[0]
         if line3.strip():
             lines3.append(line3)
     return lines3
@@ -171,7 +170,7 @@ def write_dict(openfoam_dict, nbase=0, baseword='name'):
 
     msg += '%s{\n' % baseword
     msg += '%s#keys (%s)=%s\n' % (space2, type(openfoam_dict), openfoam_dict.keys())
-    for key, value in sorted(iteritems(openfoam_dict)):
+    for key, value in sorted(openfoam_dict.items()):
         if isinstance(value, basestring):
             value = value.strip()
 
@@ -185,7 +184,7 @@ def write_dict(openfoam_dict, nbase=0, baseword='name'):
     msg += '%s{\n' % space1
     return msg
 
-class FoamFile(object):
+class FoamFile:
     def __init__(self, filename, log=None):
         self.filename = filename
         self.log = log

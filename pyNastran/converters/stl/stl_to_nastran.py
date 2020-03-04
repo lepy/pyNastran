@@ -1,9 +1,8 @@
-from __future__ import print_function
-from six import string_types
 from pyNastran.converters.stl.stl import STL
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
+
 
 def stl_to_nastran_filename(stl_filename, bdf_filename,
                             nnodes_offset=0, nelements_offset=0,
@@ -20,7 +19,7 @@ def stl_to_nastran(stl_filename, bdf_filename,
                    pid=100, mid=200,
                    size=8, is_double=False,
                    log=None):
-    if isinstance(stl_filename, string_types):
+    if isinstance(stl_filename, str):
         model = STL(log=log)
         model.read_stl(stl_filename)
     elif isinstance(stl_filename, STL):

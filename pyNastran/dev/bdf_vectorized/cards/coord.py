@@ -1,6 +1,3 @@
-from __future__ import print_function, unicode_literals
-from six import iteritems, itervalues
-from six.moves import zip
 from numpy import (array, searchsorted, zeros, full,
                    nan, where, vstack, dot, cross, degrees, radians, arctan2,
                    cos, sin, arccos, hstack, eye, ndarray, sqrt, unique,
@@ -83,7 +80,7 @@ class Coord(VectorizedCard):
 
             if max(self.coords) > self.model.max_int:
                 size = 16
-            for cid, coord in iteritems(self.coords):
+            for cid, coord in self.coords.items():
                 if cid > 0:
                     #if cid in self._comments:
                         #bdf_file.write(self._comments[cid])
@@ -173,7 +170,7 @@ class Coord(VectorizedCard):
         self.model.log.debug('nCOORDcards = %s' % ncards)
         #print('ncards coord = %s' % ncards)
         self.coord_id = zeros(ncards, dtype='int32')
-        self.Type = full(ncards, nan, dtype='|S1')  # R-CORD2R, S-CORD2S, C-CORD2C
+        self.Type = full(ncards, nan, dtype='|U1')  # R-CORD2R, S-CORD2S, C-CORD2C
         self.T = full((ncards, 3, 3), nan, dtype=float_fmt)
         self.origin = full((ncards, 3), nan, dtype=float_fmt)
         self.is_resolved = full(ncards, False, dtype='bool')
@@ -198,9 +195,12 @@ class Coord(VectorizedCard):
 
         self.n = 1
         ncards = 1
-        self.coords = {0: CORD2R(0),}
+        origin = [0., 0., 0.]
+        zaxis = [0., 0., 1.]
+        xzplane = [1., 0., 0.]
+        self.coords = {0: CORD2R(0, origin, zaxis, xzplane),}
         self.coord_id = zeros(ncards, dtype='int32')
-        self.Type = full(ncards, 'R', dtype='|S1')  # R-CORD2R, S-CORD2S, C-CORD2C
+        self.Type = full(ncards, 'R', dtype='|U1')  # R-CORD2R, S-CORD2S, C-CORD2C
 
         self.T = full((ncards, 3, 3), nan, dtype=float_fmt)
         self.T[0, :, :] = eye(3)
@@ -223,7 +223,7 @@ class Coord(VectorizedCard):
         self.allocate(ncards=ncoords)
         #print('coord_ids = %s' % self.coords.keys())
         #print('T = \n%s' % self.T)
-        for i, (cid, coord) in enumerate(sorted(iteritems(self.coords))):
+        for i, (cid, coord) in enumerate(sorted(self.coords.items())):
             #self.model.log.debug('i=%s cid=%s' % (i, cid))
             self.coord_id[i] = cid
             self.Type[i] = coord.Type
@@ -674,15 +674,6 @@ class Coord(VectorizedCard):
     def items(self):
         for i in range(self.n):
             yield i, self.__getitem__(i)
-
-    def iterkeys(self):
-        return self.keys()
-
-    def itervalues(self):
-        return self.values()
-
-    def iteritems(self):
-        return self.items()
 
 def _check_xyz_shape(xyz):
     xyz = asarray(xyz)

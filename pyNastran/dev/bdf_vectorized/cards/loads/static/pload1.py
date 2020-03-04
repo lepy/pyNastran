@@ -1,4 +1,3 @@
-from six.moves import zip
 from numpy import arange, array, zeros, searchsorted, unique
 
 from pyNastran.bdf.field_writer_8 import print_card_8
@@ -8,7 +7,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (integer,
 
 from pyNastran.dev.bdf_vectorized.cards.loads.vectorized_load import VectorizedLoad
 
-class PLOAD1(object):
+class PLOAD1:
     type = 'PLOAD1'
     valid_types = ['FX', 'FY', 'FZ', 'FXE', 'FYE', 'FZE',
                    'MX', 'MY', 'MZ', 'MXE', 'MYE', 'MZE']
@@ -74,8 +73,8 @@ class PLOAD1(object):
         float_fmt = self.model.float_fmt
         self.load_id = zeros(ncards, 'int32')
         self.element_id = zeros(ncards, 'int32')
-        self.Type = array([''] * ncards, '|S4')
-        self.scale = array([''] * ncards, '|S4')
+        self.Type = array([''] * ncards, '|U4')
+        self.scale = array([''] * ncards, '|U4')
         self.x1 = zeros(ncards, float_fmt)
         self.x2 = zeros(ncards, float_fmt)
         self.p1 = zeros(ncards, float_fmt)

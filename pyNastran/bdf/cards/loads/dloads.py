@@ -8,14 +8,13 @@ All dynamic loads are defined in this file.  This includes:
  * TLOAD2
  * RLOAD1
  * RLOAD2
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import iteritems, itervalues
-from six.moves import zip
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import numpy as np
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, double_or_blank, integer_string_or_blank,
@@ -24,6 +23,8 @@ from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
 from pyNastran.bdf.cards.loads.loads import DynamicLoad, LoadCombination, BaseCard
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class ACSRCE(BaseCard):
@@ -42,6 +43,15 @@ class ACSRCE(BaseCard):
 
     """
     type = 'ACSRCE'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        excite_id = 2
+        rho = 3.
+        b = 5.
+        return ACSRCE(sid, excite_id, rho, b,
+                      delay=0, dphase=0, power=0, comment='')
 
     def __init__(self, sid, excite_id, rho, b,
                  delay=0, dphase=0, power=0, comment=''):
@@ -115,7 +125,7 @@ class ACSRCE(BaseCard):
         return ACSRCE(sid, excite_id, rho, b,
                       delay=delay, dphase=dphase, power=power, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -129,7 +139,7 @@ class ACSRCE(BaseCard):
         # TODO: excite_id = DAREA, FBALOAD, SLOAD
         sloads_ref = {}
         lseqs_ref = {}
-        for load_id, loads in iteritems(model.loads):
+        for load_id, loads in model.loads.items():
             for load in loads:
                 if load.type == 'SLOAD':
                     #if load_id not in sloads_ref:
@@ -193,7 +203,8 @@ class ACSRCE(BaseCard):
         #self.load_ids = load_ids2
         #self.load_ids_ref = self.load_ids
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.power = self.Power()
         self.dphase = self.DPhase()
         self.delay = self.Delay()
@@ -213,16 +224,16 @@ class ACSRCE(BaseCard):
         #self.dphases_ref = None
         #self.delays_ref = None
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         return self.cross_reference(model)
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #self.load_ids = [self.LoadID(load) for load in self.load_ids]
         #del self.load_ids_ref
 
     def Delay(self):
         if self.delay_ref is not None:
-            return next(itervalues(self.delay_ref)).sid
+            return next(self.delay_ref.values()).sid
         elif self.delay in [0, 0.0]:
             return 0
         else:
@@ -230,7 +241,7 @@ class ACSRCE(BaseCard):
 
     def DPhase(self):
         if self.dphase_ref is not None:
-            return next(itervalues(self.delay_ref)).tid
+            return next(self.delay_ref.values()).tid
         elif self.dphase in [0, 0.0]:
             return 0
         else:
@@ -274,7 +285,7 @@ class ACSRCE(BaseCard):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         if size == 16:
             return self.comment + print_card_16(card)
@@ -293,6 +304,14 @@ class DLOAD(LoadCombination):
     """
     type = 'DLOAD'
 
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        scale = 1.
+        scale_factors = [1., 2.]
+        load_ids = [1, 2]
+        return DLOAD(sid, scale, scale_factors, load_ids, comment='')
+
     def __init__(self, sid, scale, scale_factors, load_ids, comment=''):
         """
         Creates a DLOAD card
@@ -309,12 +328,13 @@ class DLOAD(LoadCombination):
             Load set identification numbers of RLOAD1, RLOAD2, TLOAD1,
             TLOAD2, and ACSRCE entries. See Remarks 3 and 7. (Integer > 0)
         comment : str; default=''
-            the card comment
+            a comment for the card
+
         """
         LoadCombination.__init__(self, sid, scale, scale_factors, load_ids,
                                  comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -322,17 +342,18 @@ class DLOAD(LoadCombination):
         ----------
         model : BDF()
             the BDF object
+
         """
         dload_ids2 = []
-        msg = ' which is required by DLOAD=%s' % (self.sid)
+        msg = ', which is required by DLOAD=%s' % (self.sid)
         for dload_id in self.load_ids:
             dload_id2 = model.DLoad(dload_id, consider_dload_combinations=False, msg=msg)
             dload_ids2.append(dload_id2)
         self.load_ids_ref = dload_ids2
 
-    def safe_cross_reference(self, model, debug=True):
+    def safe_cross_reference(self, model, xref_errors, debug=True):
         dload_ids2 = []
-        msg = ' which is required by DLOAD=%s' % (self.sid)
+        msg = ', which is required by DLOAD=%s' % (self.sid)
         for dload_id in self.load_ids:
             try:
                 dload_id2 = model.DLoad(dload_id, consider_dload_combinations=False, msg=msg)
@@ -345,7 +366,8 @@ class DLOAD(LoadCombination):
             dload_ids2.append(dload_id2)
         self.load_ids_ref = dload_ids2
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.load_ids = [self.LoadID(dload) for dload in self.get_load_ids()]
         self.load_ids_ref = None
 
@@ -358,7 +380,7 @@ class DLOAD(LoadCombination):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         if size == 16:
             return self.comment + print_card_16(card)
@@ -385,10 +407,17 @@ class RLOAD1(DynamicLoad):
     NX allows DELAY and DPHASE to be floats
     """
     type = 'RLOAD1'
+    _properties = ['delay_id', 'dphase_id']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        excite_id = 1
+        return RLOAD1(sid, excite_id, delay=0, dphase=0, tc=0, td=0, Type='LOAD', comment='')
 
     def __init__(self, sid, excite_id, delay=0, dphase=0, tc=0, td=0, Type='LOAD', comment=''):
         """
-        Creates a RLOAD1 card, which defienes a frequency-dependent load
+        Creates an RLOAD1 card, which defienes a frequency-dependent load
         based on TABLEDs.
 
         Parameters
@@ -420,6 +449,7 @@ class RLOAD1(DynamicLoad):
             4, 5, 6, 7, 12, 13 - MSC only
         comment : str; default=''
             a comment for the card
+
         """
         DynamicLoad.__init__(self)
         if comment:
@@ -484,30 +514,7 @@ class RLOAD1(DynamicLoad):
         assert len(card) <= 8, 'len(RLOAD1 card) = %i\ncard=%s' % (len(card), card)
         return RLOAD1(sid, excite_id, delay, dphase, tc, td, Type, comment=comment)
 
-    #def _cross_reference_excite_id(self, model, msg):
-        #"""not quite done...not sure how to handle the very odd xref"""
-        #case_control = model.case_control_deck
-        #if case_control is not None:
-            ##print('cc = %r' % case_control)
-            ##print('asdf')
-            #for key, subcase in sorted(iteritems(model.case_control_deck.subcases)):
-                #print(subcase, type(subcase))
-                #if 'LOADSET' in subcase:
-                    #lseq_id = subcase['LOADSET'][0]
-                    #lseq = model.Load(lseq_id, consider_load_combinations=False, msg=msg)[0]
-                    #self.excite_id_ref = lseq
-                    ##self.dload_id = lseq.
-                #elif 'DLOAD' in subcase:
-                    ##dload_id = subcase['DLOAD'][0]
-                    #self.excite_id_ref = model.DAREA(self.excite_id, msg=msg)
-                #else:
-                    #msg = ('LOADSET and DLOAD are not found in the case control deck\n%s' %
-                           #str(model.case_control_deck))
-                    #raise RuntimeError(msg)
-        #else:
-            #self.excite_id_ref = model.DAREA(self.excite_id, msg=msg)
-
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -516,8 +523,8 @@ class RLOAD1(DynamicLoad):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RLOAD1 sid=%s' % (self.sid)
-        #self._cross_reference_excite_id(model, msg)
+        msg = ', which is required by RLOAD1 sid=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if isinstance(self.tc, integer_types) and self.tc:
             self.tc_ref = model.TableD(self.tc, msg=msg)
         if isinstance(self.td, integer_types) and self.td:
@@ -527,9 +534,9 @@ class RLOAD1(DynamicLoad):
         if isinstance(self.dphase, integer_types) and self.dphase > 0:
             self.dphase_ref = model.DPHASE(self.dphase, msg=msg)
 
-    def safe_cross_reference(self, model):
-        msg = ' which is required by RLOAD1 sid=%s' % (self.sid)
-        #self.excite_id_ref = model.DAREA(self.excite_id, msg=msg)
+    def safe_cross_reference(self, model, xref_errors, ):
+        msg = ', which is required by RLOAD1 sid=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if isinstance(self.tc, integer_types) and self.tc:
             self.tc_ref = model.TableD(self.tc, msg=msg)
         if isinstance(self.td, integer_types) and self.td:
@@ -539,7 +546,8 @@ class RLOAD1(DynamicLoad):
         if isinstance(self.dphase, integer_types) and self.dphase > 0:
             self.dphase_ref = model.DPHASE(self.dphase, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.tc = self.Tc()
         self.td = self.Td()
         self.delay = self.delay_id
@@ -635,13 +643,165 @@ class RLOAD1(DynamicLoad):
                        self.Tc(), self.Td(), Type]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         if is_double:
             return self.comment + print_card_double(card)
         return self.comment + print_card_16(card)
+
+
+def _cross_reference_excite_id_backup(self, model, msg):  # pragma: no cover
+    """not quite done...not sure how to handle the very odd xref
+
+    EXCITEID may refer to one or more static load entries (FORCE, PLOADi, GRAV, etc.).
+    """
+    excite_id_ref = []
+    case_control = model.case_control_deck
+    if case_control is not None:
+        #print('cc = %r' % case_control)
+        for key, subcase in sorted(model.case_control_deck.subcases.items()):
+            #print(subcase, type(subcase))
+            #if 'LOADSET' in subcase:
+                #lseq_id = subcase['LOADSET'][0]
+                #lseq = model.Load(lseq_id, consider_load_combinations=False, msg=msg)[0]
+                #self.excite_id_ref = lseq
+                ##self.dload_id = lseq.
+            #if 'DLOAD' in subcase:
+                if self.excite_id in model.loads:
+                    # FORCE, FORCE1, FORCE2, PLOAD4, GRAV
+                    # changes the magnitudes of the load, not the direction
+                    model.log.debug('excite_id load = %s' % self.excite_id)
+                    #print('  dloads =', list(model.dloads.keys()))
+                    #print('  dareas =', list(model.dareas.keys()))
+                    excite_id_ref += model.loads[self.excite_id]
+                if self.excite_id in model.dareas:
+                    model.log.debug('excite_id darea = %s' % self.excite_id)
+                    darea_ref = model.DAREA(self.excite_id, msg=msg)
+                    excite_id_ref.append(darea_ref)
+                if self.excite_id in model.dload_entries:
+                    # this is probably wrong...
+                    # it was added to pass TestLoads.test_loads_nonlinear_thermal1, but
+                    # I think QVECT should be in self.loads, not self.dload_entries...
+                    model.log.debug('excite_id dload_entries = %s' % self.excite_id)
+                    excite_id_ref += model.dload_entries
+                #  what about TEMPBC?
+            #else:
+                #msg = ('LOADSET and DLOAD are not found in the case control deck\n%s' %
+                       #str(model.case_control_deck))
+                #raise RuntimeError(msg)
+    #else:
+        #model.log.warning('could not find excite_id=%i for\n%s' % (self.excite_id, str(self)))
+        #self.excite_id_ref = model.DAREA(self.excite_id, msg=msg)
+    if len(excite_id_ref) == 0:
+        print('excite_id = %s' % self.excite_id)
+        print('  loads  =', list(model.loads.keys()))
+        print('  dareas =', list(model.dareas.keys()))
+        print('  dloads =', list(model.dloads.keys()))
+        print('  dload_entries =', list(model.dload_entries.keys()))
+        model.log.warning('could not find excite_id=%i for\n%s' % (self.excite_id, str(self)))
+        raise RuntimeError('could not find excite_id=%i for\n%s' % (self.excite_id, str(self)))
+
+def get_lseqs_by_excite_id(model, excite_id):
+    from collections import defaultdict
+
+    # get the lseqs that correspond to the correct EXCITE_ID id
+    lseq_sids = defaultdict(list)
+    for sid, loads in model.load_combinations.items():
+        for load in loads:
+            if load.type == 'LSEQ':
+                if excite_id == load.excite_id:
+                    #print(load)
+                    lseq_sids[sid].append(load)
+    #for sid, loads in lseqs.items():
+        #print(sid, loads)
+    return lseq_sids
+
+def _cross_reference_excite_id(self, model, msg):
+    """not quite done...not sure how to handle the very odd xref
+
+    EXCITEID may refer to one or more static load entries (FORCE, PLOADi, GRAV, etc.).
+    """
+    #print('*' * 80)
+    lseq_sids = get_lseqs_by_excite_id(model, self.excite_id)
+
+    # find all the LOADSETs in the model
+    # LOADSETs reference LSEQs by sid
+    valid_lseqs = []
+    if lseq_sids:
+        # get the sid for the LSEQ
+        case_control = model.case_control_deck
+        if case_control is not None:
+            #print('cc = %r' % case_control)
+            for key, subcase in sorted(model.case_control_deck.subcases.items()):
+                if 'LOADSET' in subcase:
+                    lseq_sid = subcase['LOADSET'][0]
+                    if lseq_sid in lseq_sids:
+                        model.log.debug('adding LOADSET = %i' % lseq_sid)
+                        valid_lseqs.append(lseq_sid)
+        if valid_lseqs:
+            valid_lseqs = list(set(valid_lseqs))
+            valid_lseqs.sort()
+            #assert len(valid_lseqs) == 1, 'valid_lseqs=%s' % valid_lseqs
+    #print('valid_lseqs =', valid_lseqs)
+    #  can Case Control LOADSET be substituded for Case Control DLOAD id?
+
+    excite_id_ref = []
+    if self.excite_id in model.loads:
+        # FORCE, FORCE1, FORCE2, PLOAD4, GRAV
+        # changes the magnitudes of the load, not the direction
+        model.log.debug('excite_id load = %s' % self.excite_id)
+        #print('  dloads =', list(model.dloads.keys()))
+        #print('  dareas =', list(model.dareas.keys()))
+        excite_id_ref += model.loads[self.excite_id]
+
+    if self.excite_id in model.dareas:
+        model.log.debug('excite_id darea = %s' % self.excite_id)
+        darea_ref = model.DAREA(self.excite_id, msg=msg)
+        excite_id_ref.append(darea_ref)
+
+    if self.excite_id in model.bcs:
+        # CONV, TEMPBC
+        model.log.debug('excite_id bcs = %s' % self.excite_id)
+        excite_id_ref = model.bcs[self.excite_id]
+
+    if self.excite_id in model.dload_entries:  #  this is probably wrong...
+        # this is probably wrong...
+        # it was added to pass TestLoads.test_loads_nonlinear_thermal1, but
+        # I think QVECT should be in self.loads, not self.dload_entries...
+        model.log.debug('excite_id dload_entries = %s' % self.excite_id)
+        excite_id_ref += model.dload_entries
+
+    if self.excite_id in model.load_combinations:  #  this should be right...
+        # C:\NASA\m4\formats\git\examples\move_tpl\nlstrs2.op2
+        model.log.debug('excite_id load_combinations = %s' % self.excite_id)
+        excite_id_ref = model.load_combinations[self.excite_id]
+
+    #  handles LSEQ
+    if valid_lseqs:
+        for lseq_sid in valid_lseqs:
+            excite_id_ref += lseq_sids[lseq_sid]
+
+    #  what about SPCD?
+
+    if len(excite_id_ref) == 0:
+        print(model.get_bdf_stats())
+        print('excite_id = %s' % self.excite_id)
+        print('  loads  =', list(model.loads.keys()))
+        print('  dareas =', list(model.dareas.keys()))
+        print('  bcs =', list(model.bcs.keys()))
+        print('  dloads =', list(model.dloads.keys()))
+        print('  dload_entries =', list(model.dload_entries.keys()))
+        print('  load_combinations =', list(model.load_combinations.keys())) #  what about LSEQ
+        if lseq_sids:
+            sids = list(lseq_sids.keys())
+            print('  lseq_excite_ids=%s; lseq_sids=%s; valid_lseqs=%s' % (
+                self.excite_id, sids, valid_lseqs))
+        else:
+            print('  lseq_sids = []')
+        model.log.warning('could not find excite_id=%i for\n%s' % (self.excite_id, str(self)))
+        raise RuntimeError('could not find excite_id=%i for\n%s' % (self.excite_id, str(self)))
 
 
 class RLOAD2(DynamicLoad):
@@ -663,11 +823,18 @@ class RLOAD2(DynamicLoad):
     NX allows DELAY and DPHASE to be floats
     """
     type = 'RLOAD2'
+    _properties = ['delay_id', 'dphase_id']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        excite_id = 1
+        return RLOAD2(sid, excite_id, delay=0, dphase=0, tb=0, tp=0, Type='LOAD', comment='')
 
     # P(f) = {A} * B(f) * e^(i*phi(f), + theta - 2*pi*f*tau)
     def __init__(self, sid, excite_id, delay=0, dphase=0, tb=0, tp=0, Type='LOAD', comment=''):
         """
-        Creates a RLOAD2 card, which defienes a frequency-dependent load
+        Creates a nRLOAD2 card, which defienes a frequency-dependent load
         based on TABLEDs.
 
         Parameters
@@ -705,6 +872,7 @@ class RLOAD2(DynamicLoad):
             4, 5, 6, 7, 12, 13 - MSC only
         comment : str; default=''
             a comment for the card
+
         """
         DynamicLoad.__init__(self)
         if comment:
@@ -822,7 +990,7 @@ class RLOAD2(DynamicLoad):
             raise
         return out
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -832,6 +1000,7 @@ class RLOAD2(DynamicLoad):
             the BDF object
         """
         msg = ', which is required by RLOAD2=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if isinstance(self.tb, integer_types) and self.tb:
             self.tb_ref = model.TableD(self.tb, msg=msg)
         if isinstance(self.tp, integer_types) and self.tp:
@@ -841,8 +1010,9 @@ class RLOAD2(DynamicLoad):
         if isinstance(self.dphase, integer_types) and self.dphase > 0:
             self.dphase_ref = model.DPHASE(self.dphase, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors, ):
         msg = ', which is required by RLOAD2=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if isinstance(self.tb, integer_types) and self.tb:
             self.tb_ref = model.TableD(self.tb, msg=msg)
         if isinstance(self.tp, integer_types) and self.tp:
@@ -852,7 +1022,8 @@ class RLOAD2(DynamicLoad):
         if isinstance(self.dphase, integer_types) and self.dphase > 0:
             self.dphase_ref = model.DPHASE(self.dphase, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.tb = self.Tb()
         self.tp = self.Tp()
         self.delay = self.delay_id
@@ -909,7 +1080,7 @@ class RLOAD2(DynamicLoad):
                        self.Tb(), self.Tp(), Type]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -946,6 +1117,14 @@ class TLOAD1(DynamicLoad):
     NX 11
     """
     type = 'TLOAD1'
+    _properties = ['delay_id']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        excite_id = 1
+        tid = 1
+        return TLOAD1(sid, excite_id, tid, delay=0, Type='LOAD', us0=0.0, vs0=0.0, comment='')
 
     def __init__(self, sid, excite_id, tid, delay=0, Type='LOAD',
                  us0=0.0, vs0=0.0, comment=''):
@@ -1063,7 +1242,7 @@ class TLOAD1(DynamicLoad):
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1072,14 +1251,16 @@ class TLOAD1(DynamicLoad):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by TLOAD1=%s' % (self.sid)
+        msg = ', which is required by TLOAD1=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if self.tid:
             self.tid_ref = model.TableD(self.tid, msg=msg)
         if isinstance(self.delay, integer_types) and self.delay > 0:
             self.delay_ref = model.DELAY(self.delay, msg=msg)
 
     def safe_cross_reference(self, model, debug=True):
-        msg = ' which is required by TLOAD1=%s' % (self.sid)
+        msg = ', which is required by TLOAD1=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if self.tid:
             #try:
             self.tid_ref = model.TableD(self.tid, msg=msg)
@@ -1087,7 +1268,8 @@ class TLOAD1(DynamicLoad):
         if isinstance(self.delay, integer_types) and self.delay > 0:
             self.delay_ref = model.DELAY(self.delay_id, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.tid = self.Tid()
         self.delay = self.delay_id
         self.tid_ref = None
@@ -1145,7 +1327,7 @@ class TLOAD1(DynamicLoad):
                        self.Tid(), us0, vs0]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1189,6 +1371,14 @@ class TLOAD2(DynamicLoad):
     NX 11
     """
     type = 'TLOAD2'
+    _properties = ['delay_id']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        excite_id = 1
+        return TLOAD2(sid, excite_id, delay=0, Type='LOAD', T1=0., T2=None,
+                      frequency=0., phase=0., c=0., b=0., us0=0., vs0=0., comment='')
 
     def __init__(self, sid, excite_id, delay=0, Type='LOAD', T1=0., T2=None,
                  frequency=0., phase=0., c=0., b=0., us0=0., vs0=0., comment=''):
@@ -1368,7 +1558,7 @@ class TLOAD2(DynamicLoad):
     def get_loads(self):
         return [self]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1377,18 +1567,21 @@ class TLOAD2(DynamicLoad):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by TLOAD2 sid=%s' % (self.sid)
+        msg = ', which is required by TLOAD2 sid=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if isinstance(self.delay, integer_types) and self.delay > 0:
             self.delay_ref = model.DELAY(self.delay_id, msg=msg)
         # TODO: excite_id
 
-    def safe_cross_reference(self, model, debug=True):
-        msg = ' which is required by TLOAD2 sid=%s' % (self.sid)
+    def safe_cross_reference(self, model, xref_errors, debug=True):
+        msg = ', which is required by TLOAD2 sid=%s' % (self.sid)
+        _cross_reference_excite_id(self, model, msg)
         if isinstance(self.delay, integer_types) and self.delay > 0:
             self.delay_ref = model.DELAY(self.delay_id, msg=msg)
         # TODO: excite_id
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.delay = self.delay_id
         self.delay_ref = None
 
@@ -1418,7 +1611,7 @@ class TLOAD2(DynamicLoad):
                        self.T1, self.T2, frequency, phase, c, b, us0, vs0]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

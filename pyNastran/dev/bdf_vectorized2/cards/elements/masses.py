@@ -1,14 +1,17 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8, set_blank_if_default
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class Masses(object):
+class Masses:
     """intializes the Masses"""
     def __init__(self, model):
         self.model = model
@@ -18,7 +21,7 @@ class Masses(object):
         #self.cmass2 = model.cmass2
         #self.cmass3 = model.cmass3
         #self.cmass4 = model.cmass4
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:
@@ -88,7 +91,7 @@ class Masses(object):
         return self.repr_indent(indent='')
 
 
-class RodElement(object):
+class RodElement:
     """base class for CONROD, CROD, and CTUBE"""
     card_name = ''
 
@@ -104,7 +107,7 @@ class RodElement(object):
             add_card = True
         return add_card
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 

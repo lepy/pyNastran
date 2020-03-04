@@ -7,17 +7,21 @@ All bush elements are defined in this file.  This includes:
  * CBUSH2D
 
 All bush elements are BushElement and Element objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+import numpy as np
+
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Element
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, integer_double_or_blank, double_or_blank,
     string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class BushElement(Element):
@@ -41,6 +45,19 @@ class BushElement(Element):
         """
         return [tuple(sorted(self.node_ids))]
 
+    #def Centroid(self):
+        ## same as below, but we ignore the 2nd point it it's None
+        #p = (self.nodes_ref[1].get_position() + self.nodes_ref[0].get_position()) / 2.
+
+        ##p = self.nodes_ref[0].get_position()
+        ##if self.nodes_ref[1] is not None:
+            ##p += self.nodes_ref[1].get_position()
+            ##p /= 2.
+        #return p
+
+    #def center_of_mass(self):
+        #return self.Centroid()
+
 class CBUSH(BushElement):
     """
     Generalized Spring-and-Damper Connection
@@ -53,13 +70,14 @@ class CBUSH(BushElement):
     +=======+=====+======+====+====+=======+====+====+=====+
     | CBUSH | EID | PID  | GA | GB | GO/X1 | X2 | X3 | CID |
     +-------+-----+------+----+----+-------+----+----+-----+
-    |       |  S  | OCID | S1 | S2 |  S3   |    |    |     |
+    |       |  S  | OCID | S1 | S2 |   S3  |    |    |     |
     +-------+-----+------+----+----+-------+----+----+-----+
     """
     type = 'CBUSH'
     _field_map = {
         1: 'eid', 2:'pid', 3:'ga', 4:'gb', 8:'cid', 9:'s', 10:'ocid'
     }
+    _properties = ['_field_map', ]
 
     def update_by_cp_name(self, cp_name, value):
         #if isinstance(pname_fid, int):
@@ -151,6 +169,9 @@ class CBUSH(BushElement):
             #: if OCID > 0.
         if si is None:
             si = [None, None, None]
+        if x is None:
+            x = [None, None, None]
+
         self.eid = eid
         self.pid = pid
         self.nodes = nids
@@ -161,9 +182,82 @@ class CBUSH(BushElement):
         self.ocid = ocid
         self.si = si
         self.nodes_ref = None
+        self.g0_ref = None
         self.pid_ref = None
         self.cid_ref = None
         self.ocid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        x = []
+        g0 = []
+        cid = []
+        s = []
+        ocid = []
+        si = []
+        nan = np.full(3, np.nan)
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+
+            if element.cid is None:
+                cid.append(-1)
+                g0i = element.g0
+                #print(g0i, element.x)
+                if g0i is not None:
+                    assert element.x[0] is None
+                    x.append(nan)
+                    g0.append(g0i)
+                else:
+                    #assert element.x[0] is not None, element.get_stats()
+                    if element.x[0] is None:
+                        x.append(nan)
+                    else:
+                        x.append(element.x)
+                    g0.append(-1)
+            else:
+                cid.append(element.cid)
+                g0i = element.g0
+                if g0i is not None:
+                    assert element.x[0] is None
+                    x.append(nan)
+                    g0.append(g0i)
+                else:
+                    if element.x[0] is None:
+                        x.append(nan)
+                    else:
+                        x.append(element.x)
+                    #assert element.x[0] is None, element.get_stats()
+                    #x.append(nan)
+                    g0.append(-1)
+
+            s.append(element.s)
+            ocid.append(element.ocid)
+            if element.si[0] is None:
+                si.append(nan)
+            else:
+                si.append(element.si)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('pid', data=pids)
+        #print('x =', x)
+        #print('g0 =', g0)
+        #print('cid =', cid)
+        h5_file.create_dataset('x', data=x)
+        h5_file.create_dataset('g0', data=g0)
+        h5_file.create_dataset('cid', data=cid)
+
+        h5_file.create_dataset('s', data=s)
+        h5_file.create_dataset('ocid', data=ocid)
+        #print('si =', si)
+        h5_file.create_dataset('si', data=si)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -266,6 +360,11 @@ class CBUSH(BushElement):
             return self.nodes_ref[1].nid
         return self.nodes[1]
 
+    def G0(self):
+        if self.g0_ref is not None:
+            return self.g0_ref.nid
+        return self.g0
+
     def OCid(self):
         if self.ocid_ref is not None:
             return self.ocid_ref.cid
@@ -276,7 +375,7 @@ class CBUSH(BushElement):
             return self.cid_ref.cid
         return self.cid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -285,39 +384,64 @@ class CBUSH(BushElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CBUSH eid=%s' % self.eid
+        msg = ', which is required by CBUSH eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
+        if self.g0 is not None:
+            self.g0_ref = model.Node(self.g0, msg=msg)
         if self.cid is not None:
             self.cid_ref = model.Coord(self.cid, msg=msg)
         if self.ocid is not None and self.ocid != -1:
             self.ocid_ref = model.Coord(self.ocid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CBUSH eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+        if self.g0 is not None:
+            self.g0_ref = model.EmptyNode(self.g0, msg=msg)
+        if self.cid is not None:
+            self.cid_ref = model.safe_coord(self.cid, self.eid, xref_errors, msg=msg)
+        if self.ocid is not None and self.ocid != -1:
+            self.ocid_ref = model.safe_coord(self.ocid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ga = self.Ga()
         self.pid = self.Pid()
         self.cid = self.Cid()
         self.gb = self.Gb()
+        self.g0 = self.G0()
         self.cid_ref = None
         self.ga_ref = None
         self.gb_ref = None
+        self.g0_ref = None
         self.pid_ref = None
         self.ocid_ref = None
 
-    def raw_fields(self):
+    def _get_x_g0(self):
         if self.g0 is not None:
-            x = [self.g0, None, None]
+            x = [self.G0(), None, None]
         else:
             x = self.x
+        return x
+
+    def raw_fields(self):
+        x = self._get_x_g0()
         list_fields = (['CBUSH', self.eid, self.Pid(), self.Ga(), self.Gb()] + x +
                        [self.Cid(), self.s, self.ocid] + self.si)
         return list_fields
 
     def repr_fields(self):
-        if self.g0 is not None:
-            x = [self.g0, None, None]
-        else:
-            x = self.x
+        x = self._get_x_g0()
 
         ocid = set_blank_if_default(self.OCid(), -1)
         s = set_blank_if_default(self.s, 0.5)
@@ -325,7 +449,7 @@ class CBUSH(BushElement):
                        x + [self.Cid(), s, ocid] + self.si)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -349,6 +473,26 @@ class CBUSH1D(BushElement):
         self.gb_ref = None
         self.cid_ref = None
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        cid = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+            cid.append(element.cid if element.cid is not None else -1)
+        #h5_file.create_dataset('_comment', data=comments)
+        #print('cid =', cid)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('cid', data=cid)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -379,7 +523,7 @@ class CBUSH1D(BushElement):
         #raise NotImplementedError(data)
         #return CBUSH1D(eid, pid, [ga, gb], cid, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -388,7 +532,7 @@ class CBUSH1D(BushElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CBUSH1D eid=%s' % self.eid
+        msg = ', which is required by CBUSH1D eid=%s' % self.eid
         self.ga_ref = model.Node(self.ga, msg=msg)
         if self.gb:
             self.gb_ref = model.Node(self.gb, msg=msg)
@@ -396,7 +540,25 @@ class CBUSH1D(BushElement):
         if self.cid is not None:
             self.cid_ref = model.Coord(self.cid)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CBUSH1D eid=%s' % self.eid
+        self.ga_ref = model.Node(self.ga, msg=msg)
+        if self.gb:
+            self.gb_ref = model.Node(self.gb, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+        if self.cid is not None:
+            self.cid_ref = model.safe_coord(self.cid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ga = self.Ga()
         self.gb = self.Gb()
         self.cid = self.Cid()
@@ -443,7 +605,7 @@ class CBUSH1D(BushElement):
                        self.Cid()]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -458,7 +620,7 @@ class CBUSH2D(BushElement):
         1: 'eid', 2:'pid', 3:'ga', 4:'gb', 5:'cid', 6:'plane', 7:'sptid',
     }
 
-    def __init__(self, eid, pid, nids, cid, plane, sptid, comment=''):
+    def __init__(self, eid, pid, nids, cid=0, plane='XY', sptid=None, comment=''):
         BushElement.__init__(self)
         if comment:
             self.comment = comment
@@ -500,6 +662,37 @@ class CBUSH2D(BushElement):
         assert len(card) <= 8, 'len(CBUSH2D card) = %i\ncard=%s' % (len(card), card)
         return CBUSH2D(eid, pid, [ga, gb], cid, plane, sptid, comment=comment)
 
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids, encoding='ascii'):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        cid = []
+        plane = []
+        sptid = []
+        #nan = np.full(3, np.nan)
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+            cid.append(element.cid)
+            plane.append(element.plane.encode(encoding))
+            sptidi = 0 if element.sptid is None else element.sptid
+            sptid.append(sptidi)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('pid', data=pids)
+        #print('x =', x)
+        #print('g0 =', g0)
+        #print('cid =', cid)
+        h5_file.create_dataset('cid', data=cid)
+        h5_file.create_dataset('plane', data=plane)
+        #print('si =', si)
+        h5_file.create_dataset('sptid', data=sptid)
+
     #@classmethod
     #def add_op2_data(cls, data, comment=''):
         #eid = data[0]
@@ -539,7 +732,7 @@ class CBUSH2D(BushElement):
     def node_ids(self):
         return [self.Ga(), self.Gb()]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -548,7 +741,7 @@ class CBUSH2D(BushElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CBUSH2D eid=%s' % self.eid
+        msg = ', which is required by CBUSH2D eid=%s' % self.eid
         self.ga_ref = model.Node(self.ga, msg=msg)
         self.gb_ref = model.Node(self.gb, msg=msg)
         self.pid_ref = model.Property(self.pid)
@@ -557,7 +750,24 @@ class CBUSH2D(BushElement):
         #if self.sptid is not None:
             #pass
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CBUSH2D eid=%s' % self.eid
+        self.ga_ref = model.Node(self.ga, msg=msg)
+        self.gb_ref = model.Node(self.gb, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+        if self.cid is not None:
+            self.cid_ref = model.safe_coord(self.cid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ga = self.Ga()
         self.gb = self.Gb()
         self.cid = self.Cid()
@@ -572,6 +782,6 @@ class CBUSH2D(BushElement):
                        self.Cid(), self.plane, self.sptid]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)

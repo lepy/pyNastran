@@ -6,15 +6,19 @@ All mass properties are defined in this file.  This includes:
  * PMASS
 
 All mass properties are PointProperty and Property objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types, string_types
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
 from pyNastran.bdf.cards.base_card import expand_thru_by, expand_thru, BaseCard, Property
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_string, double, double_or_blank, string)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+from pyNastran.utils.numpy_utils import integer_types, float_types
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class NSMx(Property):
@@ -28,7 +32,7 @@ class NSMx(Property):
     valid_properties = [
         'PSHELL', 'PCOMP', 'PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PBCOMP',
         'PROD', 'CONROD', 'PBEND', 'PSHEAR', 'PTUBE', 'PCONEAX', 'PRAC2D',
-        'ELEMENT',
+        'ELEMENT', 'PDUM8',
     ]
 
     def __init__(self, sid, nsm_type, pid_eid, value, comment=''):
@@ -60,8 +64,9 @@ class NSMx(Property):
         self.nsm_type = nsm_type
         self.id = pid_eid
         self.value = value
-        assert isinstance(pid_eid, int), pid_eid
-        assert isinstance(value, float), value
+        assert isinstance(pid_eid, integer_types), 'pid_eid=%s type=%s' % (pid_eid, type(pid_eid))
+        assert isinstance(value, float_types), 'value=%s type=%s' % (value, type(value))
+
         if self.nsm_type not in self.valid_properties:
             raise TypeError('nsm_type=%r must be in [%s]' % (
                 self.nsm_type, ', '.join(self.valid_properties)))
@@ -112,7 +117,7 @@ class NSMx(Property):
         value = data[3]
         return cls(sid, nsm_type, pid_eid, value, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     @property
@@ -132,7 +137,7 @@ class NSMx(Property):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -177,7 +182,7 @@ class NSM1x(Property):
 
         if isinstance(ids, integer_types):
             ids = [ids]
-        if isinstance(ids, string_types):
+        if isinstance(ids, str):
             assert ids == 'ALL', 'ids=%r is not ALL' % ids
             ids = [ids]
         else:
@@ -204,6 +209,7 @@ class NSM1x(Property):
     def Type(self):
         """gets the nsm_type"""
         return self.nsm_type
+
     @Type.setter
     def Type(self, nsm_type):
         """sets the nsm_type"""
@@ -230,18 +236,18 @@ class NSM1x(Property):
         _id = 1
         nfields = len(card)
         if nfields == 5:
-            value = integer_or_string(card, 4, 'ID_1')
-            if value != 'ALL' and not isinstance(value, int):
+            id1 = integer_or_string(card, 4, 'ID_1')
+            if id1 != 'ALL' and not isinstance(id1, int):
                 msg = ('*ID_1 = %r (field #4) on card must be an integer or ALL.\n'
-                       'card=%s' % (value, card))
+                       'card=%s' % (id1, card))
                 raise SyntaxError(msg)
-            ids = value
+            ids = id1
         else:
             # we'll handle expansion in the init
             ids = card[4:]
         return cls(sid, nsm_type, value, ids, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def raw_fields(self):
@@ -252,7 +258,7 @@ class NSM1x(Property):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -272,9 +278,19 @@ class NSM1(NSM1x):
     +------+-----+------+-------+-----+----+----+----+----+
     """
     type = 'NSM1'
-    def __init__(self, sid, nsm_type, pid_eid, value, comment=''):
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nsm_type = 'PSHELL'
+        pid_eid = 42
+        value = 1.
+        return NSM1(sid, nsm_type, value, pid_eid, comment='')
+
+    def __init__(self, sid, nsm_type, value, pid_eid, comment=''):
         """See ``NSM1x``"""
-        NSM1x.__init__(self, sid, nsm_type, pid_eid, value, comment='')
+        assert isinstance(value, float), 'NSM1; value=%r and must be a float' % (value)
+        NSM1x.__init__(self, sid, nsm_type, value, pid_eid, comment='')
 
 
 class NSM(NSMx):
@@ -288,6 +304,16 @@ class NSM(NSMx):
     +-----+-----+------+----+-------+----+-------+----+-------+
     """
     type = 'NSM'
+    _properties = ['ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nsm_type = 'PSHELL'
+        pid_eid = 42
+        value = 1.
+        return NSM(sid, nsm_type, pid_eid, value, comment='')
+
     def __init__(self, sid, nsm_type, pid_eid, value, comment=''):
         """See ``NSMx``"""
         NSMx.__init__(self, sid, nsm_type, pid_eid, value, comment='')
@@ -304,6 +330,16 @@ class NSML(NSMx):
     +------+-----+------+----+-------+----+-------+----+-------+
     """
     type = 'NSML'
+    _properties = ['ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nsm_type = 'PSHELL'
+        pid_eid = 42
+        value = 1.
+        return NSML(sid, nsm_type, pid_eid, value, comment='')
+
     def __init__(self, sid, nsm_type, pid_eid, value, comment=''):
         """
         Creates an NSML card, which defines lumped non-structural mass
@@ -366,6 +402,15 @@ class NSML1(NSM1x):
     +-------+-------+---------+-------+-------+------+-------+------+------+
     """
     type = 'NSML1'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nsm_type = 'PSHELL'
+        ids = [1, 2]
+        value = 1.
+        return NSML1(sid, nsm_type, value, ids, comment='')
+
     def __init__(self, sid, nsm_type, value, ids, comment=''):
         """
         Creates an NSML card, which defines lumped non-structural mass
@@ -388,6 +433,7 @@ class NSML1(NSM1x):
         comment : str; default=''
             a comment for the card
         """
+        assert isinstance(value, float), 'NSML1; value=%r and must be a float' % (value)
         NSM1x.__init__(self, sid, nsm_type, value, ids, comment=comment)
 
 
@@ -402,6 +448,13 @@ class NSMADD(BaseCard):
     +--------+----+----+-----+
     """
     type = 'NSMADD'
+    _properties = ['nsm_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        sets = [1, 2]
+        return NSMADD(sid, sets, comment='')
 
     def __init__(self, sid, sets, comment=''):
         """
@@ -472,7 +525,7 @@ class NSMADD(BaseCard):
                 raise TypeError('type=%s; nsm=\n%s' % (type(nsm), nsm))
         return nsm_ids
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -489,7 +542,7 @@ class NSMADD(BaseCard):
 
     def safe_cross_reference(self, model, debug=True):
         nsms = []
-        msg = ' which is required by NSMADD=%s' % self.sid
+        msg = ', which is required by NSMADD=%s' % self.sid
         for nsm_id in self.sets:
             try:
                 nsm = model.NSM(nsm_id, msg=msg)
@@ -502,7 +555,8 @@ class NSMADD(BaseCard):
             nsms.append(nsm)
         self.sets_ref = nsms
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.sets = self.nsm_ids
         self.sets_ref = None
 
@@ -510,7 +564,7 @@ class NSMADD(BaseCard):
         fields = ['NSMADD', self.sid] + self.nsm_ids
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -540,6 +594,13 @@ class PMASS(Property):
         # 1-based
         3 : 'mass',
     }
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mass = 1.
+        return PMASS(pid, mass, comment='')
 
     def __init__(self, pid, mass, comment=''):
         """
@@ -596,10 +657,11 @@ class PMASS(Property):
         mass = data[1]
         return PMASS(pid, mass, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def _verify(self, xref):
@@ -618,7 +680,7 @@ class PMASS(Property):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

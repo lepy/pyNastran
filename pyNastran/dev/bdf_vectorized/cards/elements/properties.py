@@ -1,7 +1,6 @@
-from __future__ import print_function
 import numpy as np
 
-from pyNastran.utils.mathematics import unique2d
+from pyNastran.femutils.utils import unique2d
 #from pyNastran.dev.bdf_vectorized.cards.elements.solid.ctetra4 import volume4
 #from pyNastran.dev.bdf_vectorized.cards.elements.solid.chexa8 import quad_area_centroid
 #from pyNastran.dev.bdf_vectorized.cards.elements.solid.cpenta6 import tri_area_centroid
@@ -10,7 +9,7 @@ from pyNastran.utils.mathematics import unique2d
 #from pyNastran.dev.bdf_vectorized.cards.elements.shell.ctria3 import _ctria3_normal_A
 from pyNastran.dev.bdf_vectorized.cards.elements.utils import build_groups #, asarray
 
-class Properties(object):
+class Properties:
     def __init__(self, model):
         """
         Defines the Properties object.
@@ -19,6 +18,7 @@ class Properties(object):
         ----------
         model : BDF
            the BDF object
+
         """
         self.model = model
         self.nproperties = 0
@@ -152,7 +152,7 @@ class Properties(object):
         return self.model.elements.get_properties(property_ids)
 
 def check_duplicate(name, objs, log):
-    unique_vals = set([])
+    unique_vals = set()
     for obj in objs:
         if hasattr(obj, name):
             vals = getattr(obj, name)

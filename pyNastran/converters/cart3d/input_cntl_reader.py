@@ -1,6 +1,5 @@
 from collections import OrderedDict
-from six import iteritems
-from pyNastran.utils.log import get_logger2
+from cpylog import get_logger2
 
 
 def read_input_cntl(input_cntl_filename, log=None, debug=False):
@@ -9,7 +8,7 @@ def read_input_cntl(input_cntl_filename, log=None, debug=False):
     return cntl
 
 
-class InputCntlReader(object):
+class InputCntlReader:
     def __init__(self, log=None, debug=False):
         self.log = get_logger2(log, debug=debug)
 
@@ -99,9 +98,9 @@ class InputCntlReader(object):
     def get_boundary_conditions(self):
         section = self.sections['Boundary_Conditions']
         name, comment, table = section
-        self.log.debug(table)
+        self.log.debug(str(table))
         self.log.debug('-------')
-        self.log.debug(table[0])
+        self.log.debug(str(table[0]))
         self.log.debug('-------*********')
         xline = table[0][0]
         self.log.debug(xline)
@@ -189,7 +188,7 @@ class InputCntlReader(object):
                 comment = ''
         sections[name] = [name, comment, data]
 
-        for name, section in iteritems(sections):
+        for name, section in sections.items():
             name, comment, data = section
             self.log.debug('name = %r' % name)
             if comment.strip() and 1:

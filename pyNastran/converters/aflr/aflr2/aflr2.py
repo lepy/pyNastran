@@ -7,20 +7,18 @@ defines:
    - write_fixed_points(self, fixed_points_filename)
    - merge_bedge(self, bedge, bedge_filename)
  - export_to_bedge(bedge_filename, nodes, grid_bcs, curves, subcurves, axis=1, log=None)
+
 """
-from __future__ import print_function
 import os
 import sys
 from copy import deepcopy
-from codecs import open
 
-from six.moves import range
 import numpy as np
 from numpy import (zeros, array, vstack, hstack, where,
                    arctan2, arccos, sign, isnan, radians, unique)
 from numpy.linalg import norm  # type: ignore
+from cpylog import get_logger2
 
-from pyNastran.utils.log import get_logger2
 from pyNastran.utils import print_bad_path
 from pyNastran.bdf.field_writer_8 import print_card_8
 
@@ -30,7 +28,7 @@ def read_bedge(bedge_filename, beta_reverse=179.7, log=None, debug=False):
     model.read_bedge(bedge_filename, beta_reverse=beta_reverse)
     return model
 
-class AFLR2(object):
+class AFLR2:
     """defines methods for reading interfacing with AFLR2"""
     def __init__(self, log=None, debug=False):
         """
@@ -46,6 +44,7 @@ class AFLR2(object):
         log : logging module object / None
             if log is set, debug is ignored and uses the
             settings the logging object has
+
         """
         self.log = get_logger2(log=log, debug=debug)
         self.debug = debug
@@ -441,6 +440,7 @@ def export_to_bedge(bedge_filename,
         the axis to remove (nodes in Nx3)
     log : Logger(); default=None
         a required logging object
+
     """
     log.debug('bedge_filename = %s' % bedge_filename)
     log.debug('grid_bc = %s' % grid_bcs)
@@ -459,7 +459,7 @@ def export_to_bedge(bedge_filename,
         log.debug('looping over ucurves=%s' % ucurves)
         nsubcurves_list = []
 
-        all_usubcurves = set([])
+        all_usubcurves = set()
         for ucurve in ucurves:
             i = where(curves == ucurve)[0]
 

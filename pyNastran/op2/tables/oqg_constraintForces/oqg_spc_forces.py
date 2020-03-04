@@ -1,3 +1,4 @@
+import numpy as np
 from pyNastran.op2.result_objects.table_object import RealTableArray, ComplexTableArray
 
 class RealSPCForcesArray(RealTableArray):
@@ -11,8 +12,10 @@ class RealSPCForcesArray(RealTableArray):
         words = ['                               F O R C E S   O F   S I N G L E - P O I N T   C O N S T R A I N T\n', ]
         #' \n',
         #'      POINT ID.   TYPE          T1             T2             T3             R1             R2             R3\n']
-        if self.table_name in ['OQG1', 'OQG2']: # 'OQGV1'
+        if self.table_name in ['OQG1', 'OQG2', 'OQGV1', 'OQP1']:
             pass
+        elif self.table_name in ['OQGATO1', 'OQGATO2']:
+            words += ['                                                 ( AUTO-CORRELATION FUNCTION )']
         elif self.table_name in ['OQGPSD1', 'OQGPSD2']:
             words += ['                                             ( POWER SPECTRAL DENSITY FUNCTION )']
         elif self.table_name in ['OQGRMS1', 'OQGRMS2']:
@@ -26,7 +29,7 @@ class RealSPCForcesArray(RealTableArray):
 
         #words += self.get_table_marker()
         write_words = True
-        if self.nonlinear_factor is not None:
+        if self.nonlinear_factor not in (None, np.nan):
             return self._write_f06_transient_block(
                 words, header, page_stamp, page_num, f06_file, write_words,
                 is_mag_phase=is_mag_phase, is_sort1=is_sort1)

@@ -1,7 +1,5 @@
-from __future__ import print_function
 import os
 import unittest
-from six.moves import range
 from numpy import allclose
 
 import pyNastran
@@ -15,7 +13,7 @@ class TestFast(unittest.TestCase):
     def test_fgrid_io_01(self):
         infile_name = os.path.join(TEST_PATH, 'flow_demo1', 'om6inviscid.fgrid')
 
-        fgrid = FGridReader(log=None, debug=False)
+        fgrid = FGridReader(log=None, debug=None)
         fgrid.read_fgrid(infile_name)
 
         #self.nodes = nodes

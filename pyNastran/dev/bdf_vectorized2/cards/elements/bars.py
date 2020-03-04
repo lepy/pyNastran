@@ -1,16 +1,19 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, integer_double_or_blank, double_or_blank,
     integer_string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8, set_blank_if_default
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class BarElement(object):
+class BarElement:
     """base class for CBAR"""
     card_name = ''
     def __init__(self, model):
@@ -102,7 +105,7 @@ class BarElement(object):
             self._wb_offset = []
             self.is_current = True
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 
@@ -339,14 +342,14 @@ class CBARv(BarElement):
         return msg
 
 
-class Bars(object):
+class Bars:
     """
     Stores CBAR elements that exist in 3D space
     """
     def __init__(self, model):
         self.model = model
         self.cbar = model.cbar
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:

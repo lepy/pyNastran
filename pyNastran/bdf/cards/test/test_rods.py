@@ -1,7 +1,8 @@
-from six.moves import StringIO
+from io import StringIO
 from math import pi, sqrt
-
 import unittest
+
+import numpy as np
 
 from pyNastran.bdf.bdf import BDF, BDFCard
 from pyNastran.bdf.bdf import CROD, CONROD, PROD, CTUBE, PTUBE, GRID, MAT1
@@ -14,7 +15,7 @@ bdf = BDF(debug=False)
 class TestRods(unittest.TestCase):
     def test_crod_01(self):
         lines = ['CROD          10     100      10       2']
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
 
         size = 8
@@ -107,7 +108,20 @@ class TestRods(unittest.TestCase):
         nids = [10, 12]
         ctube = model.add_ctube(eid, pid, nids, comment='ctube')
         model.add_grid(10, [0., 0., 0.])
-        model.add_grid(12, [0., 0., 0.])
+        model.add_grid(12, [2., 0., 0.])
+
+        model.safe_cross_reference()
+        model.uncross_reference()
+        model.cross_reference()
+        mass, cg, inertia = model.mass_properties(
+            element_ids=None, mass_ids=None,
+            reference_point=None, sym_axis=None,
+            scale=None, inertia_reference='cg')
+
+        # L * (rho * a + nsm)
+        A = pi * (OD1**2) / 4.
+        mass_expected = 2.0 * (rho * A + nsm)
+        assert np.allclose(mass, mass_expected), mass
         save_load_deck(model)
 
     def test_conrod_01(self):
@@ -117,7 +131,7 @@ class TestRods(unittest.TestCase):
         mid = 5
         A = 27.0
         lines = ['conrod,%i, %i, %i, %i, %f' % (eid, nid1, nid2, mid, A)]
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         cardi = BDFCard(card)
 
         size = 8
@@ -196,7 +210,7 @@ class TestRods(unittest.TestCase):
         """tests a CROD and a CONROD"""
         model = BDF(debug=False)
         lines = ['conrod,%i, %i, %i, %i, %f, %f, %f, %f' % (eid, nid1, nid2, mid, A, J, c, nsm)]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         conrod = CONROD.add_card(cardi)
         model._add_element_object(conrod)
@@ -205,7 +219,7 @@ class TestRods(unittest.TestCase):
         assert node_ids == [nid1, nid2], node_ids # probably wrong
 
         lines = ['crod,%i, %i, %i, %i' % (eid+1, pid, nid1, nid2)]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         crod = CROD.add_card(cardi)
         model._add_element_object(crod)
@@ -214,7 +228,7 @@ class TestRods(unittest.TestCase):
         assert node_ids == [nid1, nid2], node_ids # probably wrong
 
         lines = ['ctube,%i, %i, %i, %i' % (eid+2, pid+1, nid1, nid2)]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         ctube = CTUBE.add_card(cardi)
         model._add_element_object(ctube)
@@ -223,7 +237,7 @@ class TestRods(unittest.TestCase):
         assert node_ids == [nid1, nid2], node_ids # probably wrong
 
         lines = ['prod,%i, %i, %f, %f, %f, %f' % (pid, mid, A, J, c, nsm)]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         prod = PROD.add_card(cardi)
         model._add_property_object(prod)
@@ -238,25 +252,25 @@ class TestRods(unittest.TestCase):
         t = 0.
         OD2 = OD1
         lines = ['ptube,%i, %i, %f, %f, %f, %f' % (pid+1, mid, OD1, t, nsm, OD2)]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         ptube = PTUBE.add_card(cardi)
         model._add_property_object(ptube)
 
         lines = ['mat1,%i, %.2e, %.2e, %f, %f' % (mid, E, G, nu, rho)]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         card = MAT1.add_card(cardi)
         model._add_structural_material_object(card)
 
         lines = ['grid,%i, %i, %f, %f, %f' % (nid1, 0, xyz1[0], xyz1[1], xyz1[2])]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         card = GRID.add_card(cardi)
         model._add_node_object(card)
 
         lines = ['grid,%i, %i, %f, %f, %f' % (nid2, 0, xyz2[0], xyz2[1], xyz2[2])]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         card = GRID.add_card(cardi)
         model._add_node_object(card)

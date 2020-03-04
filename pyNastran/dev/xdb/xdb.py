@@ -1,11 +1,7 @@
-"""
-Main XDB class
-"""
-from __future__ import print_function
+"""Main XDB class"""
 import os
 import struct
 
-from pyNastran.op2.fortran_format import FortranFormat
 from pyNastran.dev.xdb.xdb_object import XDB_obj
 from pyNastran.dev.xdb.debug_output import debug_output
 
@@ -16,9 +12,8 @@ def read_xdb(xdb_filename, etype, nsubcases=1, npload4s=1, debug=False, log=None
     xdb.read_xdb(xdb_filename, etype, nsubcases, npload4s)
     return xdb
 
-class XDB(FortranFormat):
+class XDB:
     def __init__(self, debug=False, log=None):
-        FortranFormat.__init__(self)
         self.n = 0
         self._endian = '<'
         self.debug = debug
@@ -297,7 +292,6 @@ class XDB(FortranFormat):
                 else:
                     raise NotImplementedError(nsubcases)
                 #self.show(6468, types='s')
-                #aaa
             else:
                 raise NotImplementedError(etype)
             #self.show(dn, types='s')
@@ -305,7 +299,6 @@ class XDB(FortranFormat):
             data = self.f.read(dn)
             self.n += dn
             #self.show(100, types='s')
-            #aa
 
             # SUPERS-----
             table_name = self.read_table_name()
@@ -555,7 +548,6 @@ class XDB(FortranFormat):
             #dn = 4092
             dn = 12280
             #self.show(dn2 + 8, types='s')
-            #aaa
         elif table_name in [b'SID', b'PLOAD4', b'EQEXING', b'EQEXINE', b'LIMITS',
                             b'CTR3', b'GRIDX', b'MAT1', b'PSHELL', b'SPC1']:
             dn = 12280

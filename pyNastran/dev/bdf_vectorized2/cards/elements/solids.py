@@ -1,13 +1,16 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank)
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class Solids(object):
+class Solids:
     def __init__(self, model):
         self.model = model
         self.ctetra4 = model.ctetra4
@@ -18,7 +21,7 @@ class Solids(object):
         self.cpenta15 = model.cpenta15
         self.cpyram5 = model.cpyram5
         self.cpyram13 = model.cpyram13
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:
@@ -78,7 +81,7 @@ class Solids(object):
         return self.repr_indent(indent='')
 
 
-class SolidElement(object):
+class SolidElement:
     """base class for CTETRA4, CPENTA6, CHEXA8, CPYRAM5, CTETRA10, CPENTA15, CHEXA20, CPYRAM13"""
     card_name = ''
     nnodes = 0
@@ -164,7 +167,7 @@ class SolidElement(object):
             self._nids = []
             self.is_current = True
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 

@@ -2,13 +2,113 @@
 # - linux
 # - osx
 
+dist: xenial
+git:
+  quiet: true
 language: python
-python:
-  - "2.7"
-  - "3.5"
-  - "3.6" # temporarily ignore
-#  - "3.5-dev" # 3.5 development branch
-#  - "nightly" # currently points to 3.6-dev
+  #  # https://github.com/travis-ci/travis-ci/issues/9815
+  #  dist: xenial
+  #  sudo: true
+#  - "3.8-dev" # 3.8 development branch
+#  - "nightly" # currently points to 3.8-dev
+
+# numpy:
+#  - 1.12 min for 3.6 (bumped for reqs)
+#  - 1.15 min for 3.7
+# scipy:
+#  - 0.19 min for 3.6
+#  - ???  min for 3.7
+# matplotlib:
+#  - 2.1 min for 3.6
+#  - 2.2 min for 3.7
+matrix:
+  allow_failures:
+    #--------------------------------------------------------------------------------------------------
+    # latest versions of package
+    - name: "Python 3.8 (PyQt5)"
+      python: '3.8'
+      env:
+      - NUMPY='numpy scipy matplotlib h5py vtk pyqt5 pandas>=0.25 imageio'
+      #- LIB='libblas-dev liblapack-dev'
+      - LIBH5='libhdf5-dev'
+
+    - name: "Python 3.8 (no vtk/qt)"
+      python: '3.8'
+      env:
+      - NUMPY='numpy scipy matplotlib h5py pandas>=0.25'
+      - NOGUI='_no_gui'
+      #- LIB='libblas-dev liblapack-dev'
+      - LIBH5='libhdf5-dev'
+
+    - name: "Python 3.7 (PyQt5)"
+      python: '3.7'
+      env:
+      - NUMPY='numpy scipy matplotlib h5py vtk pyqt5 pandas>=0.25 imageio'
+    #--------------------------------------------------------------------------------------------------
+
+    # old versions of packages
+    - name: "Python 3.7 old packages"
+      python: '3.7'
+      env:
+      #- NUMPY='numpy==1.15 scipy==0.19 matplotlib==2.2'  # doesn't work
+      # - bumped scipy from 1.0 to 1.1 for compatibility with numpy
+      # - no pyside2 on conda
+      # - bumped from numpy 1.14 to 1.14.5 for py3.7 pypi compatibility
+      - NUMPY='numpy==1.14.5 scipy==1.1 matplotlib==2.2 h5py vtk pyqt5 pandas<0.25'
+    #--------------------------------------------------------------------------------------------------
+
+  include:
+    #--------------------------------------------------------------------------------------------------
+    # latest versions of package
+    - name: "Python 3.8 (PyQt5)"
+      python: '3.8'
+      env:
+      - NUMPY='numpy scipy matplotlib h5py vtk pyqt5 pandas>=0.25 imageio'
+      #- LIB='libblas-dev liblapack-dev'
+      - LIBH5='libhdf5-dev'
+
+    - name: "Python 3.8 (no vtk/qt)"
+      python: '3.8'
+      env:
+      - NUMPY='numpy scipy matplotlib h5py pandas>=0.25'
+      - NOGUI='_no_gui'
+      #- LIB='libblas-dev liblapack-dev'
+      - LIBH5='libhdf5-dev'
+
+    - name: "Python 3.7 (PyQt5)"
+      python: '3.7'
+      env:
+      - NUMPY='numpy scipy matplotlib h5py vtk pyqt5 pandas>=0.25 imageio'
+
+    - name: "Python 3.7 (PySide2, no matplotlib)"
+      python: '3.7'
+      env:
+      - NUMPY='numpy scipy h5py vtk PySide2 pandas>=0.25'
+
+    #--------------------------------------------------------------------------------------------------
+    # old versions of packages
+    - name: "Python 3.7 old packages"
+      python: '3.7'
+      env:
+      #- NUMPY='numpy==1.15 scipy==0.19 matplotlib==2.2'  # doesn't work
+      # - bumped scipy from 1.0 to 1.1 for compatibility with numpy
+      # - bumped from numpy 1.14 to 1.14.5 for py3.7 pypi compatibility
+      - NUMPY='numpy==1.14.5 scipy==1.1 matplotlib==2.2 h5py vtk pyqt5 pandas<0.25'
+
+    #--------------------------------------------------------------------------------------------------
+    # the most basic of pyNastran - no matplotlib, h5py, pandas, or even six
+    - name: "Python 3.8 (basic)"
+      python: '3.8'
+      env:
+      - NUMPY='numpy scipy'
+      - NOGUI='_no_gui'
+      - LIB='libblas-dev liblapack-dev'
+
+    - name: "Python 3.7 (basic)"
+      python: '3.7'
+      env:
+      - NUMPY='numpy scipy'
+      - NOGUI='_no_gui'
 
 #-------------------------------------------------
 # old-A
@@ -33,67 +133,33 @@ python:
 # Setup anaconda
 before_install:
  - sudo -H pip install auxlib
- - sudo pip install conda
 
-#install 2:
-#  - sudo conda init
-#    # Install packages
-#  - sudo conda update conda --yes
-#  - conda install --yes python=$TRAVIS_PYTHON_VERSION atlas numpy scipy vtk
-#  - export PATH=$HOME/py/bin:$PATH
-#  - python setup.py develop
 
 # per http://conda.pydata.org/docs/travis.html
 install:
+  # atlas
+  - echo "python=$TRAVIS_PYTHON_VERSION ${NUMPY}"
   - sudo apt-get update
-  - sudo apt-get install gfortran
+  - sudo apt-get install ${LIB} ${LIBH5} gfortran
 
   # We do this conditionally because it saves us some downloading if the
   # version is the same.
 
-   # v4.0 (latest) has a problem with auxlib, so switching to 3.19.0 (2016/3/23)
-   #wget https://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O miniconda.sh;
-   #wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
-
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-      wget https://repo.continuum.io/miniconda/Miniconda2-4.1.11-Linux-x86_64.sh -O miniconda.sh;
-    else
-      wget https://repo.continuum.io/miniconda/Miniconda3-4.1.11-Linux-x86_64.sh -O miniconda.sh;
-    fi
-  - bash miniconda.sh -b -p $HOME/miniconda
-  - export PATH="$HOME/miniconda/bin:$PATH"
-  - hash -r
-  - conda config --set always_yes yes --set changeps1 no
-  - conda update -q conda
-  # Useful for debugging any issues with conda
-  - conda info -a
-
-  - conda install psutil pip
-#  - pip install coveralls
-
-  # install dependencies
   # if line per https://docs.travis-ci.com/user/multi-os/
   - echo "python version=$TRAVIS_PYTHON_VERSION"
-  
-  # removed pandas
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]];     then conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION atlas numpy       scipy matplotlib      vtk pyqt; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.4" ]];     then conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION atlas numpy       scipy matplotlib h5py; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.5" ]];     then conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION atlas numpy       scipy matplotlib     ; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.6" ]];     then conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION atlas numpy>=1.12 scipy matplotlib     ; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "nightly" ]]; then conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION atlas numpy<1.13  scipy matplotlib     ; fi
-  - source activate test-environment
-  - conda list
-  - python setup.py develop
+
+#===install dependencies===
+#-----------pip------------
+  - pip install ${NUMPY}
+  - pip list
+#----------run-----------
+  - python setup${NOGUI}.py develop
 
 
 # Run test
 script:
   #- nosetests --with-cov --cov YOUR_PACKAGE_NAME_HERE --cov-config .coveragerc --logging-level=INFO
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then coverage run pyNastran/all_tests.py; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.4" ]]; then python pyNastran/all_tests_no_gui.py; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.5" ]]; then python pyNastran/all_tests_no_gui.py; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.6" ]]; then python pyNastran/all_tests_no_gui.py; fi
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "nightly" ]]; then python pyNastran/all_tests_no_gui.py; fi
+  - coverage run pyNastran/all_tests${NOGUI}.py
 
   # good
   #- "python pyNastran/all_tests.py"
@@ -105,7 +171,16 @@ script:
 # https://github.com/z4r/python-coveralls
 # Calculate coverage
 after_success:
-  - coveralls
-#  - codecov
+  - ls
+    # python-coverage
+    #usage: coveralls [-h] [--coveralls_url COVERALLS_URL] [--base_dir BASE_DIR]
+    #                 [--data_file DATA_FILE] [--config_file CONFIG_FILE]
+    #                 [--coveralls_yaml COVERALLS_YAML] [--ignore-errors]
+    #                 [--merge_file MERGE_FILE] [--nogit] [--skip_ssl_verify]
+  #- coveralls --ignore-errors
+
+    # coverage
+  #- coveralls debug
+  - codecov
 #after_success:
 #  - coveralls --config_file .coveragerc

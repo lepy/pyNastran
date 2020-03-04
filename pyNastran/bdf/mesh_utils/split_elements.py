@@ -2,9 +2,8 @@
 defines:
   - split_line_elements(bdf_model, eids, neids=2,
                         eid_start=1, nid_start=1)
+
 """
-from __future__ import print_function
-from six import iteritems
 import numpy as np
 from pyNastran.bdf.bdf import read_bdf
 
@@ -37,13 +36,13 @@ def split_line_elements(bdf_model, eids, neids=2,
 
     A-----*-----B; neids=2
     A--*--*--*--B; neids=4
+
     """
     eids_out = []
     assert neids >= 2, neids
     dx = np.linspace(0., 1., num=neids+1)
     for eid in eids:
         elem = bdf_model.elements[eid]
-        #print(elem.nodes)
         n1, n2 = elem.nodes
         node1 = bdf_model.nodes[n1]
         node2 = bdf_model.nodes[n2]
@@ -106,9 +105,9 @@ def split_line_elements(bdf_model, eids, neids=2,
 
 
 def split_elements(bdf_filename):
-    """unimplmented method for splitting elements"""
+    """unimplemented method for splitting elements"""
     model = read_bdf(bdf_filename, xref=True)
-    for eid, elem in iteritems(model.elements):
+    for eid, elem in model.elements.items():
         if elem.type == 'CTRIA3':
             #
             #        3

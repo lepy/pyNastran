@@ -1,6 +1,3 @@
-from __future__ import print_function, unicode_literals
-from codecs import open as codec_open
-from six.moves import zip
 from numpy import unique
 
 from pyNastran.bdf.bdf import BDF
@@ -27,6 +24,7 @@ def cart3d_to_nastran_model(cart3d_filename, log=None, debug=False):
     -------
     bdf_model : BDF
         BDF() model object
+
     """
     if isinstance(cart3d_filename, Cart3D):
         cart3d = cart3d_filename
@@ -111,7 +109,7 @@ def cart3d_to_nastran_filename(cart3d_filename, bdf_filename, log=None, debug=Fa
     #bdf.elements = cart3d.elements
     #bdf.write_bdf(bdf_filename)
     #return
-    with codec_open(bdf_filename, 'w') as bdf_file:
+    with open(bdf_filename, 'w') as bdf_file:
         bdf_file.write('CEND\n')
         bdf_file.write('BEGIN BULK\n')
         bdf_file.write('$Nodes\n')

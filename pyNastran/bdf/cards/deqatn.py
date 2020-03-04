@@ -3,11 +3,10 @@
 Defines the DEQATN class and sub-functions.
 
 The capitalization of the sub-functions is important.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import exec_
 
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import numpy as np
 from numpy import (
     cos, sin, tan, log, log10, mean, exp, sqrt, square, mod, abs, sum,
@@ -17,6 +16,8 @@ from numpy import (
 from numpy.linalg import norm  # type: ignore
 
 from pyNastran.bdf.cards.base_card import BaseCard
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 def pi(num):
     """weird way to multiply π by a number"""
@@ -46,7 +47,33 @@ def db(p, pref):
     """sound pressure in decibels"""
     return 20. * log(p / pref)
 
+#def _Log(z):
+
 def atan2h(x, y):
+    """
+    Hyperbolic arctangent
+    >>> arctanh(z) = 1/2 Log((1+z)/(1-z))
+
+    real:
+        the following must be true: |x1| > |x2| and x2 ≠ 0.
+
+    complex:
+        x1 = a + bi
+        x2 = b + di
+        a = b = 0 and (sign of c) = (sign of d):
+             the result is 0.
+        a = b = 0 and (sign of c) ≠ (sign of d):
+             the result is π.
+        c = d = 0 and (sign of a) = (sign of b):
+             the result is π/2.
+        c = d = 0 and (sign of a) ≠ (sign of b):
+             the result is −π/2
+    """
+    #integer_float_types = (int, np.int32, float, np.float32)
+    #if isinstance(x, integer_float_types):
+        #assert x >= 0, 'x=%s y=%s' % (x, y)
+        #assert y > 0, 'x=%s y=%s' % (x, y)
+    #return np.arctanh(x, y)
     raise NotImplementedError()
 
 def invdb(dbi, pref):
@@ -70,6 +97,7 @@ def dba(p, pref, f):
     -------
     dbi : float
         acoustic pressure in Decibels
+
     """
     ta1, ta2 = _get_ta(f)
     return 20. * log(p / pref) + 10 * log(ta1) + 10. * log(ta2)
@@ -91,6 +119,7 @@ def invdba(dbai, pref, f):
     -------
     p : float
         structural responses or acoustic pressure
+
     """
     ta1, ta2 = _get_ta(f)
     #dbai = dba(p, pref, f)
@@ -108,7 +137,9 @@ def _get_ta(f):
     ta2 = k1 * f**4 / ((f**2 + p1**2)**2 * (f**2 + p4**2)**2)
     return ta1, ta2
 
-BUILTINS = ['del', 'eval', 'yield']
+# we'll add _ to the beginning of these variables
+BUILTINS = ['del', 'eval', 'yield', 'async', 'await', 'property',
+            'slice', 'filter', 'map']
 
 class DEQATN(BaseCard):  # needs work...
     """
@@ -124,6 +155,7 @@ class DEQATN(BaseCard):  # needs work...
     +--------+--------------------------------------------+
     """
     type = 'DEQATN'
+    _properties = ['dtable']
 
     def __init__(self, equation_id, eqs, comment=''):
         """
@@ -152,6 +184,7 @@ class DEQATN(BaseCard):  # needs work...
             'F = A + B – F1 * D',
         ]
         >>> deqatn = DEQATN(41, eq, comment='')
+
         """
         if comment:
             self.comment = comment
@@ -160,6 +193,12 @@ class DEQATN(BaseCard):  # needs work...
         self.equation_id = equation_id
         self.eqs = eqs
         self.func_str = ''
+
+    @classmethod
+    def _init_from_empty(cls):
+        equation_id = 1
+        eqs = []
+        return DEQATN(equation_id, eqs, comment='')
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -172,6 +211,7 @@ class DEQATN(BaseCard):  # needs work...
             this card is special and is not a ``BDFCard`` like other cards
         comment : str; default=''
             a comment for the card
+
         """
         #print(card)
         line0 = card[0]
@@ -196,6 +236,9 @@ class DEQATN(BaseCard):  # needs work...
         # combine the equations into a single organized block
         line0_eq = line0[16:]
         eqs_temp = [line0_eq] + card[1:]
+        #eqs_temp2 = [line.replace(';;', ';') for line in eqs_temp]
+        #for line in eqs_temp2:
+            #print(line)
         eqs = lines_to_eqs(eqs_temp)
         return DEQATN(equation_id, eqs, comment=comment)
 
@@ -211,6 +254,7 @@ class DEQATN(BaseCard):  # needs work...
         def stress(x):
             x = float(x)
             return x + 32.
+
         """
         default_values = {}
         if self.dtable is not None:
@@ -219,7 +263,11 @@ class DEQATN(BaseCard):  # needs work...
             self.eqs, default_values, str(self))
         self.func_str = func_str
         self.func_name = func_name
-        exec_(func_str)
+        try:
+            exec(func_str)
+        except SyntaxError:
+            print(func_str)
+            raise
         #print(locals().keys())
         func = locals()[func_name]
         setattr(self, func_name, func)
@@ -227,7 +275,7 @@ class DEQATN(BaseCard):  # needs work...
         self.func = func
         self.nargs = nargs
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -235,6 +283,7 @@ class DEQATN(BaseCard):  # needs work...
         ----------
         model : BDF()
             the BDF object
+
         """
         # TODO: get defaults from DTABLE
         # TODO: get limits from DCONSTR
@@ -242,7 +291,11 @@ class DEQATN(BaseCard):  # needs work...
         self.dtable_ref = self.dtable
         self._setup_equation()
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model):
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         del self.func
         #del self.f
         #del getattr(self, self.func_name)
@@ -250,6 +303,9 @@ class DEQATN(BaseCard):  # needs work...
         del self.func_name
         del self.nargs
         del self.dtable, self.dtable_ref
+
+    def _verify(self, xref):
+        pass
 
     def evaluate(self, *args):
         """Makes a call to self.func"""
@@ -269,7 +325,7 @@ class DEQATN(BaseCard):  # needs work...
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         #self.evaluate(1, 2)
         eqs = split_equations(self.eqs)
         equation_line0 = eqs[0]
@@ -282,17 +338,55 @@ class DEQATN(BaseCard):  # needs work...
         #print(msg)
         return msg
 
-def lines_to_eqs(eqs_temp1):
+def lines_to_eqs(eqs_in):
     """splits the equations"""
-    eqs_temp = []
-    for eq in eqs_temp1:
-        eq2 = eq.rstrip(';')
-        if ';' in eq2:
-            eqs_temp += [eqi + ';' for eqi in eq.split(';')]
-        else:
-            eqs_temp.append(eq)
-    #print('eqs_temp = ', eqs_temp)
+    eqs_wrapped = _split_equations_by_semicolon(eqs_in)
+    eqs = _join_wrapped_equation_lines(eqs_in, eqs_wrapped)
+    assert len(eqs) > 0, eqs
+    return eqs
 
+def _split_equations_by_semicolon(eqs_in):
+    """helper for ``lines_to_eqs``"""
+    eqs_temp_out = []
+    nstart = 0
+    nchars = 72 - 16
+    for eq in eqs_in:
+        eq2 = eq[nstart:nchars].strip(' \t\n')
+
+        semicolon = ';' if eq2.rstrip().endswith(';') else ''
+        eq2 = eq2.rstrip(' \t;')
+        #nline = len(eq.rstrip('; \n')) + 16
+
+        #print('eq2=%r' % eq2)
+        if ';' in eq2:
+            eq2s = eq2.split(';')
+            eq_tempi = [eqi.strip() + ';' for eqi in eq2s if eqi.strip()]
+            #for check_line in eq2s:
+                #print(check_line)
+                #_check_for_valid_line(check_line, eq)
+
+            #print('eq_tempi = %r' % eq_tempi)
+            #eq_tempi[-1] += semicolon
+            eqs_temp_out += eq_tempi
+        else:
+            check_line = eq2 + semicolon
+            #print('check_line = %r' % (check_line))
+            #_check_for_valid_line(check_line, eq)
+            eqs_temp_out.append(check_line)
+        nstart = 8
+        nchars = 72
+    return eqs_temp_out
+
+#def _check_for_valid_line(check_line, full_line):
+    #if '=' not in check_line:
+        #msg = (
+            #'expected an equal sign (the first 8 characters are removed)\n'
+            #'line     =%r\n'
+            #'full_line=%r' % (check_line, full_line))
+        #raise SyntaxError(msg)
+
+def _join_wrapped_equation_lines(unused_eqs_temp_in, eqs_temp):
+    """helper for ``lines_to_eqs``"""
     eqs = []
     neqs = len(eqs_temp)
     is_join = False
@@ -316,7 +410,7 @@ def lines_to_eqs(eqs_temp1):
             assert len(eqi) <= 56, eqi
         elif i != neqs-1:
             # mid line
-            assert len(eqi) <= 64, 'len(eqi)=%s eq=%r' % (len(eqi), eqi)
+            #assert len(eqi) <= 64, 'len(eqi)=%s eq=%r' % (len(eqi), eqi)
             if eqi.endswith(';'):
                 eqi = eqi[:-1]
                 is_join = False
@@ -334,8 +428,6 @@ def lines_to_eqs(eqs_temp1):
     #assert not is_join
     if is_join:
         eqs.append(eqi)
-    assert len(eqs) > 0, eqs
-    #assert len(eqs) <= 8, 'len(eqID)==%s' % (len(eqID))
     return eqs
 
 def split_equations(lines):
@@ -377,6 +469,7 @@ def _split_equation(lines_out, line, n, isplit=0):
     -------
     lines_out : List[str]
         the long line broken into shorter lines
+
     """
     #print('n=%s -> line=%r len=%s' % (n, line, len(line)))
     if len(line) <= n:
@@ -401,7 +494,7 @@ def _split_equation(lines_out, line, n, isplit=0):
 
     operator = out[imin]
     #print('operator = %r' % operator)
-    fore, aft = line0.split(operator, 1)
+    unused_fore, aft = line0.split(operator, 1)
     i = len(aft) + 1
 
     line_out = line[:i]
@@ -410,18 +503,39 @@ def _split_equation(lines_out, line, n, isplit=0):
     #print('aft  = %r' % aft[::-1])
     lines_out.append(line_out.replace('^', '**').strip())
     isplit += 1
-    if isplit > 10:
-        raise RuntimeError()
+    if isplit > 360:
+        raise RuntimeError('Recursion issue splitting line; isplit=%i' %  isplit)
     lines_out = _split_equation(lines_out, line[i:], n, isplit+1)
     return lines_out
 
-def fortran_to_python_short(line, default_values):
+def fortran_to_python_short(line, unused_default_values):
     """the function used by the DRESP2"""
     func_str = 'def func(args):\n'
     func_str += '    return %s(args)\n' % line.strip()
-    d = {}
-    exec_(func_str, globals(), d)
-    return d['func']
+    local_dict = {}
+    exec(func_str, globals(), local_dict)
+    return local_dict['func']
+
+def split_to_equations(lines):
+    """
+    Splits a line like::
+
+        b = a + z; c = 42
+
+    into::
+
+        b = a + z
+        c = 42
+    """
+    equation_lines = []
+    for line in lines:
+        line = line.rstrip(' ;')
+        if ';' in line:
+            lines2 = line.split(';')
+            equation_lines.extend(lines2)
+        else:
+            equation_lines.append(line)
+    return equation_lines
 
 def fortran_to_python(lines, default_values, comment=''):
     """
@@ -449,15 +563,18 @@ def fortran_to_python(lines, default_values, comment=''):
             raise
         f = x + y
         return f
+
     """
     func_msg = ''
     variables = []
     assert len(lines) > 0, lines
-    for i, line in enumerate(lines):
+
+    equation_lines = split_to_equations(lines)
+    for i, line in enumerate(equation_lines):
         #print('--------------------')
         line = line.lower()
         #func_msg += '#i=%s\n' % i
-
+        assert ';' not in line, line
         try:
             # f(x, y) = 10.
             # f(x, y) = abs(x) + y
@@ -466,18 +583,19 @@ def fortran_to_python(lines, default_values, comment=''):
         except ValueError:
             if '=' not in line:
                 raise SyntaxError('= not found in %r' % (line))
-            else:
-                msg = 'only 1 = sign may be found a line\n'
-                msg += 'line = %r\n' % line
-                if len(lines) > 1:
-                    msg += 'lines:\n%s' % '\n'.join(lines)
-                raise SyntaxError(msg)
+            msg = 'only 1 = sign may be found a line\n'
+            msg += 'line = %r\n' % line
+            if len(lines) > 1:
+                msg += 'lines:\n%s' % '\n'.join(lines)
+            raise SyntaxError(msg)
         f = f.strip()
         eq = eq.strip().rstrip(';')
 
         #print('f=%r eq=%r' % (f, eq))
         for builtin in BUILTINS:
-            if builtin in eq:
+            if builtin == f:
+                f = f.replace(builtin, builtin + '_')
+            if builtin == eq:
                 eq = eq.replace(builtin, builtin + '_')
 
         if i == 0:
@@ -489,6 +607,8 @@ def fortran_to_python(lines, default_values, comment=''):
         else:
             out = f
             func_msg += '    %s = %s\n' % (out, eq)
+            #print('out = %r' % out)
+            #print('eq = %r' % eq)
 
     func_msg += '    return %s' % f
     #print(func_msg)
@@ -535,6 +655,7 @@ def write_function_header(func_header, eq, default_values, comment=''):
     variables : List[str]
         the variables used by the equation header
         a, b, c
+
     """
     msg = ''
 
@@ -547,9 +668,11 @@ def write_function_header(func_header, eq, default_values, comment=''):
     func_name, arguments = func_header.strip('(,)').split('(')
     func_name = func_name.strip(' ')
     variables = arguments.split(',')
+    variables = ['_' + var if var in BUILTINS else var
+                 for var in variables]
 
     if func_name in BUILTINS:
-        func_name += '_'
+        func_name = '_' + func_name
 
     if is_float:
         # f(a,b,c) = 1.
@@ -559,7 +682,7 @@ def write_function_header(func_header, eq, default_values, comment=''):
         # def f(a,b,c):
         #     f = 1.
         #
-        msg += _write_function_line(func_name, variables, default_values)
+        func_line = _write_function_line(func_name, variables, default_values)
     else:
         # f(a,b,c) = min(a,b,c)
         #
@@ -568,9 +691,33 @@ def write_function_header(func_header, eq, default_values, comment=''):
         # def f(a,b,c):
         #     f = min(a,b,c)
         #
-        msg += _write_function_line(func_name, variables, default_values)
+        func_line = _write_function_line(func_name, variables, default_values)
+    msg += func_line
     msg += _write_comment(comment)
     msg += _write_variables(variables)
+    for builtin in BUILTINS:
+        ubuiltin = '_' + builtin
+        if builtin in func_line and ubuiltin not in func_line:
+            raise RuntimeError('cannot have an equation with %r\n%s' % (builtin, func_line))
+        if builtin in variables and ubuiltin not in variables:
+            raise RuntimeError('cannot have an equation with %r\n%s' % (builtin, variables))
+            #import re
+            #eq = 'YIELD_A_YIELD'
+            #eq = '/YIELD'
+            #p = re.compile(r"\byield\b", flags=re.IGNORECASE)
+            #p2 = p.sub(eq,'_yield')
+            #print('P2 = %r' % p2)
+            #y = re.search(r"\byield\b", eq, flags=re.IGNORECASE)
+            #if y is not None:
+                #print('groups= ', y.groups())
+                #for group in y.groups():
+                    #print('group = %r' % group)
+                #print(y.group(0))
+                #print('***eq = %r' % eq)
+    for builtin in BUILTINS:
+        if builtin in eq and '_' + builtin not in eq:
+            eq = eq.replace(builtin, '_'+builtin)
+
     msg += '    %s = %s\n' % (func_name, eq)
     return func_name, msg, variables
 
@@ -578,7 +725,6 @@ def _write_function_line(func_name, variables, default_values):
     """writes the ``def f(x, y, z=1.):`` part of the function"""
     vals = []
     is_default = False
-    #print('default_values = %s' % default_values)
     for var in variables:
         if var in BUILTINS:
             var += '_'

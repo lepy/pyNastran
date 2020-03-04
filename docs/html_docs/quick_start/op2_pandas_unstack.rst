@@ -2,18 +2,17 @@
 Manipulating the Pandas DataFrame
 =================================
 
-The iPython notebook for this demo can be found in: -
-docs:raw-latex:`\quick`\_start:raw-latex:`\demo`:raw-latex:`\op`2\_pandas\_unstack.ipynb
--
-https://github.com/SteveDoyle2/pyNastran/tree/master/docs/quick\_start/demo/op2\_pandas\_unstack.ipynb
+The Jupyter notebook for this demo can be found in: -
+docs/quick_start/demo/op2_pandas_unstack.ipynb -
+https://github.com/SteveDoyle2/pyNastran/tree/master/docs/quick_start/demo/op2_pandas_unstack.ipynb
 
 This example will use pandas unstack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The unstack method on a DataFrame moves on index level from rows to
-columns. First let's read in some data:
+columns. First let’s read in some data:
 
-.. code:: python
+.. code:: ipython3
 
     import os
     import pyNastran
@@ -46,11 +45,11 @@ columns. First let's read in some data:
     INFO:      fname=fortran_format.py         lineNo=321    skipping table_name = 'RAGEATC'
     
 
-.. code:: python
+.. code:: ipython3
 
     cbar = isat.cbar_force[1].data_frame
 
-.. code:: python
+.. code:: ipython3
 
     cbar.head()
 
@@ -317,9 +316,9 @@ columns. First let's read in some data:
 
 
 
-First I'm going to pull out a small subset to work with
+First I’m going to pull out a small subset to work with
 
-.. code:: python
+.. code:: ipython3
 
     csub = cbar.loc[3323:3324,1:2]
     csub
@@ -452,12 +451,12 @@ First I'm going to pull out a small subset to work with
 
 
 
-I happen to like the way that's organized, but let's say that I want the
-have the item descriptions in columns and the mode ID's and element
-numbers in rows. To do that, I'll first move the element ID's up to the
+I happen to like the way that’s organized, but let’s say that I want the
+have the item descriptions in columns and the mode ID’s and element
+numbers in rows. To do that, I’ll first move the element ID’s up to the
 columns using a .unstack(level=0) and the transpose the result:
 
-.. code:: python
+.. code:: ipython3
 
     csub.unstack(level=0).T
 
@@ -559,11 +558,11 @@ columns using a .unstack(level=0) and the transpose the result:
 
 
 
-unstack requires unique row indices so I can't work with CQUAD4 stresses
-as they're currently output, but I'll work with CHEXA stresses. Let's
+unstack requires unique row indices so I can’t work with CQUAD4 stresses
+as they’re currently output, but I’ll work with CHEXA stresses. Let’s
 pull out the first two elements and first two modes:
 
-.. code:: python
+.. code:: ipython3
 
     chs = isat.chexa_stress[1].data_frame.loc[3684:3685,1:2]
     chs
@@ -938,7 +937,7 @@ pull out the first two elements and first two modes:
 Now I want to put ElementID and the Node ID in the rows along with the
 Load ID, and have the items in the columns:
 
-.. code:: python
+.. code:: ipython3
 
     cht = chs.unstack(level=[0,1]).T
     cht
@@ -1806,12 +1805,12 @@ Load ID, and have the items in the columns:
 
 
 
-Maybe I'd like my rows organized with the modes on the inside. I can do
+Maybe I’d like my rows organized with the modes on the inside. I can do
 that by swapping levels:
 
 We actually need to get rid of the extra rows using dropna():
 
-.. code:: python
+.. code:: ipython3
 
     cht = cht.dropna()
     cht
@@ -2348,7 +2347,7 @@ We actually need to get rid of the extra rows using dropna():
 
 
 
-.. code:: python
+.. code:: ipython3
 
     # mode, eigr, freq, rad, eids, nids # initial
     # nids, eids, eigr, freq, rad, mode # final
@@ -3023,11 +3022,11 @@ We actually need to get rid of the extra rows using dropna():
 
 
 
-Alternatively I can do that by first using reset\_index to move all the
-index columns into data, and then using set\_index to define the order
-of columns I want as my index:
+Alternatively I can do that by first using reset_index to move all the
+index columns into data, and then using set_index to define the order of
+columns I want as my index:
 
-.. code:: python
+.. code:: ipython3
 
     cht.reset_index().set_index(['ElementID','NodeID','Mode','Freq']).sort_index()
 

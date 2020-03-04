@@ -29,6 +29,7 @@ from pyNastran.op4.test.op4_unit_tests import TestOP4
 
 #utils
 from pyNastran.utils.test.all_tests import *
+from pyNastran.femutils.test.all_tests import *
 
 # converters
 from pyNastran.converters.test_formats import *
@@ -39,6 +40,11 @@ from pyNastran.gui.test.all_tests import *
 #if not on_rtd:
     #import pyNastran.gui.gui
 #import pyNastran.gui.gui
+
+try:
+    from pyNastran.dev.solver.test_springs import *
+except ImportError:  # pragma: no cover
+    pass
 
 
 if __name__ == "__main__":  # pragma: no cover

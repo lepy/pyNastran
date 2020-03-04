@@ -1,23 +1,13 @@
-"""
-Defines the BDFCard class that is passed into the various Nastran cards.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from typing import List, Union, Optional
-from pyNastran.bdf.utils import deprecated
+"""Defines the BDFCard class that is passed into the various Nastran cards."""
+from typing import List, Union, Optional, Any
 from pyNastran.bdf.field_writer import print_card
 from pyNastran.bdf.field_writer_16 import print_field_16
 from pyNastran.bdf.cards.utils import wipe_empty_fields
-from six.moves import range
 
 
-class BDFCard(object):
-    """
-    A BDFCard is a list that has a default value of None for fields out of
-    range.
-    """
-    def __init__(self, card, has_none=True):
-        # type: (List[str], bool) -> None
+class BDFCard:
+    """A BDFCard is a list that has a default value of None for fields out of range."""
+    def __init__(self, card: List[str], has_none: bool=True) -> None:
         """
         Parameters
         ----------
@@ -39,43 +29,37 @@ class BDFCard(object):
         BDFCard(card, has_none=True)
         """
         if has_none:
-            card = wipe_empty_fields([print_field_16(field).strip() for field in card])
-        self.card = card
-        self.nfields = len(self.card)
+            long_fields = [print_field_16(field).strip() for field in card]
+            card = wipe_empty_fields(long_fields)
+        self.card = card  # type: List[Optional[str]]
+        self.nfields = len(self.card)  # type: int
 
-    def deprecated(self, old_name, new_name, deprecated_version):
-        # type: (str, str, str) -> None
-        """deprecates methods"""
-        return deprecated(old_name, new_name, deprecated_version, levels=[0, 1, 2])
-
-    def pop(self):
-        # type: () -> str
+    def pop(self) -> Optional[str]:
         """card.pop()"""
         self.nfields -= 1
         return self.card.pop()
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: int, value: str) -> None:
         """card[4] = value"""
         self.card.__setitem__(key, value)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: int) -> str:
         """print card[5]"""
         return self.card.__getitem__(key)
 
-    def __getslice__(self, i, j):
+    def __getslice__(self, i: int, j: int) -> List[str]:
         """card[1:10]"""
         return self.card.__getslice__(i, j)
 
-    def __setslice__(self, i, j, sequence):
+    def __setslice__(self, i: int, j: int, sequence: Any) -> Any:
         """card[1:10] = 2"""
         self.card.__setslice__(i, j, sequence)
 
-    def index(self, value):
+    def index(self, value: str) -> int:
         """card.index(value)"""
         return self.card.index(value)
 
-    def __repr__(self):
-        # type: () -> str
+    def __repr__(self) -> str:
         """
         Prints the card as a list
 
@@ -83,20 +67,20 @@ class BDFCard(object):
         -------
         msg : str
             the string representation of the card
+
         """
         #return str(self.card)
         return '%r' % self.card
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """prints the card in 8/16/16-double format"""
         return print_card(self.card, size=size, is_double=is_double)
 
-    def __len__(self):
-        # type: () -> int
+    def __len__(self) -> int:
         """len(card)"""
         return self.nfields
 
-    def fields(self, i=0, j=None, defaults=None):
+    def fields(self, i: int=0, j: Optional[int]=None, defaults: Any=None) -> List[Any]:
         """
         Gets multiple fields on the card
 
@@ -113,14 +97,16 @@ class BDFCard(object):
 
         Returns
         -------
-        value : int/float/str
+        values : List[varies]
+            int/float/str
             the values on the ith-jth fields
+
         """
         if defaults is None:
             defaults = []
         if j is None:
-            if self.nfields is None:
-                return [None]
+            #if self.nfields is None:
+                #return [None]
             j = self.nfields
 
         if defaults == []:
@@ -134,8 +120,8 @@ class BDFCard(object):
             d += 1
         return out
 
-    def field(self, i, default=None):
-        # type: (int, Optional[Union[int, float, str]]) -> str
+    def field(self, i: int,
+              default: Optional[Union[int, float, str]]=None) -> Optional[Union[int, float, str]]:
         """
         Gets the ith field on the card
 
@@ -150,10 +136,8 @@ class BDFCard(object):
         -------
         value : int/float/str/None
             the value on the ith field
+
         """
-        if i < self.nfields and self.card[i] is not None and self.card[i] is not '':
+        if i < self.nfields and self.card[i] is not None and self.card[i] != '':
             return self.card[i]
-        else:
-            #if default is None:
-                #return u''
-            return default
+        return default

@@ -1,14 +1,11 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 """
 defines:
  - polar_to_real_imag
  - real_imag_to_mag_phase
+
 """
 
 import numpy as np
-#from numpy import radians, abs, angle  # ,sin, cos
-#from cmath import rect  # polar
 
 
 def polar_to_real_imag(mag, phase):
@@ -29,6 +26,7 @@ def polar_to_real_imag(mag, phase):
         the real component a of a+bi
     imag_value : float
         the imaginary component b of a+bi
+
     """
     rtheta = np.radians(phase)
     return mag * (np.cos(rtheta) + 1.j * np.sin(rtheta))

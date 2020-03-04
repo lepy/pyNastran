@@ -3,24 +3,22 @@ defines the F06Writer class and:
  - write_f06(...)
 """
 #pylint: disable=W0201,C0301,C0111
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 import os
 import sys
 import copy
+import getpass
 from datetime import date
 from collections import defaultdict
 from traceback import print_exc
-
-from six import string_types, iteritems, PY2
+from typing import Optional, List, Dict, Union
 
 import pyNastran
 from pyNastran.op2.op2_interface.op2_f06_common import OP2_F06_Common
 from pyNastran.op2.op2_interface.result_set import ResultSet
 
-def make_stamp(Title, today=None):
-    if 'Title' is None:
-        Title = ''
+def make_stamp(title, today=None, build=None):
+    if title is None:
+        title = ''
 
     #lenghts = [7, 8, 5, 5, 3, 4, 4, 6, 9, 7, 8, 8]
     months = [' January', 'February', 'March', 'April', 'May', 'June',
@@ -33,18 +31,17 @@ def make_stamp(Title, today=None):
         (month, day, year) = today
         str_month = months[month - 1].upper()
         str_today = '%-9s %2s, %4s' % (str_month, day, year)
-    str_today = str_today  #.strip()
+    #str_today = str_today  #.strip()
 
-    release_date = '02/08/12'  # pyNastran.__releaseDate__
-    release_date = ''
-    build = 'pyNastran v%s %s' % (pyNastran.__version__, release_date)
-    if Title is None:
-        Title = ''
-    out = '1    %-67s   %-19s %-22s PAGE %%5i\n' % (Title.strip(), str_today, build)
+    #release_date = '02/08/12'  # pyNastran.__releaseDate__
+    if build is None:
+        release_date = ''
+        build = 'pyNastran v%s %s' % (pyNastran.__version__, release_date)
+    out = '1    %-67s   %-19s %-22s PAGE %%5i\n' % (title.strip(), str_today, build)
     return out
 
 
-def make_f06_header():
+def make_f06_header() -> str:
     spaces = ''
     lines1 = [
         spaces + '/* -------------------------------------------------------------------  */\n',
@@ -53,8 +50,8 @@ def make_f06_header():
         spaces + '/*                                                                      */\n',
         spaces + '/*              A Python reader/editor/writer for the various           */\n',
         spaces + '/*                        NASTRAN file formats.                         */\n',
-        spaces + '/*                       Copyright (C) 2011-2017                        */\n',
-        spaces + '/*               Steven Doyle, Al Danial, Marcin Garrozik               */\n',
+        spaces + '/*                       Copyright (C) 2011-2020                        */\n',
+        spaces + '/*                             Steven Doyle                             */\n',
         spaces + '/*                                                                      */\n',
         spaces + '/*    This program is free software; you can redistribute it and/or     */\n',
         spaces + '/*    modify it under the terms of the GNU Lesser General Public        */\n',
@@ -101,7 +98,7 @@ def make_f06_header():
     return ''.join(lines1 + lines2)
 
 
-def sorted_bulk_data_header():
+def sorted_bulk_data_header() -> str:
     """creates the bulk data echo header"""
     msg = '0                                                 S O R T E D   B U L K   D A T A   E C H O                                         \n'
     msg += '                 ENTRY                                                                                                              \n'
@@ -109,7 +106,8 @@ def sorted_bulk_data_header():
     return msg
 
 
-def make_end(end_flag=False, options=None):
+def make_end(end_flag: bool=False,
+             options: Optional[Dict[str, str]]=None) -> str:
     """creates the F06 footer"""
     lines = []
     lines2 = []
@@ -190,21 +188,23 @@ class F06Writer(OP2_F06_Common):
         OP2_F06_Common.__init__(self)
         self.card_count = {}
         self.additional_matrices = {}
-        self.matrices = {}
         self.subcase_key = defaultdict(list)
         self.end_options = {}
 
-        self._results = ResultSet(self.get_all_results())
+        self._results = ResultSet(
+            self.get_all_results(),
+            self.op2_results.get_sum_objects_map(),
+            self.log)
 
-    def get_all_results(self):
-        all_results = ['stress', 'strain', 'element_forces', 'constraint_forces'] + self.get_table_types()
+    def get_all_results(self) -> List[str]:
+        all_results = ['stress', 'strain', 'element_forces', 'constraint_forces', 'thermal_load'] + self.get_table_types()
         return all_results
 
-    def clear_results(self):
+    def clear_results(self) -> None:
         self._results.clear()
 
-    def add_results(self, results):
-        if isinstance(results, string_types):
+    def add_results(self, results: Union[str, List[str]]) -> None:
+        if isinstance(results, str):
             results = [results]
         all_results = self.get_all_results()
         for result in results:
@@ -233,25 +233,23 @@ class F06Writer(OP2_F06_Common):
                 self._results.add('constraint_forces')
             elif 'force' in result.lower(): # could use more validation...
                 self._results.add('element_forces')
-            # thermalLoad_VU_3D, thermalLoad_1D, thermalLoad_CONV, thermalLoad_2D_3D
+            # thermalLoad_VU_3D, thermalLoad_1D, conv_thermal_load, thermalLoad_2D_3D
             self._results.add(result)
 
-    def set_results(self, results):
-        if isinstance(results, string_types):
-            results = [results]
+    def set_results(self, results: Union[str, List[str]]) -> None:
         self.clear_results()
         self.add_results(results)
 
-    def remove_results(self, results):
+    def remove_results(self, results: Union[str, List[str]]) -> None:
         self._results.remove(results)
 
     def make_f06_header(self):
         """If this class is inherited, the F06 Header may be overwritten"""
         return make_f06_header()
 
-    def make_stamp(self, title, today):
+    def make_stamp(self, title, today, build=None):
         """If this class is inherited, the PAGE stamp may be overwritten"""
-        return make_stamp(title, today)
+        return make_stamp(title, today, build=None)
 
     def make_grid_point_singularity_table(self, failed):
         """
@@ -277,12 +275,12 @@ class F06Writer(OP2_F06_Common):
         self.page_num += 1
         return msg
 
-    def _write_summary(self, f06, card_count=None):
+    def _write_summary(self, f06_file, card_count=None):
         """writes the F06 card summary table"""
         summary_header = '                                        M O D E L   S U M M A R Y\n\n'
         summary = ''
 
-        self.cards_to_read = set([
+        self.cards_to_read = {
 
             # rigid elements
             'RBAR', 'RBAR1', 'RBE1', 'RBE2', 'RBE3',
@@ -298,7 +296,7 @@ class F06Writer(OP2_F06_Common):
             # temperature cards
             'CHBDYE', 'CHBDYG', 'CHBDYP',
             'CONV',
-        ])
+        }
 
 
         blocks = [
@@ -358,17 +356,18 @@ class F06Writer(OP2_F06_Common):
                 summary += ' \n'
 
         if summary:
-            f06.write(summary_header)
-            f06.write(summary)
+            f06_file.write(summary_header)
+            f06_file.write(summary)
 
             page_stamp = self.make_stamp(self.title, self.date)
-            f06.write(page_stamp % self.page_num)
+            f06_file.write(page_stamp % self.page_num)
             self.page_num += 1
 
-    def write_f06(self, f06_outname, matrix_filename=None,
-                  is_mag_phase=False, is_sort1=True,
-                  delete_objects=True, end_flag=False, quiet=True, repr_check=False,
-                  close=True):
+    def write_f06(self, f06_outname: str, matrix_filename: Optional[str]=None,
+                  is_mag_phase: bool=False, is_sort1: bool=True,
+                  delete_objects: bool=True, end_flag: bool=False,
+                  quiet: bool=True, repr_check: bool=False,
+                  close: bool=True) -> None:
         """
         Writes an F06 file based on the data we have stored in the object
 
@@ -406,10 +405,7 @@ class F06Writer(OP2_F06_Common):
             #print("matrix_filename =", matrix_filename)
             #mat = open(matrix_filename, 'wb')
 
-            if PY2:
-                f06 = open(f06_outname, 'wb')
-            else:
-                f06 = open(f06_outname, 'w')
+            f06 = open(f06_outname, 'w')
             self._write_summary(f06)
         elif hasattr(f06_outname, 'read') and hasattr(f06_outname, 'write'):
             #f06 = f06_outname
@@ -424,10 +420,12 @@ class F06Writer(OP2_F06_Common):
                 print('f06_outname =', f06_outname)
 
         page_stamp = self.make_stamp(self.title, self.date)
-        if self.grid_point_weight.reference_point is not None:
+        if self.grid_point_weight:
             if not quiet:
                 print(" grid_point_weight")
-            self.page_num = self.grid_point_weight.write_f06(f06, page_stamp, self.page_num)
+            for key, weight in self.grid_point_weight.items():
+                self.page_num = weight.write_f06(f06, page_stamp, self.page_num)
+
             if repr_check:
                 str(self.grid_point_weight)
             assert isinstance(self.page_num, int), self.grid_point_weight.__class__.__name__
@@ -442,6 +440,9 @@ class F06Writer(OP2_F06_Common):
         self._write_f06_subcase_based(f06, page_stamp, delete_objects=delete_objects,
                                       is_mag_phase=is_mag_phase, is_sort1=is_sort1,
                                       quiet=quiet, repr_check=repr_check)
+
+        self.op2_results.psds.write_f06(f06)
+
         #self._write_f06_time_based(f06, page_stamp)
         self.write_matrices(f06, matrix_filename, page_stamp, self.page_num, quiet=quiet)
         f06.write(make_end(end_flag, self.end_options))
@@ -453,13 +454,13 @@ class F06Writer(OP2_F06_Common):
         if len(self.matrices):
             if hasattr(self, 'monitor1'):
                 page_num = self.monitor1.write(f06, page_stamp=page_stamp, page_num=page_num)
-                print('MONPNT1 from [PMRF, PERF, PFRF, AGRF]')
+                self.log.debug('MONPNT1 from [PMRF, PERF, PFRF, AGRF]')
 
             with open(matrix_filename, 'wb') as mat:
-                for name, matrix in iteritems(self.matrices):
+                for name, matrix in self.matrices.items():
                     if name == 'MP3F':
                         page_num = self.monitor3.write(f06, page_stamp=page_stamp, page_num=page_num)
-                        print('MONPNT3 from MP3F')
+                        self.log.debug('MONPNT3 from MP3F')
                     elif name in ['PMRF', 'PERF', 'PFRF', 'AGRF']:
                         pass
                     else:
@@ -502,7 +503,7 @@ class F06Writer(OP2_F06_Common):
         # eigenvalues are written first
         f06.write(page_stamp % self.page_num)
         self.page_num += 1
-        for ikey, result in sorted(iteritems(self.eigenvalues)):
+        for ikey, result in sorted(self.eigenvalues.items()):
             if not quiet:
                 print('%-18s case=%r' % (result.__class__.__name__, ikey))
             self.page_num = result.write_f06(f06, header, page_stamp,
@@ -523,13 +524,14 @@ class F06Writer(OP2_F06_Common):
         if len(res_keys_subcase) == 0:
             self.log.warning('no cases to write...self.subcase_key=%r' % self.subcase_key)
             return
-        for isubcase, res_keys in sorted(iteritems(res_keys_subcase)):
+        for isubcase, res_keys in sorted(res_keys_subcase.items()):
             for res_key in res_keys:
                 if isinstance(res_key, tuple):
-                    is_compressed = False
+                    pass
+                    #is_compressed = False
                 else:
                     # int
-                    is_compressed = True
+                    #is_compressed = True
                     isubcase = res_key
 
                 if res_key not in self.eigenvectors:
@@ -567,257 +569,17 @@ class F06Writer(OP2_F06_Common):
         header_old = ['     DEFAULT                                                                                                                        \n',
                       '\n', ' \n']
         header = copy.deepcopy(header_old)
-        res_types = [
-            self.displacements, self.displacements_ROUGV1,
-            self.displacements_PSD, self.displacements_ATO, self.displacements_RMS,
-            self.displacements_CRM, self.displacements_NO,
-            self.displacements_scaled,  # ???
+        unallowed_results = ['eigenvectors', 'eigenvalues', 'params', 'gpdt', 'bgpdt', 'eqexin',
+                             'grid_point_weight', 'psds']
+        res_types = list(self.get_result(table_type) for table_type in sorted(self.get_table_types())
+                         if table_type not in unallowed_results and not table_type.startswith('responses.'))
 
-            self.accelerations, self.accelerations_ROUGV1,
-            self.accelerations_PSD, self.accelerations_ATO, self.accelerations_RMS,
-            self.accelerations_CRM, self.accelerations_NO,
-
-            self.velocities, self.velocities_ROUGV1,
-            self.velocities_PSD, self.velocities_ATO, self.velocities_RMS,
-            self.velocities_CRM, self.velocities_NO,
-
-            self.force_vectors,
-            self.load_vectors,
-            self.temperatures,
-            #self.eigenvectors,
-            self.eigenvectors_RADCONS,
-            self.eigenvectors_RADEFFM,
-            self.eigenvectors_RADEATC,
-            self.eigenvectors_ROUGV1,
-
-            self.mpc_forces, self.mpc_forces_PSD, self.mpc_forces_ATO, self.mpc_forces_RMS,
-            self.mpc_forces_RAQCONS,
-            #self.mpc_forces_RAQEATC,
-
-            self.spc_forces, self.spc_forces_PSD, self.spc_forces_ATO, self.spc_forces_RMS,
-            self.thermal_load_vectors,
-
-            #self.strain_energy,
-            self.cquad4_strain_energy, self.cquad8_strain_energy,
-            self.cquadr_strain_energy, self.cquadx_strain_energy,
-            self.ctria3_strain_energy, self.ctria6_strain_energy,
-            self.ctriar_strain_energy, self.ctriax_strain_energy,
-            self.ctriax6_strain_energy,
-            self.ctetra_strain_energy, self.cpenta_strain_energy,
-            self.chexa_strain_energy, self.cpyram_strain_energy,
-            self.crod_strain_energy, self.ctube_strain_energy,
-            self.conrod_strain_energy,
-            self.cbar_strain_energy, self.cbeam_strain_energy,
-            self.cgap_strain_energy, self.cbush_strain_energy,
-            self.celas1_strain_energy, self.celas2_strain_energy,
-            self.celas3_strain_energy, self.celas4_strain_energy,
-            self.cdum8_strain_energy, self.dmig_strain_energy,
-            self.cbend_strain_energy,
-            self.genel_strain_energy, self.cshear_strain_energy,
-            #------------------------------------------
-            # OEF - forces
-
-            # alphabetical order...
-            # bars
-            self.cbar_force, self.cbar_force_ATO, self.cbar_force_CRM, self.cbar_force_PSD, self.cbar_force_RMS, self.cbar_force_NO,
-            self.cbar_force_10nodes,
-
-            # beam
-            self.cbend_force,
-            self.cbeam_force, self.cbeam_force_ATO, self.cbeam_force_CRM, self.cbeam_force_PSD, self.cbeam_force_RMS, self.cbeam_force_NO,
-            self.cbeam_force_vu,
-
-            # alphabetical
-            self.celas1_force,
-            self.celas2_force,
-            self.celas3_force,
-            self.celas4_force,
-
-            self.cquad4_force, self.cquad4_force_ATO, self.cquad4_force_CRM, self.cquad4_force_PSD, self.cquad4_force_RMS, self.cquad4_force_NO,
-            self.cquad8_force, self.cquad8_force_ATO, self.cquad8_force_CRM, self.cquad8_force_PSD, self.cquad8_force_RMS, self.cquad8_force_NO,
-            self.cquadr_force, self.cquadr_force_ATO, self.cquadr_force_CRM, self.cquadr_force_PSD, self.cquadr_force_RMS, self.cquadr_force_NO,
-
-            self.conrod_force,
-            self.crod_force,
-            self.cshear_force,
-            self.ctria3_force, self.ctria3_force_ATO, self.ctria3_force_CRM, self.ctria3_force_PSD, self.ctria3_force_RMS, self.ctria3_force_NO,
-            self.ctria6_force, self.ctria3_force_ATO, self.ctria6_force_CRM, self.ctria6_force_PSD, self.ctria6_force_RMS, self.ctria6_force_NO,
-            self.ctriar_force, self.ctriar_force_ATO, self.ctriar_force_CRM, self.ctriar_force_PSD, self.ctriar_force_RMS, self.ctriar_force_NO,
-            self.ctube_force,
-
-            # springs
-            self.celas1_force,
-            self.celas2_force,
-            self.celas3_force,
-            self.celas4_force,
-
-            # dampers
-            self.cdamp1_force,
-            self.cdamp2_force,
-            self.cdamp3_force,
-            self.cdamp4_force,
-
-            # other
-            self.cbush_force, self.cbush_force_ATO, self.cbush_force_PSD, self.cbush_force_CRM, self.cbush_force_RMS, self.cbush_force_NO,
-            self.cgap_force,
-            self.cvisc_force,
-
-            self.chexa_pressure_force,
-            self.cpenta_pressure_force,
-            self.ctetra_pressure_force,
-
-            self.coneax_force,
-
-            #------------------------------------------
-            # OES - strain
-            # 1.  cbar
-            # 2.  cbeam
-            # 3.  crod/ctube/conrod
-
-            # springs
-            self.celas1_strain,
-            self.celas2_strain,
-            self.celas3_strain,
-            self.celas4_strain,
-
-            self.nonlinear_celas1_stress,
-            self.nonlinear_celas3_stress,
-
-            # bars/beams
-            self.cbar_strain,
-            self.cbar_strain_10nodes,
-            self.cbeam_strain,
-
-            # plates
-            self.cquad4_composite_strain,
-            self.cquad8_composite_strain,
-            self.cquadr_composite_strain,
-            self.ctria3_composite_strain,
-            self.ctria6_composite_strain,
-            self.ctriar_composite_strain,
-
-            self.nonlinear_ctria3_strain,
-            self.nonlinear_cquad4_strain,
-            self.ctriax_strain,
-
-            # rods
-            self.nonlinear_crod_strain,
-            self.nonlinear_ctube_strain,
-            self.nonlinear_conrod_strain,
-
-            self.chexa_strain,
-            self.conrod_strain,
-            self.cpenta_strain,
-            self.cquad4_strain,
-            self.cquad8_strain,
-            self.cquadr_strain,
-            self.crod_strain,
-            self.cshear_strain,
-            self.ctetra_strain,
-            self.ctria3_strain,
-            self.ctria6_strain,
-            self.ctriar_strain,
-            self.ctube_strain,
-
-            # bush
-            self.cbush_strain,
-            self.nonlinear_cbush_stress,
-            self.cbush1d_stress_strain,
-            #------------------------------------------
-            # cbars/cbeams
-            self.cbar_stress,
-            self.cbar_stress_10nodes,
-            self.nonlinear_cbeam_stress,
-            self.cbeam_stress,
-
-            # bush
-            self.cbush_stress,
-
-            # rods
-            self.nonlinear_crod_stress,
-            self.nonlinear_ctube_stress,
-            self.nonlinear_conrod_stress,
-
-            # shear
-            # OES - stress
-            self.celas1_stress,
-            self.celas2_stress,
-            self.celas3_stress,
-            self.celas4_stress,
-
-            self.chexa_stress,
-            self.conrod_stress,
-            self.cpenta_stress,
-            self.cquad4_stress,
-            self.cquad8_stress,
-            self.cquadr_stress,
-
-            self.crod_stress,
-            self.cshear_stress,
-            self.ctetra_stress,
-            self.ctria3_stress,
-            self.ctria6_stress,
-            self.ctriar_stress,
-            self.ctube_stress,
-
-            self.cquad4_composite_stress,
-            self.cquad8_composite_stress,
-            self.cquadr_composite_stress,
-            self.ctria3_composite_stress,
-            self.ctria6_composite_stress,
-            self.ctriar_composite_stress,
-
-            self.nonlinear_ctria3_stress,
-            self.nonlinear_cquad4_stress,
-            self.ctriax_stress,
-
-            self.hyperelastic_cquad4_strain,
-
-            #------------------------------------------
-            #OEF - Fluxes - tCode=4 thermal=1
-            self.thermalLoad_CONV,
-
-            #self.thermalLoad_CHBDY,
-            self.chbdye_thermal_load,
-            self.chbdyg_thermal_load,
-            self.chbdyp_thermal_load,
-
-            #self.thermalLoad_1D,
-            self.crod_thermal_load,
-            self.cbeam_thermal_load,
-            self.ctube_thermal_load,
-            self.conrod_thermal_load,
-            self.cbar_thermal_load,
-            self.cbend_thermal_load,
-
-            #self.thermalLoad_2D_3D,
-            self.cquad4_thermal_load,
-            self.ctriax6_thermal_load,
-            self.cquad8_thermal_load,
-            self.ctria3_thermal_load,
-            self.ctria6_thermal_load,
-            self.ctetra_thermal_load,
-            self.chexa_thermal_load,
-            self.cpenta_thermal_load,
-
-
-            self.thermalLoad_VU,
-            self.thermalLoad_VU_3D,
-            self.thermalLoad_VUBeam,
-            self.vuquad_force,
-            self.vutria_force,
-
-            #------------------------------------------
-
-            self.grid_point_stresses, self.grid_point_volume_stresses, self.grid_point_forces,
-        ]
-        for isubcase, res_keys in sorted(iteritems(res_keys_subcase)):
-            # print(res_keys)
+        for isubcase, res_keys in sorted(res_keys_subcase.items()):
             for res_key in res_keys:
-                if isinstance(res_key, tuple):
-                    is_compressed = False
-                else:
-                    is_compressed = True
+                #if isinstance(res_key, tuple):
+                    #is_compressed = False
+                #else:
+                    #is_compressed = True
 
                 res_length = self._get_result_length(res_types, res_key)
                 if res_length == 0:
@@ -844,11 +606,16 @@ class F06Writer(OP2_F06_Common):
                     if result.nonlinear_factor is not None:
                         header.append('')
                     try:
+                        class_name = result.__class__.__name__
+
                         element_name = ''
                         if hasattr(result, 'element_name'):
                             element_name = ' - ' + result.element_name
+                            is_ignored = 'StrainEnergy' not in class_name and 'GridPointForces' not in class_name
+                            has_nnodes = not hasattr(result, 'nnodes_per_element')
+                            if has_nnodes and is_ignored and getpass.getuser() == 'sdoyle':
+                                self.log.error(f'{class_name} is missing nnodes_per_element')
 
-                        class_name = result.__class__.__name__
                         if hasattr(result, 'data'):
                             if not quiet:
                                 print(res_format_vectorized % (
@@ -856,15 +623,20 @@ class F06Writer(OP2_F06_Common):
                         else:
                             print(res_format % (class_name, isubcase, element_name))
 
+                        result.is_complex
+                        result.is_real
+
                         try:
                             self.page_num = result.write_f06(
                                 f06, header, page_stamp, page_num=self.page_num,
                                 is_mag_phase=is_mag_phase, is_sort1=is_sort1)
-                        except Exception as e:
+                        except Exception as error:
                             print_exc(file=sys.stdout)
+                            print(''.join(result.get_stats()))
                             raise
 
-                        assert isinstance(self.page_num, int), 'pageNum=%r' % str(self.page_num)
+                        #assert 'table_name=' in ''.join(result.get_stats())
+                        assert isinstance(self.page_num, int), 'result=%s pageNum=%r' % (result, str(self.page_num))
                     except:
                         #print("result name = %r" % result.name())
                         raise

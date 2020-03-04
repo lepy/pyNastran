@@ -1,4 +1,3 @@
-from __future__ import print_function
 from pyNastran.gui.qt_version import qt_version, is_pygments
 
 from qtpy.QtCore import Qt
@@ -13,7 +12,13 @@ class HtmlLog(QTextEdit):
         super(HtmlLog, self).__init__(*args, **kwargs)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.__contextMenu)
+
+        # https://stackoverflow.com/questions/3120258/qtextedit-inserthtml-is-very-slow
         self.setReadOnly(True)
+        self.setAcceptRichText(False)
+        self.setContextMenuPolicy(Qt.NoContextMenu)
+        #self.setOpenLinks(False)
+        self.setUndoRedoEnabled(False)
 
     def __contextMenu(self):
         self._normalMenu = self.createStandardContextMenu()
@@ -42,6 +47,9 @@ class HtmlLog(QTextEdit):
     def clear(self):
         """clears out the text"""
         self.setText('')
+
+    def __repr__(self):
+        return 'HtmlLog()'
 
 class ApplicationLogWidget(QDockWidget):
     def __init__(self, parent=None):

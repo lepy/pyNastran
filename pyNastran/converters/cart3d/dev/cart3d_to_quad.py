@@ -1,6 +1,4 @@
-from __future__ import print_function
 from collections import defaultdict
-from codecs import open
 from numpy import cross, allclose
 from numpy.linalg import norm  # type: ignore
 from pyNastran.converters.cart3d.cart3d import Cart3D
@@ -20,6 +18,7 @@ def run_quad_extraction(cart3d_triq_filename):
     tris, quads = normal_groups_to_quads(celements, normals, groups)
 
     write_nastran_quads_tris(points, tris, quads, bdf_filename='tris_quads.bdf')
+
 
 def normal_groups_to_quads(elements, normals, normal_groups):
     tris = []
@@ -51,6 +50,7 @@ def normal_groups_to_quads(elements, normals, normal_groups):
     #for tri in tris:
         #print("t", tri)
     return tris, quads
+
 
 def write_nastran_quads_tris(nodes, tris, quads, bdf_filename='tris_quads.bdf'):
     with open(bdf_filename, 'w') as bdf_file:
@@ -86,8 +86,8 @@ def write_nastran_quads_tris(nodes, tris, quads, bdf_filename='tris_quads.bdf'):
         nu = 0.3
         card = ['MAT1', mid, E, G, nu]
         bdf_file.write(print_card_8(card))
-
         bdf_file.write('ENDDATA\n')
+
 
 def get_normal_groups(points, elements, rtol=1e-3, atol=1e-5):
     """
@@ -153,7 +153,7 @@ def get_normal_groups(points, elements, rtol=1e-3, atol=1e-5):
 
     # sort it
 
-    unique_normals = set([])
+    unique_normals = set()
     for normal in normals:
         unique_normals.add(tuple(normal))
 
@@ -169,7 +169,7 @@ def get_normal_groups(points, elements, rtol=1e-3, atol=1e-5):
 
     # ???
     groups = []
-    set_elements = set([])
+    set_elements = set()
     for eid in range(nelements):
         #normali = normal[eid, :]
         if eid not in set_elements:
@@ -228,6 +228,7 @@ def check_normals(eid, elements, normals, cdict, same_normals, rtol=1e-4, atol=1
                 #print("  same", eid, eid_alt)
                 same_normals.append(eid_alt)
                 check_normals(eid_alt, elements, normals, cdict, same_normals, rtol=rtol, atol=atol)
+
 
 if __name__ == '__main__': # pragma: no cover
     run_quad_extraction('Cart3d_55000_2.4_10_0_0_0_0.i.triq')

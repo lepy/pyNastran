@@ -1,5 +1,4 @@
-from __future__ import print_function
-from six.moves import range
+from collections import OrderedDict
 from numpy import arange, amax, amin, zeros, hstack
 
 import vtk
@@ -9,9 +8,9 @@ from pyNastran.gui.gui_objects.gui_result import GuiResult
 from pyNastran.converters.dev.openvsp.adb_reader import ADB_Reader
 
 
-class ADB_IO(object):  # pragma: no cover
-    def __init__(self):
-        pass
+class ADB_IO:  # pragma: no cover
+    def __init__(self, gui):
+        self.gui = gui
 
     def get_openvsp_wildcard_geometry_results_functions(self):  # pragma: no cover
         data = ('VSPAero',
@@ -22,33 +21,34 @@ class ADB_IO(object):  # pragma: no cover
         return data
 
     def _remove_old_adb_geometry(self, adb_filename):  # pragma: no cover
-        self.eid_map = {}
-        self.nid_map = {}
+        self.gui.eid_map = {}
+        self.gui.nid_map = {}
         if adb_filename is None:
-            self.scalarBar.VisibilityOff()
+            self.gui.scalar_bar_actor.VisibilityOff()
             skip_reading = True
         else:
-            self.turn_text_off()
-            self.grid.Reset()
+            self.gui.turn_text_off()
+            self.gui.grid.Reset()
 
-            self.result_cases = {}
-            self.ncases = 0
+            self.gui.result_cases = OrderedDict()
+            self.gui.ncases = 0
             try:
-                del self.case_keys
-                del self.icase
-                del self.isubcase_name_map
+                del self.gui.case_keys
+                del self.gui.icase
+                del self.gui.isubcase_name_map
             except:
                 # print('cant delete geo')
                 pass
 
             #print(dir(self))
             skip_reading = False
-        #self.scalarBar.VisibilityOff()
-        self.scalarBar.Modified()
+        #self.scalar_bar_actor.VisibilityOff()
+        self.gui.scalar_bar_actor.Modified()
         return skip_reading
 
     def load_vsp_aero_geometry(self, adb_filename,
                                name='main', plot=True):  # pragma: no cover
+        model_name = name
         #key = self.case_keys[self.icase]
         #case = self.result_cases[key]
 
@@ -61,8 +61,9 @@ class ADB_IO(object):  # pragma: no cover
         else:
             plot_wakes = True # doesn't work perfectly
 
-        model = ADB_Reader(log=self.log, debug=False)
-        self.model_type = 'vspaero'
+        log = self.gui.log
+        model = ADB_Reader(log=log, debug=False)
+        self.gui.model_type = 'vspaero'
         #self.model_type = model.model_type
         (nodes, elements) = model.read_adb(adb_filename)
         nxyz_nodes = nodes.shape[0]
@@ -76,15 +77,16 @@ class ADB_IO(object):  # pragma: no cover
         else:
             nnodes = nxyz_nodes
             nelements = nxyz_elements
-        self.nnodes = nnodes
-        self.nelements = nelements
+        self.gui.nnodes = nnodes
+        self.gui.nelements = nelements
 
-        self.grid.Allocate(self.nelements, 1000)
+        grid = self.gui.grid
+        grid.Allocate(self.gui.nelements, 1000)
 
         points = vtk.vtkPoints()
-        points.SetNumberOfPoints(self.nnodes)
+        points.SetNumberOfPoints(self.gui.nnodes)
         #vectorReselt.SetNumberOfComponents(3)
-        self.nid_map = {}
+        self.gui.nid_map = {}
 
         assert nodes is not None
 
@@ -93,14 +95,13 @@ class ADB_IO(object):  # pragma: no cover
         mmax = amax(nodes, axis=0)
         mmin = amin(nodes, axis=0)
         dim_max = (mmax - mmin).max()
-        self.create_global_axes(dim_max)
-
+        self.gui.create_global_axes(dim_max)
         for i in range(nxyz_nodes):
             points.InsertPoint(nid, nodes[i, :])
             nid += 1
-        self.log.info('nxyz_nodes=%s nwake_nodes=%s total=%s' % (
+        log.info('nxyz_nodes=%s nwake_nodes=%s total=%s' % (
             nxyz_nodes, nwake_nodes, nxyz_nodes + nwake_nodes))
-        self.log.info('nxyz_elements=%s nwake_elements=%s total=%s' % (
+        log.info('nxyz_elements=%s nwake_elements=%s total=%s' % (
             nxyz_elements, nwake_elements, nxyz_elements + nwake_elements))
 
         elements -= 1
@@ -111,7 +112,7 @@ class ADB_IO(object):  # pragma: no cover
             elem.GetPointIds().SetId(1, node_ids[1])
             elem.GetPointIds().SetId(2, node_ids[2])
             #elem.GetCellType() = 5  # vtkTriangle
-            self.grid.InsertNextCell(5, elem.GetPointIds())
+            grid.InsertNextCell(5, elem.GetPointIds())
 
         if plot_wakes:
             for j in range(nwake_nodes):
@@ -128,31 +129,29 @@ class ADB_IO(object):  # pragma: no cover
                     elem = vtkLine()
                     elem.GetPointIds().SetId(0, ii - 1)
                     elem.GetPointIds().SetId(1, ii)
-                    self.grid.InsertNextCell(elem.GetCellType(), elem.GetPointIds())
+                    grid.InsertNextCell(elem.GetCellType(), elem.GetPointIds())
                 #eid += 1
                 #break
             #assert i1 == nelements, 'ii=%s nelements=%s' % (ii, nelements)
 
-        self.grid.SetPoints(points)
-        self.grid.Modified()
-        if hasattr(self.grid, 'Update'):
-            self.grid.Update()
+        grid.SetPoints(points)
+        grid.Modified()
         #self.log_info("updated grid")
 
         # load results - regions/loads
-        self.scalarBar.VisibilityOn()
-        self.scalarBar.Modified()
+        self.gui.scalar_bar_actor.VisibilityOn()
+        self.gui.scalar_bar_actor.Modified()
 
         mach = model.machs[0]
         alpha = model.alphas[0]
         beta = model.betas[0]
         note = ':  Mach=%.2f, alpha=%.1f, beta=%.1f' % (mach, alpha, beta)
-        self.isubcase_name_map = {1: ['OpenVSP%s' % note, '']}
-        cases = {}
+        self.gui.isubcase_name_map = {1: ['OpenVSP%s' % note, '']}
+        cases = OrderedDict()
         ID = 1
 
         form, cases = self._fill_adb_case(cases, ID, model, plot_wakes)
-        self._finish_results_io2(form, cases)
+        self.gui._finish_results_io2(model_name, form, cases)
 
     #def clear_adb(self):
         #pass

@@ -1,14 +1,9 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types
+from typing import List
 import numpy as np
 from numpy import zeros, searchsorted, allclose
 
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_imag_floats_13e, _eigenvalue_header
@@ -40,9 +35,6 @@ class ComplexCBushArray(OES_Object):
 
     def build(self):
         """sizes the vectorized attributes of the ComplexCBushArray"""
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -63,14 +55,23 @@ class ComplexCBushArray(OES_Object):
         self.data = zeros((self.ntimes, self.nelements, 6), dtype='complex64')
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        # Freq                          0.0                 2.5
+        # ElementID Item
+        # 10210     tx    0.010066-0.000334j  0.010066-0.000334j
+        #           ty    0.000000+0.000000j  0.000000+0.000000j
+        #           tz    0.431447-0.009564j  0.431461-0.009564j
+        #           rx    0.000000+0.000000j  0.000000+0.000000j
+        #           ry    0.000000+0.000000j  0.000000+0.000000j
+        #           rz    0.000000+0.000000j  0.000000+0.000000j
+        # 10211     tx   -0.000002+0.000000j -0.000002+0.000000j
         headers = self.get_headers()
         column_names, column_values = self._build_dataframe_transient_header()
-        self.data_frame = pd.Panel(self.data, items=column_values,
-                                   major_axis=self.element, minor_axis=headers).to_frame()
-        self.data_frame.columns.names = column_names
-        self.data_frame.index.names = ['ElementID', 'Item']
+        self.data_frame = self._build_pandas_transient_elements(
+            column_values, column_names,
+            headers, self.element, self.data)
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -108,12 +109,13 @@ class ComplexCBushArray(OES_Object):
 
     def add_sort1(self, dt, eid, tx, ty, tz, rx, ry, rz):
         """unvectorized method for adding SORT1 transient data"""
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [tx, ty, tz, rx, ry, rz]
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -126,13 +128,13 @@ class ComplexCBushArray(OES_Object):
         assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
-            msg.append('  type=%s ntimes=%i nelements=%i\n'
-                       % (self.__class__.__name__, ntimes, nelements))
+        if self.nonlinear_factor not in (None, np.nan):  # transient
+            msg.append('  type=%s ntimes=%i nelements=%i; table_name=%r\n' % (
+                self.__class__.__name__, ntimes, nelements, self.table_name))
             ntimes_word = 'ntimes'
         else:
-            msg.append('  type=%s nelements=%i\n'
-                       % (self.__class__.__name__, nelements))
+            msg.append('  type=%s nelements=%i; table_name=%r\n' % (
+                       self.__class__.__name__, nelements, self.table_name))
             ntimes_word = '1'
         msg.append('  eType\n')
         headers = self.get_headers()
@@ -165,6 +167,16 @@ class ComplexCBushArray(OES_Object):
         return page_num
 
     def _write_sort1_as_sort1(self, header, page_stamp, page_num, f06_file, msg_temp, is_mag_phase):
+        r"""
+        C:\\Users\\sdoyle\\Dropbox\\move_tpl\\ofprand1.op2
+
+        '                         C O M P L E X   F O R C E S   I N   B U S H   E L E M E N T S   ( C B U S H ) '
+        '                                                          (REAL/IMAGINARY)'
+        ' '
+        '                  FREQUENCY         FORCE-X       FORCE-Y       FORCE-Z      MOMENT-X      MOMENT-Y      MOMENT-Z  '
+        '0               0.0               1.006599E-02  0.0           4.314467E-01  0.0           0.0           0.0'
+        '                                 -3.338092E-04  0.0          -9.563536E-03  0.0           0.0           0.0'
+        """
         ntimes = self.data.shape[0]
 
         eids = self.element
@@ -193,13 +205,107 @@ class ComplexCBushArray(OES_Object):
             page_num += 1
         return page_num - 1
 
+    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+                  is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        # see TestOP2.test_op2_other_01
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if itable == -1:
+            self._write_table_header(op2, op2_ascii, date)
+            itable = -3
+
+        #if isinstance(self.nonlinear_factor, float):
+            #op2_format = '%sif' % (7 * self.ntimes)
+            #raise NotImplementedError()
+        #else:
+            #op2_format = 'i21f'
+        #s = Struct(op2_format)
+
+        eids = self.element
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        nelements = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert self.ntimes == 1, self.ntimes
+
+        device_code = self.device_code
+        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+
+        eids_device = self.element * 10 + self.device_code
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+        #assert ntotal == 193, ntotal
+
+        if self.is_sort1:
+            struct1 = Struct(endian + b'i12f')
+        else:
+            raise NotImplementedError('SORT2')
+
+        op2_ascii.write('nelements=%i\n' % nelements)
+
+        for itime in range(self.ntimes):
+            #print('3, %s' % itable)
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            #print('stress itable = %s' % itable)
+            itable -= 1
+            #print('4, %s' % itable)
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+
+            tx = self.data[itime, :, 0]
+            ty = self.data[itime, :, 1]
+            tz = self.data[itime, :, 2]
+            rx = self.data[itime, :, 3]
+            ry = self.data[itime, :, 4]
+            rz = self.data[itime, :, 5]
+            for eid, itx, ity, itz, irx, iry, irz in zip(eids, tx, ty, tz, rx, ry, rz):
+                [txr, tyr, tzr, rxr, ryr, rzr,
+                 txi, tyi, tzi, rxi, ryi, rzi] = write_imag_floats_13e([itx, ity, itz, irx, iry, irz], is_mag_phase)
+                data = [
+                    eid,
+                    itx.real, ity.real, itz.real, irx.real, iry.real, irz.real,
+                    itx.imag, ity.imag, itz.imag, irx.imag, iry.imag, irz.imag]
+                op2_ascii.write('  eid=%s data=%s\n' % (eids_device, str(data)))
+                op2.write(struct1.pack(*data))
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
+
 
 class ComplexCBushStressArray(ComplexCBushArray, StressObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         ComplexCBushArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
         return headers
 
@@ -238,12 +344,16 @@ class ComplexCBushStrainArray(ComplexCBushArray, StrainObject):
         ComplexCBushArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz'] # tx, ty, tz, rx, ry, rz
         return headers
 
     def get_f06_header(self, is_mag_phase=True):
-        raise NotImplementedError('element_name=%r element_type=%s' % (self.element_name, self.element_type))
+        """C:\\Users\\sdoyle\\Dropbox\\move_tpl\\ofprand1.op2"""
+        if self.element_type == 102:
+            element_header = '                         C O M P L E X   F O R C E S   I N   B U S H   E L E M E N T S   ( C B U S H ) \n'
+        else:
+            raise NotImplementedError('element_name=%r element_type=%s' % (self.element_name, self.element_type))
 
         if is_mag_phase:
             mag_phase = '                                                          (MAG/PHASE)\n'  # not tested
@@ -254,8 +364,7 @@ class ComplexCBushStrainArray(ComplexCBushArray, StrainObject):
             element_header,
             mag_phase,
             ' \n',
-            '                 ELEMENT                             AXIAL                                         TORQUE\n',
-            '                   ID.                               FORCE\n',
-            #'                       1                 -2.459512E+05 /  3.377728E+04                  0.0          /  0.0\n',
+            ' ',
+            '                  FREQUENCY         FORCE-X       FORCE-Y       FORCE-Z      MOMENT-X      MOMENT-Y      MOMENT-Z  \n',
         ]
         return words

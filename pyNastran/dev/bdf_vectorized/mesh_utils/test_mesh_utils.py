@@ -2,13 +2,13 @@
 tests
  - vectorized renumbering
  - shell mesh quality
+
 """
-from __future__ import print_function
 import os
 import unittest
-from codecs import open as codec_open
 
 import numpy as np
+from cpylog import SimpleLogger
 #import pyNastran
 
 #root_path = pyNastran.__path__[0]
@@ -18,7 +18,6 @@ import pyNastran
 from pyNastran.dev.bdf_vectorized.bdf import read_bdf
 from pyNastran.dev.bdf_vectorized.mesh_utils.bdf_renumber import bdf_renumber
 from pyNastran.dev.bdf_vectorized.mesh_utils.delete_bad_elements import get_bad_shells
-from pyNastran.utils.log import SimpleLogger
 
 pkg_path = pyNastran.__path__[0]
 
@@ -33,13 +32,13 @@ class TestMeshUtilsVectorized(unittest.TestCase):
         """renumber a bdf"""
         log = SimpleLogger(level='warning')
         bdf_filename = os.path.abspath(
-            os.path.join(pkg_path, '..', 'models', 'bwb', 'BWB_saero.bdf'))
+            os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero.bdf'))
         bdf_filename_out1 = os.path.abspath(
-            os.path.join(pkg_path, '..', 'models', 'bwb', 'BWB_saero1.out'))
+            os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero1.out'))
         bdf_filename_out2 = os.path.abspath(
-            os.path.join(pkg_path, '..', 'models', 'bwb', 'BWB_saero2.out'))
+            os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero2.out'))
         bdf_filename_out3 = os.path.abspath(
-            os.path.join(pkg_path, '..', 'models', 'bwb', 'BWB_saero3.out'))
+            os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero3.out'))
         model = bdf_renumber(bdf_filename, bdf_filename_out1, size=8,
                              is_double=False, starting_id_dict=None,
                              round_ids=False, cards_to_skip=None)
@@ -87,12 +86,19 @@ class TestMeshUtilsVectorized(unittest.TestCase):
             'ENDDATA'
         )
         bdf_filename = 'cquad4.bdf'
-        with codec_open(bdf_filename, 'w') as bdf_file:
+        with open(bdf_filename, 'w') as bdf_file:
             bdf_file.write(msg)
 
         model = read_bdf(bdf_filename, xref=True)
-        eids_to_delete = get_bad_shells(model, max_theta=180.,
-                                        max_skew=1000., max_aspect_ratio=1000.)
+        max_theta = 180.
+        max_skew = 1000.
+        max_aspect_ratio = 1000.
+        eids_to_delete = get_bad_shells(
+            model,
+            max_theta=max_theta,
+            max_skew=max_skew,
+            max_aspect_ratio=max_aspect_ratio,
+            max_taper_ratio=4.0)
         assert eids_to_delete == [100], eids_to_delete
         os.remove(bdf_filename)
 
@@ -122,7 +128,7 @@ class TestMeshUtilsVectorized(unittest.TestCase):
             'ENDDATA'
         )
         bdf_filename = 'ctria3.bdf'
-        with codec_open(bdf_filename, 'w') as bdf_file:
+        with open(bdf_filename, 'w') as bdf_file:
             bdf_file.write(msg)
 
         model = read_bdf(bdf_filename, xref=True)

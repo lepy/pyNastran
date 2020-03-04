@@ -1,11 +1,12 @@
-from __future__ import print_function
 import os
 import unittest
 
-from numpy import allclose, array
+import numpy as np
 
 from pyNastran.bdf.bdf import BDF, BDFCard, CBAR, PBAR, PBARL, GRID, MAT1
 from pyNastran.bdf.field_writer_8 import print_card_8
+from pyNastran.bdf.mesh_utils.mass_properties import (
+    mass_properties, mass_properties_nsm)  #mass_properties_breakdown
 from pyNastran.bdf.cards.test.utils import save_load_deck
 
 
@@ -13,25 +14,40 @@ class TestBars(unittest.TestCase):
     """test CBAR/PBAR/PBARL classes"""
     def test_pbar_1(self):
         """tests the PBAR BDF add"""
+        area = 0.0
+        i11 = 4.9e-2
+        i22 = 5.5e-2
+        i12 = 6.6e-2
+        j = 7.7e-2
+        nsm = 1.0
         fields = [
-            u'PBAR', 1510998, 1520998, 0.0, 4.9000000000000006e-14,
-            4.9000000000000006e-14, 0.0, 0.0, None, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, None, None, 0.0
+            u'PBAR', 1510998, 1520998, area, i11,
+            i22, j, nsm, None, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, None, None, i12,
         ]
         card = print_card_8(fields)
         #print(card)
         card = print_card_8(fields)
         lines = card.split('\n')
         model = BDF(debug=False)
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
         pbar = PBAR.add_card(cardi)
-        self.assertEqual(pbar.A, 0.)
-        self.assertEqual(pbar.i12, 0.)
+        pbar.raw_fields()
+        self.assertEqual(pbar.A, area)
+        self.assertEqual(pbar.i1, i11)
+        self.assertEqual(pbar.i2, i22)
+        self.assertEqual(pbar.i12, i12)
+        self.assertEqual(pbar.j, j)
         self.assertEqual(pbar.k1, None)
         self.assertEqual(pbar.k2, None)
-        #with self.assertRaises(AssertionError):  # A=0, I12=0, K1=0
-            #pbar = PBAR(card2)
+        self.assertEqual(pbar.nsm, nsm)
+        assert np.allclose(pbar.Area(), area)
+        assert np.allclose(pbar.I11(), i11)
+        assert np.allclose(pbar.I22(), i22)
+        assert np.allclose(pbar.I12(), i12)
+        assert np.allclose(pbar.J(), j)
+        assert np.allclose(pbar.Nsm(), nsm)
 
     def test_pbar_2(self):
         """tests the PBAR BDF add"""
@@ -52,7 +68,7 @@ class TestBars(unittest.TestCase):
         card = print_card_8(fields)
         lines = card.split('\n')
         model = BDF(debug=False)
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         cardi = BDFCard(card)
 
         pbar = PBAR.add_card(cardi)
@@ -89,7 +105,7 @@ class TestBars(unittest.TestCase):
         card = print_card_8(fields)
         lines = card.split('\n')
         model = BDF(debug=False)
-        card = model.process_card(lines)
+        card = model._process_card(lines)
 
         cardi = BDFCard(card)
         pbar = PBAR.add_card(cardi)
@@ -154,6 +170,33 @@ class TestBars(unittest.TestCase):
         model.add_mat1(mid, E, G, nu)
         save_load_deck(model)
 
+    def test_cbar_g0(self):
+        """modification of test_cbeam_01"""
+        model = BDF(debug=False)
+        pid = 200
+        mid = 6
+        model.add_pbar(pid, mid, A=0., i1=2., i2=2., i12=1., j=4., nsm=0., c1=0., c2=0.,
+                       d1=0., d2=0., e1=0., e2=0., f1=0., f2=0., k1=1.e8,
+                       k2=1.e8, comment='pbar')
+
+        eid = 100
+        nids = [10, 20]
+        x = None
+        g0 = 30
+        cbar = model.add_cbar(eid, pid, nids, x, g0, comment='cbar')
+        cbar.write_card_16(is_double=False)
+
+        E = 1.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu)
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(20, [0., 1., 0.])
+        model.add_grid(30, [0., 2., 0.])
+        model.cross_reference()
+
+        save_load_deck(model)
+
     def test_pbarl_1(self):
         """tests the PBARL"""
         model = BDF(log=None, debug=False)
@@ -216,16 +259,16 @@ class TestBars(unittest.TestCase):
         model.validate()
         model.cross_reference()
         pbarl._verify(xref=True)
-        assert allclose(cbar.Mass(), 9.9247779608), cbar.Mass()
+        assert np.allclose(cbar.Mass(), 9.9247779608), cbar.Mass()
 
         mat.rho = 0.
-        assert allclose(cbar.Mass(), 0.5), cbar.Mass()
+        assert np.allclose(cbar.Mass(), 0.5), cbar.Mass()
 
         scale = 'FR'
         x = [0.2, 0.4, 0.6, 0.8]
         model.add_cbarao(eid, scale, x, comment='cbarao')
         model.add_card(['CBARAO', eid+1, 'RF', 6, 0.1, 0.2], 'CBARAO')
-        save_load_deck(model)
+        save_load_deck(model, run_quality=False, run_test_bdf=False)
 
     def test_bar_mass_1(self):
         """tests CBAR/PBAR mass"""
@@ -267,7 +310,8 @@ class TestBars(unittest.TestCase):
         model.validate()
         model.cross_reference()
 
-        mass, cg, I = model.mass_properties(
+        mass, unused_cg, unused_I = mass_properties(
+            model,
             element_ids=None, mass_ids=None,
             reference_point=None,
             sym_axis=None,
@@ -285,10 +329,10 @@ class TestBars(unittest.TestCase):
         pbar = model.properties[11]
         assert pbar.Nu() == nu, 'pbar.Nu()=%s nu=%s' % (pbar.Nu(), nu)
         assert pbar.Rho() == rho, 'pbar.Rho()=%s rho=%s' % (pbar.Rho(), rho)
-        assert allclose(cbar.Length(), 1.0), cbar.Length()
-        #assert allclose(cbar.Mass(), 10.25), cbar.Mass()
-        #assert allclose(cbar.MassPerLength(), 10.25), cbar.MassPerLength()
-        #assert allclose(mass, 10.25), mass
+        assert np.allclose(cbar.Length(), 1.0), cbar.Length()
+        #assert np.allclose(cbar.Mass(), 10.25), cbar.Mass()
+        #assert np.allclose(cbar.MassPerLength(), 10.25), cbar.MassPerLength()
+        #assert np.allclose(mass, 10.25), mass
 
         case_control_lines = (
             'SOL 101\n'
@@ -313,18 +357,18 @@ class TestBars(unittest.TestCase):
             os.system('nastran scr=yes bat=no old=no cbar.bdf')
         os.remove('cbar.bdf')
 
-        if 0:
+        if 0:  # pragma: no cover
             from pyNastran.op2.op2 import OP2
             op2 = OP2()
             op2.read_op2('cbar.op2')
             #os.remove('cbar.op2')
             gpw = op2.grid_point_weight
             op2_mass = gpw.mass.max()
-            assert allclose(op2_mass, mass), 'op2_mass=%s mass=%s' % (op2_mass, mass)
+            assert np.allclose(op2_mass, mass), 'op2_mass=%s mass=%s' % (op2_mass, mass)
             #print('op2_mass=%s mass=%s' % (op2_mass, mass))
-            op2_cg = gpw.cg
+            unused_op2_cg = gpw.cg
 
-            cg = array([0.5, 0., 0.], dtype='float32')
+            unused_cg = np.array([0.5, 0., 0.], dtype='float32')
             #print('cg =', op2_cg)
 
     def test_bar_mass_2(self):
@@ -346,40 +390,40 @@ class TestBars(unittest.TestCase):
         nids = [1, 2]
         x = [0., 0., 1.]
         g0 = None
-        cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
-                              pa=0, pb=0, wa=None, wb=None,
-                              comment='CBAR')
+        unused_cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
+                                     pa=0, pb=0, wa=None, wb=None,
+                                     comment='CBAR')
         Type = 'BOX'
         dim = [1., 2., 0.1, 0.1]
         #pbeaml = model.add_pbeaml(pid, mid, Type, xxb, dims, nsm=None,
                                   #so=None, comment='PBEAML')
-        pbarl = model.add_pbarl(pid, mid, Type, dim, group='MSCBML0', nsm=0.,
-                                comment='PBARL')
+        unused_pbarl = model.add_pbarl(pid, mid, Type, dim, group='MSCBML0', nsm=0.,
+                                       comment='PBARL')
         #---------------------------------------------------------------
         eid = 2
         pid = 102
         x = None
         g0 = 3
-        cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
-                              pa=0, pb=0, wa=None, wb=None,
-                              comment='CBAR')
+        unused_cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
+                                     pa=0, pb=0, wa=None, wb=None,
+                                     comment='CBAR')
         Type = 'BOX'
         dim = [1., 2., 0.1, 0.1]
-        pbarl = model.add_pbarl(pid, mid, Type, dim, group='MSCBML0', nsm=0.,
-                                comment='PBARL')
+        unused_pbarl = model.add_pbarl(pid, mid, Type, dim, group='MSCBML0', nsm=0.,
+                                       comment='PBARL')
         #---------------------------------------------------------------
         eid = 3
         pid = 103
         #cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
                               #pa=42, pb=5, wa=None, wb=None,
                               #comment='CBAR')
-        pbar = model.add_pbar(pid, mid, A=1., i1=0., i2=0., i12=0., j=0., nsm=0.1,
-                              c1=0., c2=0.,
-                              d1=0., d2=0.,
-                              e1=0., e2=0.,
-                              f1=0., f2=0.,
-                              k1=1.e8, k2=1.e8,
-                              comment='pbar')
+        unused_pbar = model.add_pbar(pid, mid, A=1., i1=0., i2=0., i12=0., j=0., nsm=0.1,
+                                     c1=0., c2=0.,
+                                     d1=0., d2=0.,
+                                     e1=0., e2=0.,
+                                     f1=0., f2=0.,
+                                     k1=1.e8, k2=1.e8,
+                                     comment='pbar')
 
         #G = 3.0e7
         #E = None
@@ -405,12 +449,11 @@ class TestBars(unittest.TestCase):
         nsm = 1.
         area = 2.0
         pbar = model.add_pbar(pid, mid, A=area, i1=0., i2=0., i12=0., j=0.,
-                             nsm=nsm,
-                             c1=0., c2=0., d1=0., d2=0.,
-                             e1=0., e2=0., f1=0., f2=0.,
-                             k1=1.e8,
-                             k2=1.e8,
-                             comment='')
+                              nsm=nsm,
+                              c1=0., c2=0., d1=0., d2=0.,
+                              e1=0., e2=0., f1=0., f2=0.,
+                              k1=1.e8, k2=1.e8,
+                              comment='')
 
         E = 1.0
         G = None
@@ -444,9 +487,8 @@ class TestBars(unittest.TestCase):
         mid = 1
         bar_type = 'BAR'
         dim = [1., 2.]  # area = 2.0
-        nsm = 1.
         pbarl = model.add_pbarl(pid, mid, bar_type, dim, group='MSCBML0', nsm=1.,
-                               comment='')
+                                comment='')
 
         E = 1.0
         G = None
@@ -475,20 +517,80 @@ class TestBars(unittest.TestCase):
         assert pbarl.MassPerLength() == 21.0, pbarl.MassPerLength()
         assert pbarl2.MassPerLength() == 21.0, pbarl2.MassPerLength()
 
+        loadcase_id = 10
+        eid = 11
+        load_type = 'FZ'
+        x1 = 0.
+        x2 = None
+        p1 = 10.
+        scale = 'FR'
+        model.add_pload1(loadcase_id, eid, load_type, scale, x1, p1,
+                         x2=x2, p2=None, comment='pload1')
 
-    def test_pbrsect(self):
-        """tests a PBRSECT"""
+        scale = 'LE'
+        model.add_pload1(loadcase_id, eid, load_type, scale, x1, p1,
+                         x2=x2, p2=None, comment='')
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [0., 1., 0.])
+        x = None
+        g0 = 3
+        model.add_cbar(eid, pid, [1, 2], x, g0)
+        model.cross_reference()
+
+        p0 = 1
+        eids = None
+        nids = None
+        force1, moment1 = model.sum_forces_moments(p0, loadcase_id,
+                                                   include_grav=False, xyz_cid0=None)
+        force2, moment2 = model.sum_forces_moments_elements(p0, loadcase_id, eids, nids,
+                                                            include_grav=False, xyz_cid0=None)
+        #print(force1, force2)
+        assert np.allclose(force1, force2), force1
+        assert np.allclose(moment1, moment2), moment1
+        save_load_deck(model, xref='standard', punch=True)
+
+    def test_baror(self):
+        """tests a BAROR"""
         model = BDF(debug=False)
-        pid = 10
-        mid = 11
-        form = 'cat'
-        options = {}
-        pbrsect = model.add_pbrsect(pid, mid, form, options, comment='pbrsect')
+        n1 = 10
+        n2 = 20
+        model.add_grid(n1, [0., 0., 0.])
+        model.add_grid(n2, [1., 0., 0.])
 
-        pbrsect.validate()
-        pbrsect.raw_fields()
-        pbrsect.write_card()
-        pbrsect.write_card(size=16)
+        pid = 2
+        mid = 1
+        bar_type = 'BAR'
+        dim = [1., 2.]  # area = 2.0
+        unused_pbarl = model.add_pbarl(pid, mid, bar_type, dim, group='MSCBML0', nsm=1.,
+                                       comment='')
+
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu, rho=1.)
+
+        card_lines = ['BAROR', None, pid, None, None, 0.6, 2.9, -5.87, 'GOG']
+        model.add_card(card_lines, 'BAROR', comment='BAROR', is_list=True,
+                       has_none=True)
+
+        eid = 1
+        card_lines = ['CBAR', eid, pid, n1, n2]
+        model.add_card(card_lines, 'CBAR', comment='', is_list=True, has_none=True)
+        model.pop_parse_errors()
+        save_load_deck(model)
+
+    def test_baror_2(self):
+        model = BDF(debug=False)
+        pid = 12
+        is_g0 = True
+        g0 = 42
+        x = None
+        baror = model.add_baror(pid, is_g0, g0, x, offt='GGG', comment='baror')
+        baror.raw_fields()
+        baror.write_card(size=8)
+        baror.write_card(size=16)
+        save_load_deck(model)
 
     def test_cbend(self):
         """tests a CBEND"""
@@ -522,6 +624,130 @@ class TestBars(unittest.TestCase):
 
         #model._verify_bdf(xref=True)
         #model.uncross_reference()
+
+    def test_cbeam3(self):
+        """tests a CBEAM3"""
+        model = BDF(debug=False)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [0., 0., 0.])
+        model.add_grid(3, [0., 0., 0.])
+        model.add_grid(4, [0., 0., 0.])
+        eid = 1
+        pid = 2
+        nids = [1, 2, 3]
+        x = None
+        g0 = 4
+        cbeam3 = model.add_cbeam3(eid, pid, nids, x, g0, wa=None, wb=None, wc=None, tw=None, s=None, comment='cbeam3')
+        cbeam3.raw_fields()
+
+        A = 1.
+        iz = 2.
+        iy = 3.
+        mid = 4
+        pbeam3 = model.add_pbeam3(pid, mid, A, iz, iy, iyz=0., j=None,
+                                  nsm=0., cy=0., cz=0., dy=0., dz=0., ey=0., ez=0., fy=0., fz=0., comment='')
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu, rho=0.1)
+        str(cbeam3)
+        pbeam3s = str(pbeam3)
+        #print(pbeam3s)
+        str(pbeam3s)
+        card_lines = pbeam3s.split('\n')
+
+        cbeam3._verify(xref=False)
+        model.cross_reference()
+        model.uncross_reference()
+
+        del model.properties[pid]
+        model.cards_to_read.add('PBEAM3')
+        model.add_card(card_lines, 'PBEAM3', comment='', ifile=None, is_list=False, has_none=True)
+        model.pop_parse_errors()
+        model.pop_xref_errors()
+        assert pbeam3 == model.properties[pid]
+
+    def test_bar_area(self):
+        """tests the PBARL"""
+        model = BDF(log=None, debug=False)
+        mid = 40
+        group = 'group'
+        nsm = 0.0
+
+        shape_dims_area = [
+            # name, dims, area, i1
+            ('ROD', [2.], 4. * np.pi, 0.),
+            ('TUBE', [5., 1.], 24. * np.pi, 0.),
+            ('BAR', [2., 3.], 6., 0.),
+            ('BOX', [2., 3., 0.5, 0.5], 4., 0.),
+
+            ('L', [2., 3., 1., 1.], 4., 0.),
+            ('CHAN', [10., 10., 1., 1.], 28., None),
+            ('CHAN1', [9., 0.1, 8., 10.], 19., None),
+            ('CHAN2', [1, 1., 9., 10.], 26., None),
+
+            # new
+            ('I', [1., 1., 1., 0.1, 0.1, 0.1], 0.28, None),
+            ('I1', [0.1, 1., 0.5, 1.], 1.05, None),
+            ('H', [1.0, 0.1, 1.0, 0.1], 0.2, None),
+
+            ('Z', [0.5, 0.5, 0.5, 1.], 0.75, None),
+            ('Z', [0.8, 0.5, 0.5, 1.], 0.90, None),
+            ('Z', [0.5, 0.8, 0.5, 1.], 1.05, None),
+            ('Z', [0.5, 0.5, 0.8, 1.], 0.60, None),
+            ('Z', [0.5, 0.5, 0.5, 2.], 1.75, None),
+
+            ('CHAN', [1., 1., 0.1, 0.1], 0.28, None),
+            ('CHAN1', [0.5, 0.5, 0.5, 1.], 0.75, None),
+            ('CHAN2', [0.1, 0.1, 1., 1.], 0.28, None),
+            ('CROSS', [0.1, 0.1, 1., 0.1], 0.11, None),
+            ('HEXA', [0.1, 1., 1.], 0.90, None),
+            ('HEXA', [0.2, 1., 1.], 0.80, None),
+            ('HEXA', [0.1, 2., 1.], 1.90, None),
+            ('HEXA', [0.1, 1., 2.], 1.80, None),
+
+            ('HAT', [1., 0.1, 1., 0.1], 0.30, None),
+            ('HAT', [2., 0.1, 1., 0.1], 0.50, None),
+            ('HAT', [1., 0.2, 1., 0.1], 0.56, None),
+            ('HAT', [1., 0.1, 2., 0.1], 0.40, None),
+            ('HAT', [1., 0.1, 1., 0.2], 0.32, None),
+
+            ('HAT1', [3., 1., 1., 0.1, 0.1], 0.76, None),
+            ('HAT1', [3., 2., 1., 0.1, 0.1], 0.96, None),
+            ('HAT1', [3., 1., 2., 0.1, 0.1], 0.76, None),
+            ('HAT1', [3., 1., 1., 0.2, 0.1], 1.18, None),
+            ('HAT1', [3., 1., 1., 0.1, 0.2], 1.04, None),
+
+            ('T', [10., 10., 3., 0.5], 33.5, None),
+            ('T2', [10., 5., 0.5, 2.0], 14., None), #  ball,hall,tflange,tweb
+
+            ('T', [1., 1., 0.1, 0.1], 0.19, None),
+            ('T1', [1., 1., 0.1, 0.1], 0.20, None),
+            ('T2', [1., 1., 0.1, 0.1], 0.19, None),
+
+            ('DBOX', [2., 1., 1., 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ], 0.64, None),
+            ('DBOX', [2., 2., 1., 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ], 0.94, None),
+            ('DBOX', [2., 1., 2., 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ], 0.64, None),
+
+            ('DBOX', [2., 1., 1., 0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ], 0.72, None),
+            ('DBOX', [2., 1., 1., 0.1, 0.2, 0.1, 0.1, 0.1, 0.1, 0.1, ], 0.72, None),
+            ('DBOX', [2., 1., 1., 0.1, 0.1, 0.2, 0.1, 0.1, 0.1, 0.1, ], 0.72, None),
+            ('DBOX', [2., 1., 1., 0.1, 0.1, 0.1, 0.2, 0.1, 0.1, 0.1, ], 0.725, None),
+            ('DBOX', [2., 1., 1., 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1, ], 0.725, None),
+            ('DBOX', [2., 1., 1., 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, ], 0.725, None),
+            ('DBOX', [2., 1., 1., 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, ], 0.725, None),
+        ]
+        pid = 1
+        for bar_type, dims, areai, i1 in shape_dims_area:
+            pbarl = PBARL(pid, mid, bar_type, dims, group=group, nsm=nsm, comment='comment')
+            pbarl.validate()
+            area2 = pbarl.Area()
+            if i1 is not None:
+                pbarl.I1()
+                pbarl.I2()
+                pbarl.I12()
+            assert np.allclose(areai, area2), 'bar_type=%r dims=%s area=%s area_expected=%s' % (bar_type, dims, area2, areai)
+            pid += 1
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

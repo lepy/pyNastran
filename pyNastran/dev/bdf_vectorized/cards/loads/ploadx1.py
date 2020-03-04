@@ -1,5 +1,3 @@
-from six.moves import zip
-
 from numpy import arange, zeros, unique
 
 from pyNastran.bdf.field_writer_8 import print_card_8
@@ -8,7 +6,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (integer,
     double, double_or_blank)
 
 
-class PLOADX1(object):
+class PLOADX1:
     type = 'PLOADX1'
     def __init__(self, model):
         """

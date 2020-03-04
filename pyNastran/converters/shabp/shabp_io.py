@@ -1,8 +1,6 @@
-"""
-Defines the GUI IO file for S/HABP.
-"""
-from __future__ import print_function
-from six import iteritems
+"""Defines the GUI IO file for S/HABP."""
+from collections import OrderedDict, defaultdict
+
 import numpy as np
 from numpy import zeros, cross, amax, amin
 from numpy.linalg import norm  # type: ignore
@@ -11,12 +9,13 @@ import vtk
 from vtk import vtkQuad
 
 from pyNastran.converters.shabp.shabp import read_shabp
+from pyNastran.converters.shabp.shabp_results import ShabpOut
 from pyNastran.gui.gui_objects.gui_result import GuiResult
 
 
-class ShabpIO(object):
-    def __init__(self, parent):
-        self.parent = parent
+class ShabpIO:
+    def __init__(self, gui):
+        self.gui = gui
 
     def get_shabp_wildcard_geometry_results_functions(self):
         data = ('S/HABP',
@@ -25,78 +24,86 @@ class ShabpIO(object):
         return data
 
     def load_shabp_geometry(self, shabp_filename, name='main', plot=True):
-        self.parent.eid_maps[name] = {}
-        self.parent.nid_maps[name] = {}
+        model_name = name
+        self.gui.eid_maps[name] = {}
+        self.gui.nid_maps[name] = {}
 
         #key = self.case_keys[self.icase]
         #case = self.result_cases[key]
 
-        skip_reading = self.parent._remove_old_geometry(shabp_filename)
+        skip_reading = self.gui._remove_old_geometry(shabp_filename)
         if skip_reading:
             return
 
-        self.model = read_shabp(shabp_filename, log=self.parent.log, debug=self.parent.debug)
-        self.parent.model_type = 'shabp' # model.model_type
+        self.model = read_shabp(shabp_filename, log=self.gui.log, debug=self.gui.debug)
+        self.gui.model_type = 'shabp' # model.model_type
 
-        nodes, elements, patches, components, impact, shadow = self.model.get_points_elements_regions()
+        out = self.model.get_points_elements_regions()
+        nodes, elements, patches, components, impact, shadow = out
         #for nid,node in enumerate(nodes):
             #print "node[%s] = %s" %(nid,str(node))
 
         nnodes = len(nodes)
-        self.nnodes = len(nodes)
-        self.nelements = len(elements)
+        nelements = len(elements)
+        self.gui.nnodes = nnodes
+        self.gui.nelements = nelements
         #print("nnodes = ",self.nnodes)
         #print("nelements = ", self.nelements)
 
-        self.parent.grid.Allocate(self.parent.nelements, 1000)
+        grid = self.gui.grid
+        grid.Allocate(nelements, 1000)
 
         points = vtk.vtkPoints()
-        points.SetNumberOfPoints(self.parent.nnodes)
+        points.SetNumberOfPoints(nnodes)
 
         assert len(nodes) > 0
         mmax = amax(nodes, axis=0)
         mmin = amin(nodes, axis=0)
         dim_max = (mmax - mmin).max()
-        self.parent.create_global_axes(dim_max)
+        self.gui.create_global_axes(dim_max)
         for nid, node in enumerate(nodes):
             points.InsertPoint(nid, *node)
 
         assert len(elements) > 0
-        for eid, element in enumerate(elements):
+        for unused_eid, element in enumerate(elements):
             (p1, p2, p3, p4) = element
             elem = vtkQuad()
             elem.GetPointIds().SetId(0, p1)
             elem.GetPointIds().SetId(1, p2)
             elem.GetPointIds().SetId(2, p3)
             elem.GetPointIds().SetId(3, p4)
-            self.parent.grid.InsertNextCell(elem.GetCellType(), elem.GetPointIds())
+            grid.InsertNextCell(elem.GetCellType(), elem.GetPointIds())
 
-        self.parent.grid.SetPoints(points)
-        self.parent.grid.Modified()
-        if hasattr(self.parent.grid, 'Update'):
-            self.parent.grid.Update()
+        grid.SetPoints(points)
+        grid.Modified()
 
         # loadShabpResults - regions/loads
-        self.parent.scalarBar.VisibilityOn()
-        self.parent.scalarBar.Modified()
+        self.gui.scalar_bar_actor.VisibilityOn()
+        self.gui.scalar_bar_actor.Modified()
 
-        self.parent.isubcase_name_map = {1: ['S/HABP', '']}
-        cases = {}
+        self.gui.isubcase_name_map = {1: ['S/HABP', '']}
+        cases = OrderedDict()
         ID = 1
 
-        self.parent.log.debug("nNodes=%i nElements=%i" % (
-            self.parent.nnodes, self.parent.nelements))
+        self.gui.log.debug("nNodes=%i nElements=%i" % (
+            self.gui.nnodes, self.gui.nelements))
         form, cases = self._fill_shabp_geometry_case(
             cases, ID, nodes, elements, patches, components, impact, shadow)
-        self.parent._finish_results_io2(form, cases)
+
+        nelements = len(elements)
+        node_ids = np.arange(1, nnodes + 1, dtype='int32')
+        element_ids = np.arange(1, nelements + 1, dtype='int32')
+        self.gui.node_ids = node_ids
+        self.gui.element_ids = element_ids
+        self.gui._finish_results_io2(model_name, form, cases)
+        self.gui.bkp = self.model
 
     def clear_shabp(self):
-        del self.parent.elements
+        del seguient.elements
         del self.model
 
     def _fill_shabp_geometry_case(self, cases, ID, nodes, elements, patches,
                                   components, impact, shadow):
-        self.parent.elements = elements
 
         icase = 0
         location_form = [
@@ -221,29 +228,51 @@ class ShabpIO(object):
         return form, cases
 
     def load_shabp_results(self, shabp_filename):
-        Cpd, deltad = self.model.read_shabp_out(shabp_filename)
+        #print(dir(self))
+        #print(dir(self.gui))
+        model_name = 'main'
+        #print(self.model)
+        model = self.gui.bkp
+        out_model = ShabpOut(model, log=self.gui.log, debug=self.gui.debug)
+        Cpd, deltad = out_model.read_shabp_out(shabp_filename)
 
-        cases = self.parent.result_cases
+        cases = self.gui.result_cases
         icase = len(cases)
         mach_results = []
-        form = self.parent.form
-        form.append(('Results', None, mach_results))
-        #self.result_cases = {}
-        mach_forms = {}
-        for case_id, Cp in sorted(iteritems(Cpd)):
-            Cp = Cpd[case_id]
-            #delta = deltad[case_id]
 
-            mach, alpha, beta = self.model.shabp_cases[case_id]
+        form = self.gui.get_form()
+        form.append(('Results', None, mach_results))
+        mach_forms = defaultdict(list)
+        for case_id, Cp in sorted(Cpd.items()):
+            Cp = Cpd[case_id]
+            delta = deltad[case_id]
+
+            try:
+                mach, alpha, unused_beta = model.shabp_cases[case_id]
+                name = 'Mach=%g Alpha=%g' % (mach, alpha)
+            except KeyError:
+                name = 'Mach=? Alpha=? (Case %i)' % case_id
             #name = 'Mach=%g Alpha=%g' % (mach, alpha)
-            name = 'Mach=%g Alpha=%g' % (mach, alpha)
-            cases[(name, icase, 'Cp', 1, 'centroid', '%.3f', '')] = Cp
-            cp_form = [
-                ('Cp', icase, [])
-            ]
-            mach_forms[mach].append(('Cp', None, cp_form))
+            #(name, icase, 'Cp', 1, 'centroid', '%.3f', '')
+            cases[icase] = Cp
+            #cp_form = [
+                #('Cp', icase, [])
+            #]
+
+            ID = 1
+            cp_res = GuiResult(ID, header='Cp', title='Cp',
+                               location='centroid', scalar=Cp) # data_format='%.2f
+            delta_res = GuiResult(ID, header='delta', title='delta',
+                                  location='centroid', scalar=delta) # data_format='%.2f
+            itime = 0
+            cases[icase] = (cp_res, (itime, name))
+            cases[icase + 1] = (delta_res, (itime, name))
+            mach_forms[mach].append(('Cp', icase, []))
+            mach_forms[mach].append(('delta', icase + 1, []))
+            icase += 2
             #self.result_cases[(name, 'delta', 1, 'centroid', '%.3f')] = delta
 
-        for mach, mach_form in sorted(iteritems(mach_forms)):
-            mach_results.append(mach_form)
-        self.parent._finish_results_io2(form, cases)
+        for mach, mach_form in sorted(mach_forms.items()):
+            mach_formi = ('Mach=%s' % mach, None, mach_form)
+            mach_results.append(mach_formi)
+        self.gui._finish_results_io2(model_name, form, cases)

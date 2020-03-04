@@ -4,8 +4,7 @@ Defines the sub-OP2 class.  This should never be called outisde of the OP2 class
 
  - OP2_Scalar(debug=False, log=None, debug_file=None)
 
-   Methods
-   -------
+   **Methods**
    - set_subcases(subcases=None)
    - set_transient_times(times)
    - read_op2(op2_filename=None, combine=False)
@@ -13,8 +12,7 @@ Defines the sub-OP2 class.  This should never be called outisde of the OP2 class
    - set_additional_result_tables_to_read(tables)
    - set_additional_matrices_to_read(matrices)
 
-   Attributes
-   ----------
+   **Attributes**
    - total_effective_mass_matrix
    - effective_mass_matrix
    - rigid_body_mass_matrix
@@ -24,10 +22,8 @@ Defines the sub-OP2 class.  This should never be called outisde of the OP2 class
    - modal_effective_weight
    - set_as_msc()
    - set_as_optistruct()
-   - set_as_radioss()
 
-   Private Methods
-   ---------------
+   **Private Methods**
    - _get_table_mapper()
    - _not_available(data, ndata)
    - _table_crasher(data, ndata)
@@ -36,40 +32,33 @@ Defines the sub-OP2 class.  This should never be called outisde of the OP2 class
    - _create_binary_debug()
    - _make_tables()
    - _read_tables(table_name)
-   - _read_tol()
    - _skip_table(table_name)
-   - _read_dit()
    - _read_table_name(rewind=False, stop_on_failure=True)
    - _update_generalized_tables(tables)
-   - _skip_table_helper()
-   - _read_omm2()
    - _read_cmodext()
    - _read_cmodext_helper(marker_orig, debug=False)
-   - _get_marker_n(nmarkers)
    - _read_geom_table()
-   - _read_results_table()
-   - _print_month(month, day, year, zero, one)
    - _finish()
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 import os
-#import sys
-from struct import unpack, Struct
-from collections import Counter
-from typing import List
-from six import string_types, iteritems, PY2, PY3, b
-from six.moves import range
+from struct import Struct, unpack
+from collections import defaultdict
+from typing import List, Tuple, Dict, Union, Any
 
 from numpy import array
 import numpy as np
+from cpylog import get_logger
 
-from pyNastran import is_release
+from pyNastran import is_release, __version__
 from pyNastran.f06.errors import FatalError
-from pyNastran.op2.errors import SortCodeError, DeviceCodeError, FortranMarkerError
-from pyNastran.op2.tables.grid_point_weight import GridPointWeight
+from pyNastran.op2.op2_interface.op2_reader import OP2Reader, mapfmt, reshape_bytes_block
+from pyNastran.bdf.cards.params import PARAM
 
 #============================
+
+from pyNastran.op2.op2_interface.msc_tables import MSC_RESULT_TABLES, MSC_MATRIX_TABLES, MSC_GEOM_TABLES
+from pyNastran.op2.op2_interface.nx_tables import NX_RESULT_TABLES, NX_MATRIX_TABLES, NX_GEOM_TABLES
 
 from pyNastran.op2.tables.lama_eigenvalues.lama import LAMA
 from pyNastran.op2.tables.oee_energy.onr import ONR
@@ -84,12 +73,9 @@ from pyNastran.op2.tables.opg_appliedLoads.opg import OPG
 from pyNastran.op2.tables.oqg_constraintForces.oqg import OQG
 from pyNastran.op2.tables.oug.oug import OUG
 from pyNastran.op2.tables.ogpwg import OGPWG
-from pyNastran.op2.tables.minor_tables import MinorTables
 from pyNastran.op2.fortran_format import FortranFormat
 
 from pyNastran.utils import is_binary_file
-from pyNastran.utils.log import get_logger
-
 """
 ftp://161.24.15.247/Nastran2011/seminar/SEC04-DMAP_MODULES.pdf
 
@@ -197,402 +183,155 @@ RAFGEN  - Generalized Forces
 BHH     - Modal Viscous Damping Matrix
 K4HH    - Modal Structural Damping Matrix
 """
-GEOM_TABLES = [
-    # GEOM2 - Table of Bulk Data entry images related to element connectivity andscalar points
-    # GEOM4 - Table of Bulk Data entry images related to constraints, degree-of-freedom membership and rigid element connectivity.
-    b'GEOM1', b'GEOM2', b'GEOM3', b'GEOM4',  # regular
-    b'GEOM1S', b'GEOM2S', b'GEOM3S', b'GEOM4S', # superelements
-    b'GEOM1N', b'GEOM1VU', b'GEOM2VU',
-    b'GEOM1OLD', b'GEOM2OLD', b'GEOM4OLD',
+GEOM_TABLES = MSC_GEOM_TABLES + NX_GEOM_TABLES
 
-    b'EPT', b'EPTS', b'EPTOLD',
-    b'EDTS',
-    b'MPT', b'MPTS',
-
-    b'DIT', b'DITS',
-
-    b'PVT0', b'CASECC',
-    b'EDOM', b'OGPFB1',
-    # GPDT  - Grid point definition table
-    # BGPDT - Basic grid point definition table.
-    b'GPDT', b'BGPDT', b'BGPDTS', b'BGPDTOLD',
-    b'DYNAMIC', b'DYNAMICS',
-
-    # EQEXIN - quivalence table between external and internal grid/scalaridentification numbers.
-    b'EQEXIN', b'EQEXINS',
-    b'ERRORN',
-    b'DESTAB', b'R1TABRG',# b'HISADD',
-
-    # eigenvalues
-    b'BLAMA', b'LAMA', b'CLAMA',  #CLAMA is new
-
-    # grid point weight
-    b'OGPWG', b'OGPWGM',
-
-    # other
-    b'CONTACT', b'VIEWTB',
-    b'KDICT',
-    #b'MDICTP' where does this go?
-
-    # aero?
-    #b'MONITOR',
-]
-
-NX_RESULT_TABLES = [
-    # OESVM1  - OES Table of           element stresses for frequency response analysis that includes von Mises stress output in SORT1 format.
-    # OESVM1C - OES Table of composite element stresses for frequency response analysis that includes von Mises stress output in SORT1 format.
-    b'OESVM1', b'OSTRVM1',
-    b'OESVM1C', b'OSTRVM1C',
-
-    b'OESPSD2C', b'OSTPSD2C',
-    b'OSTRRMS1', b'OSTRMS1C',
-    b'OSTRNO1', b'OSTNO1C',
-    b'MDICT', b'BDICT', b'KDICTP', b'MDICTP',
-
-    #----------------------
-    # displacement/velocity/acceleration/eigenvector/temperature
-    # OUGV1  - Displacements in the global coordinate system
-    b'OUGV1',
-    #----------------------
-    # mpc forces - gset - sort 1
-    b'OQMG1',
-
-    #----------------------
-    # forces
-    # OEF1X - Element forces with intermediate (CBAR and CBEAM) station forces
-    #         and forces on nonlinear elements
-    b'OEF1X',
-
-    b'OES2C',
-    b'OSTR2C',
-    b'OSTRRMS1',
-    b'OSTRMS1C',
-    b'OSTRNO1',
-    b'OSTNO1C',
-    b'OESPSD2C',
-    b'OSTPSD2C',
-
-    b'OPHIG', # Eigenvectors in the basic coordinate system.
-]
-
-MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
-    # new
-    b'TOLD',
-    b'RAPCONS', b'RAQCONS', b'RADCONS', b'RASCONS', b'RAFCONS', b'RAECONS',
-    b'RANCONS', b'RAGCONS', b'RADEFFM', b'RAPEATC', b'RAQEATC', b'RADEATC',
-    b'RASEATC', b'RAFEATC', b'RAEEATC', b'RANEATC', b'RAGEATC',
-
-    # other
-    b'MKLIST',
-
-    # stress
-    b'OES1X1', b'OES1', b'OES1X', b'OES1C', b'OESCP',
-    b'OESNLXR', b'OESNLXD', b'OESNLBR', b'OESTRCP',
-    b'OESNL1X', b'OESRT',
-    #----------------------
-    # strain
-    b'OSTR1X', b'OSTR1C',
-
-    #----------------------
-    # forces
-    # OEF1  - Element forces (linear elements only)
-    # HOEF1 - Element heat flux
-    # OEF1X - Element forces with intermediate (CBAR and CBEAM) station forces
-    #         and forces on nonlinear elements
-    # DOEF1 - Scaled Response Spectra
-    b'OEFIT', b'OEF1X', b'OEF1', b'DOEF1',
-
-
-    # Table of Max values?
-    # Table of RMS values?
-    b'OEF1MX', b'OUGV1MX',
-
-    #----------------------
-    # spc forces - gset - sort 1
-    b'OQG1', b'OQGV1',
-    # mpc forces - gset - sort 1
-    b'OQMG1',
-    # ??? forces
-    b'OQP1',
-
-    #----------------------
-    # displacement/velocity/acceleration/eigenvector/temperature
-    # OUPV1 - Scaled Response Spectra - displacements
-    b'OUG1', b'OAG1',
-    b'OUGV1', b'BOUGV1', b'OUGV1PAT',
-    b'OUPV1',
-
-    # OUGV1PAT - Displacements in the basic coordinate system
-    # OUGV1  - Output (O) Displacements (U) in the global/g-set (G) coordinate system in vector (V) format and SORT1
-    # BOUGV1 - Displacements in the basic coordinate system
-    # BOPHIG - Eigenvectors in the basic coordinate system
-    # ROUGV1 - Relative OUGV1
-    # TOUGV1 - Temperature OUGV1
-    b'ROUGV1', b'TOUGV1', b'RSOUGV1', b'RESOES1', b'RESEF1',
-
-    #----------------------
-    # applied loads
-    # OPG1 - Applied static loads
-    b'OPNL1', # nonlinear applied loads - sort 1
-    b'OPG1', # applied loads - gset? - sort 1
-    b'OPGV1',
-    b'OPG2', # applied loads - sort 2 - v0.8
-
-    # grid point stresses
-    b'OGS1', # grid point stresses/strains - sort 1
-
-    #-----------------------------------------------------
-    # random analysis
-    # OP2 tables:
-    #   CRM - cumulative root mean square
-    #   PSD - power spectral density function
-    #   RMS - root mean square
-    #   NO - number of zero crossings???
-    #   ATO -autocorrelation???
-
-    # QRG:
-    #   RALL - PSDF, ATOC, CRMS
-    #   ATOC - autocorrelation
-    #   CRMS - cumulative root mean square
-    #   PSDF - power spectral density function
-
-    # msc displacement/velocity/acceleration
-    # nx displacement
-    b'OUGATO1', b'OUGCRM1', b'OUGPSD1', b'OUGRMS1', b'OUGNO1',
-    b'OUGATO2', b'OUGCRM2', b'OUGPSD2', b'OUGRMS2', b'OUGNO2',
-
-    # nx velocity
-    b'OVGATO1', b'OVGCRM1', b'OVGPSD1', b'OVGRMS1', b'OVGNO1',
-    b'OVGATO2', b'OVGCRM2', b'OVGPSD2', b'OVGRMS2', b'OVGNO2',
-
-    # nx acceleration
-    b'OAGATO1', b'OAGCRM1', b'OAGPSD1', b'OAGRMS1', b'OAGNO1',
-    b'OAGATO2', b'OAGCRM2', b'OAGPSD2', b'OAGRMS2', b'OAGNO2',
-
-    # msc spc/mpc forces
-    # nx spc forces
-    b'OQGATO1', b'OQGCRM1', b'OQGPSD1', b'OQGRMS1', b'OQGNO1',
-    b'OQGATO2', b'OQGCRM2', b'OQGPSD2', b'OQGRMS2', b'OQGNO2',
-
-    # nx mpc forces
-    b'OQMATO2', b'OQMCRM2', b'OQMPSD2', b'OQMRMS2', b'OQMNO2',
-
-    # stress
-    b'OESATO1', b'OESCRM1', b'OESPSD1', b'OESRMS1', b'OESNO1', b'OESXRMS1',
-    b'OESATO2', b'OESCRM2', b'OESPSD2', b'OESRMS2', b'OESNO2',
-
-    # load vector ???
-    b'OPGATO1', b'OPGCRM1', b'OPGPSD1', b'OPGRMS1', b'OPGNO1',
-    b'OPGATO2', b'OPGCRM2', b'OPGPSD2', b'OPGRMS2', b'OPGNO2',
-
-    #------------------
-    # strain
-    b'OSTRATO1', b'OSTRCRM1', b'OSTRPSD1', b'OSTRRMS1', b'OSTRNO1',
-    b'OSTRATO2', b'OSTRCRM2', b'OSTRPSD2', b'OSTRRMS2', b'OSTRNO2',
-
-    # force
-    b'OEFATO1', b'OEFCRM1', b'OEFPSD1', b'OEFRMS1', b'OEFNO1',
-    b'OEFATO2', b'OEFCRM2', b'OEFPSD2', b'OEFRMS2', b'OEFNO2',
-    #b'OEFPSD2', b'OEFCRM2', b'OEFRMS2', b'OEFATO2', b'OEFNO2',
-
-    #-----------------------------------------------------
-    # other
-    b'OFMPF2M',
-    b'OSMPF2M', b'OPMPF2M', b'OLMPF2M', b'OGPMPF2M',
-
-    b'OCRUG',
-    b'OCRPG',
-
-    b'STDISP', b'AEDISP', #b'TOLB2',
-
-    # autoskip
-    #b'MATPOOL',
-    b'CSTM',
-    b'AXIC',
-    b'BOPHIG',
-    b'HOEF1',
-
-    #------------------------------------------
-    # strain energy
-    b'ONRGY1',
-    b'ONRGY2',
-
-    #------------------------------------------
-    # new skipped - v0.8
-
-    # buggy
-    b'IBULK',
-    #b'FRL',  # frequency response list
-    b'TOL',
-    b'DSCM2', # normalized design sensitivity coeff. matrix
-
-    # dont seem to crash
-    b'DESCYC',
-    b'DBCOPT', # design optimization history for post-processing
-    b'PVT',    # table containing PARAM data
-    b'XSOP2DIR',
-    b'ONRGY',
-    #b'CLAMA',
-    b'DSCMCOL', # design sensitivity parameters
-    b'CONTACTS',
-    b'EDT', # aero and element deformations
-    b'EXTDB',
-
-
-    b'OQG2', # single point forces - sort 2 - v0.8
-    b'OBC1', b'OBC2', # contact pressures and tractions at grid points
-    b'OBG1', # glue normal and tangential tractions at grid points in basic coordinate system
-    b'OES2', # element stresses - sort 2 - v0.8
-    b'OEF2', # element forces - sort 2 - v0.8
-    b'OUGV2', # absolute displacements/velocity/acceleration - sort 2
-
-    # contact
-    b'OSPDSI1', # intial separation distance
-    b'OSPDS1',  # final separation distance
-    b'OQGCF1', b'OQGCF2', # contact force at grid point
-    b'OQGGF1', b'OQGGF2', # glue forces in grid point basic coordinate system
-
-    b'OSPDSI2',
-    b'OSPDS2',
-    b'OSTR2',
-    b'OESNLXR2',
-
-    b'CMODEXT',
-    b'ROUGV2',  # relative displacement
-    b'CDDATA',  # cambpell diagram table
-    b'OEKE1',
-    b'OES1MX', # extreme stresses?
-    b'OESNLBR2',
-    b'BGPDTVU', # basic grid point defintion table for a superelement and related to geometry with view-grids added
-
-    b'OUG2T',
-    b'AEMONPT',
-    #b'KDICT',
-]
-
-if len(MSC_RESULT_TABLES) != len(np.unique(MSC_RESULT_TABLES)):
-    counter = Counter(MSC_RESULT_TABLES)
-    _MSG = 'Invalid count:\n'
-    for key, value in counter.items():
-        if value != 1:
-            _MSG += '%s = %s\n' % (key, value)
-    raise RuntimeError(_MSG)
-
-
-NX_MATRIX_TABLES = [
-    b'RADEFMP', # Modal Effective Inertia Matrix - Modal Matrix (per Vibrata)
-    b'RAFGEN', # Load Set Modal Forces  - Modal generalized force vectors  (per Vibrata)
-    b'RADAMPZ',
-    b'RADAMPG',
-    b'EFMFSMS', b'EFMASSS', b'RBMASSS', b'EFMFACS', b'MPFACS', b'MEFMASS', b'MEFWTS',
-    b'K4HH', b'KELMP', b'MELMP',
-
-    # not-MATPOOL
-    b'DELTAK', b'DELTAM', b'RBM0', b'DELTAM0',
-
-    # MATPOOL
-    b'MRGGT', b'UEXPT',
-
-    # MATRIX/MATPOOL - testing-remove this
-    b'PATRN', b'IDENT', b'RANDM', b'CMPLX',
-    b'MPATRN', b'MIDENT', b'MRANDM', b'MCMPLX',
-    b'MATPOOL',
-    #b'KELM',
-    b'MELM', b'BELM',
-]
-
-
-MSC_MATRIX_TABLES = [
-    #b'TOLD',
-    b'SDT', #b'STDISP',
-    b'TOLB2', b'ADSPT', #b'MONITOR',
-    b'PMRT', b'PFRT', b'PGRT', # b'AEMONPT',
-    b'AFRT', b'AGRT',
-    b'QHHA',
-
-    b'A', b'SOLVE,', b'UMERGE,', b'AA', b'AAP', b'ADELUF', b'ADELUS', b'ADELX',
-    b'ADJG', b'ADJGT', b'ADRDUG', b'AEDBUXV', b'AEDW', b'AEFRC', b'AEIDW',
-    b'AEIPRE', b'AEPRE', b'AG', b'AGD', b'AGG', b'AGX', b'AH', b'AJJT', b'AM2',
-    b'AM3', b'ANORM', b'APART', b'APIMAT', b'APIMATT', b'APL', b'APPLOD',
-    b'APU', b'ARVEC', b'AUG1', b'B', b'SOLVE,', b'B2DD', b'B2GG', b'B2PP',
-    b'BAA', b'BACK', b'BANDPV', b'BASVEC', b'BASVEC0', b'BCONXI', b'BCONXT',
-    b'BDD', b'BDIAG', b'BFEFE', b'BFHH', b'BHH', b'BHH1', b'BKK', b'BP', b'BPP',
-    b'BRDD', b'BXX', b'BUX', b'C', b'CDELB', b'CDELK', b'CDELM', b'CFSAB',
-    b'CLAMMAT', b'CLFMAT', b'CMAT', b'CMBXPHG', b'CMSQE', b'CMSTQE', b'CNVTST',
-    b'CON', b'CONS1T', b'CONSBL', b'CONTVDIF', b'COORD', b'COORDO', b'CPH1',
-    b'CPH2', b'CPHP', b'CPHX', b'CPHL', b'CVAL', b'CVALO', b'CVAL', b'CVALR',
-    b'CVALRG', b'CVECT', b'D', b'D1JE', b'D1JK', b'D2JE', b'D2JK', b'DAR',
-    b'DBUG', b'DCLDXT', b'DELB1', b'DELBSH', b'DELCE', b'DELDV', b'DELF1',
-    b'DELFL', b'DELGM', b'DELGS', b'DELS', b'DELS1', b'DELTGM', b'DELVS',
-    b'DELWS', b'DELX', b'DELX1', b'DESVCP', b'DESVEC', b'DESVECP', b'DJX',
-    b'DM', b'DPHG', b'DPLDXI', b'DPLDXT', b'DRDUG', b'DRDUGM', b'DSCM',
-    b'DSCM2', b'DSCMG', b'DSCMR', b'DSDIV', b'DSEGM', b'DSESM', b'DSTABR',
-    b'DSTABU', b'DUGNI', b'DUX', b'DXDXI', b'DXDXIT', b'E', b'EFMASMTT',
-    b'EFMMCOL', b'EFMMAT', b'EGK', b'EGM', b'EGTX', b'EGX', b'EMAT', b'EMM',
-    b'ENEMAT', b'ENFLODB', b'ENFLODK', b'ENFLODM', b'ENFMOTN', b'ERHM',
-    b'EUHM', b'EXCITEFX', b'EXCITF', b'EXCITP', b'F', b'F2J', b'FFAJ', b'FGNL',
-    b'FMPF', b'FN', b'FOLMAT', b'FORE', b'FREQMASS', b'FRMDS', b'GC', b'GDGK',
-    b'GDKI', b'GDKSKS', b'GEG', b'GLBRSP', b'GLBRSPDS', b'GM', b'GMD', b'GMNE',
-    b'GMS', b'GOA', b'GOD', b'GPFMAT', b'GPGK', b'GPKH', b'GPIK', b'GPKE',
-    b'GPMPF', b'GRDRM', b'GS', b'HMKT', b'IFD', b'IFG', b'IFP', b'IFS', b'IFST',
-    b'IMAT', b'IMATG', b'K2DD', b'K2GG', b'K2PP', b'K4AA', b'K4KK', b'K4XX',
-    b'KAA', b'KAAL', b'KDD', b'KDICTDS', b'KDICTX', b'KFHH', b'KFS', b'KGG',
-    b'KGG1', b'KGGNL', b'KGGNL1', b'KGGT', b'KHH', b'KHH1', b'KKK', b'KLL',
-    b'KLR', b'KMM', b'KNN', b'KOO', b'KPP', b'KRDD', b'KRFGG', b'KRR', b'KRZX',
-    b'KSAZX', b'KSGG', b'KSS', b'KTTP', b'KTTS', b'KUX', b'KXWAA', b'KXX',
-    b'LAJJT', b'LAM1DD', b'LAMAM', b'LAMMAT', b'LCPHL', b'LCPHP', b'LCPHX',
-    b'LMPF', b'LSCM', b'LSEQ', b'LTF', b'M2DD', b'M2GG', b'M2PP', b'MA', b'MAA',
-    b'MABXWGG', b'MAT', b'MAT1', b'MAT1N', b'MAT2', b'MAT2N', b'MATS', b'MATM',
-    b'MBSP', b'MCHI', b'MCHI2', b'MDD', b'MDUGNI', b'MEA', b'MEF', b'MEM', b'MES',
-    b'MEW', b'MFEFE', b'MFHH', b'MGG', b'MGGCOMB', b'MHH', b'MHH1', b'MI', b'MKK',
-    b'MKNRGY', b'MLAM', b'MLAM2', b'MLL', b'MLR', b'MMP', b'MNRGYMTF', b'MOA',
-    b'MOO', b'MPJN2O', b'MPP', b'MQG', b'MR', b'MRR', b'MSNRGY', b'MUG', b'MUGNI',
-    b'MULNT', b'MUPN', b'MUX', b'MXWAA', b'MXX', b'MZZ', b'OTMT', b'P2G', b'PA',
-    b'PBYG', b'PC1', b'PD', b'PDF', b'PDT', b'PDT1', b'PFP', b'PG', b'PG1',
-    b'PGG', b'PGRV', b'PGT', b'PGUP', b'PGVST', b'PHA', b'PHA1', b'PHAREF1',
-    b'PHASH2', b'PHDFH', b'PHDH', b'PHF', b'PHF1', b'PHG', b'PHG1', b'PHGREF',
-    b'PHGREF1', b'PHT', b'PHX', b'PHXL', b'PHZ', b'PJ', b'PKF', b'PKYG', b'PL',
-    b'PLI', b'PMPF', b'PMYG', b'PNL', b'PNLT', b'PO', b'POI', b'PPF', b'PPL',
-    b'PPLT', b'PPT', b'PRBDOFS', b'PROPI', b'PROPO', b'PS', b'PSF', b'PSI',
-    b'PST', b'PUG', b'PUGD', b'PUGS', b'PX', b'PXA', b'PXF', b'PXT', b'PXTDV',
-    b'PXT1', b'PZ', b'QG', b'QHH', b'QHHL', b'QHJ', b'QHJK', b'QHJL', b'QKH',
-    b'QKHL', b'QLL', b'QMG', b'QMPF', b'QPF', b'QR', b'QXX', b'R', b'R1VAL',
-    b'R1VALO', b'R1VALR', b'R1VALRG', b'R2VAL', b'R2VALO', b'R2VALR',
-    b'R2VALRG', b'R3VAL', b'R3VALO', b'R3VALR', b'R3VALRG', b'RBF', b'RECM',
-    b'RDG', b'RESMATFT', b'RESMAX', b'RESMAX0', b'RGG', b'RHMCF', b'RMAT',
-    b'RMATG', b'RMG', b'RMG1', b'RMPTQM', b'RMSVAL', b'RMSVALR', b'RMSVLR',
-    b'RPH', b'RPV', b'RPX', b'RQA', b'RSPTQS', b'RSTAB', b'RUG', b'RUL', b'RUO',
-    b'SCLFMAT', b'SEQMAP', b'SHPVEC', b'SKJ', b'SLIST', b'SMPF', b'SNORMM',
-    b'SORTBOOL', b'SRKS', b'SRKT', b'SVEC', b'SYSE', b'TR', b'TRX', b'UA',
-    b'UACCE', b'UAJJT', b'UAM1DD', b'UD', b'UD1', b'UDISP', b'UE', b'UG', b'UGD',
-    b'UGDS', b'UGDS1', b'UGG', b'UGNI', b'UGNT', b'UGT', b'MATMOD', b'UGX',
-    b'UGX1', b'UH', b'UHF', b'UHFF', b'UHFS', b'UI', b'UL', b'ULNT', b'UNITDISP',
-    b'UO', b'UOO', b'UPF', b'UPNL0', b'UPNT', b'UTF', b'UVELO', b'UX', b'UXDIFV',
-    b'UXF', b'UXR', b'UXT', b'UXT1', b'UXU', b'UXV', b'UXVBRL', b'UXVF', b'UXVP',
-    b'UXVST', b'UXVW', b'VA', b'VG', b'VGD', b'WGTM', b'WJ', b'WRJVBRL',
-    b'WSKJF', b'SOLVE,', b'XAA', b'XD', b'XDD', b'XDICT', b'XDICTB', b'XDICTDS',
-    b'XDICTX', b'XG', b'XGG', b'XH', b'XINIT', b'XJJ', b'XO', b'XORTH', b'XP',
-    b'XPP', b'SOLVIT', b'XSF', b'XSS', b'XZ', b'YACCE', b'YPF', b'YPO', b'YPT',
-    b'YS', b'YS0', b'YSD', b'YVELO', b'Z1ZX', b'ZZX',
-
-    # not sure - per BAH_Plane_cont_gust.f06 (MONITOR point deck)
-    b'PMRF', b'PERF', b'PFRF', b'PGRF', b'AFRF', b'AGRF', b'MP3F',
-] # type: List[bytes]
 AUTODESK_MATRIX_TABLES = [
     #b'BELM',
     b'KELM',
     #b'MELM',
 ] # type: List[bytes]
 # this will be split later
-RESULT_TABLES = NX_RESULT_TABLES + MSC_RESULT_TABLES
-MATRIX_TABLES = NX_MATRIX_TABLES + MSC_MATRIX_TABLES + AUTODESK_MATRIX_TABLES + [b'MEFF',]
+TEST_MATRIX_TABLES = [b'ATB', b'BTA', b'MYDOF']
 
+RESULT_TABLES = NX_RESULT_TABLES + MSC_RESULT_TABLES
+MATRIX_TABLES = NX_MATRIX_TABLES + MSC_MATRIX_TABLES + AUTODESK_MATRIX_TABLES + TEST_MATRIX_TABLES + [b'MEFF']
+
+#GEOM_TABLES = MSC_GEOM_TABLES
+#RESULT_TABLES = MSC_RESULT_TABLES
+#MATRIX_TABLES = MSC_MATRIX_TABLES
+
+# TODO: these are weird...
+#   RPOSTS1, MAXRATI, RESCOMP, PDRMSG
+INT_PARAMS_1 = [
+    b'POST', b'OPPHIPA', b'OPPHIPB', b'GRDPNT', b'RPOSTS1', b'BAILOUT',
+    b'COUPMASS', b'CURV', b'INREL', b'MAXRATI', b'OG',
+    b'S1AM', b'S1M', b'DDRMM', b'MAXIT', b'PLTMSG', b'LGDISP', b'NLDISP',
+    b'OUNIT2K', b'OUNIT2M', b'RESCOMP', b'PDRMSG', b'LMODES', b'USETPRT',
+    b'NOCOMPS', b'OPTEXIT', b'RSOPT', b'GUSTAERO', b'MPTUNIT',
+    b'USETSEL', b'NASPRT', b'DESPCH', b'DESPCH1', b'COMPARE', b'DBNBLKS', b'NEWSEQ', b'OLDSEQ',
+    b'METHCMRS', b'NOFISR', b'KGGCPCH', b'ERROR', b'DBCDIAG', b'GPECT', b'LSTRN',
+    b'DBDROPT', b'SEOP2CV', b'IRES', b'SNORMPRT', b'DBDRNL', b'VMOPT',
+    b'OSWPPT', b'KDAMP', b'KDAMPFL', b'MATNL', b'MPCX', b'GEOMPLT', b'NOELOP',
+    b'NOGPF', b'PROUT', b'SUPER', b'LGDIS', b'EST', b'SEP1XOVR',
+    b'FRSEID', b'HRSEID', b'LRSEID', b'MODACC', b'XFLAG', b'TSTATIC',
+    b'NASPDV', b'RMXCRT', b'RMXTRN', b'DBCLEAN', b'LANGLE', b'SEMAPPRT',
+    b'FIXEDB', b'AMGOK', b'ASING', b'CNSTRT', b'CURVPLOT', b'CYCIO',
+    b'CYCSEQ', b'DBDICT', b'DBINIT', b'DBSET1', b'DBSET2', b'DBSET3', b'DBSET4',
+    b'DBSORT', b'DOPT', b'FACTOR', b'ALTSHAPE', b'MODTRK', b'IFTM', b'INRLM',
+    b'KINDEX', b'KMIN', b'KMAX', b'LARGEDB', b'LOADINC', b'LOADING', b'LOOP',
+    b'LOOPID', b'MODEL', b'MOREK', b'NEWDYN', b'NFECI', b'NINTPTS',
+    b'NLAYERS', b'NOELOF', b'NOMSGSTR', b'NONCUP', b'NUMOUT', b'NUMOUT1', b'NUMOUT2',
+    b'OPGTKG', b'OPPHIB', b'OUTOPT', b'PKRSP', b'RSPECTRA', b'RSPRINT',
+    b'S1G', b'SCRSPEC', b'SEMAPOPT', b'SEQOUT', b'SESEF', b'SKPAMG', b'SKPAMP',
+    b'SLOOPID', b'SOLID', b'SPCGEN', b'SRTELTYP', b'SRTOPT', b'START', b'SUBID',
+    b'SUBSKP', b'TABID', b'TESTNEG', b'BDMNCON',
+
+    # not defined in qrg...
+    b'NT', b'PNCHDB', b'DLOAD', b'NLOAD', b'NOAP', b'NOCMPFLD', b'NODATA',
+    b'NODJE', b'NOMECH', b'NOSDR1', b'NOSHADE', b'NOSORT1', b'NOTRED',
+    b'NSEGS', b'OLDELM', b'OPADOF', b'OUTPUT', b'P1', b'P2', b'P3', b'PCHRESP',
+    b'PLOT', b'PLOTSUP', b'PRTPCH', b'RADLIN', b'RESDUAL', b'S1', b'SDATA',
+    b'SEFINAL', b'SEMAP1', b'SKPLOAD', b'SKPMTRX', b'SOLID1', b'SSG3',
+    b'PEDGEP', b'ACMSPROC', b'ACMSSEID', b'ACOUS', b'ACOUSTIC', b'ADJFLG',
+    b'ADJLDF', b'AEDBCP', b'AESRNDM', b'ARCSIGNS', b'ATVUSE', b'BADMESH', b'BCHNG',
+    b'BCTABLE', b'ROTCSV', b'ROTGPF', b'BEARDMP', b'BEARFORC', b'BOV', b'OP2FMT',
+
+    # ???
+    b'CHKSEC', b'CMSMETH', b'CNTNSUB', b'CNTSCL', b'CNTSTPS', b'CONCHG',
+    b'DBDRPRJ', b'DBDRVER', b'DDAMRUN', b'DESCONX', b'DESEIG', b'DESFINAL',
+    b'DESMAX', b'DESSOLAP', b'DIAGOPT',
+
+    b'DOBUCKL', b'DOF123', b'DOMODES', b'DOSTATIC', b'DOTRIP', b'DRESP', b'DSGNOPTX',
+    b'DSNOKD', b'DYNAMICX', b'EBULK', b'EIGNFREQ', b'ELOOPID',
+]
+FLOAT_PARAMS_1 = [
+    b'K6ROT', b'WTMASS', b'SNORM', b'PATVER', b'MAXRATIO', b'EPSHT',
+    b'SIGMA', b'TABS', b'AUNITS', b'BOLTFACT', b'LMSCAL',
+    'DSZERO', b'G', b'GFL', b'LFREQ', b'HFREQ', b'ADPCON',
+    b'W3', b'W4', b'W3FL', b'W4FL', b'PREFDB',
+    b'EPZERO', b'DSZERO', b'TINY', b'TOLRSC',
+    b'FRSPD', b'HRSPD', b'LRSPD', b'MTRFMAX', b'ROTCMRF', b'MTRRMAX',
+    b'LAMLIM', b'BIGER', b'BIGER1', b'BIGER2', b'CLOSE',
+    b'EPSBIG', b'EPSMALC', b'EPSMALU', b'HIRES', b'KDIAG', b'MACH', b'VREF',
+    b'STIME', b'TESTSE', b'LFREQFL', b'Q', b'ADPCONS', b'AFNORM', b'AFZERO',
+
+    # should this be FLOAT_PARAMS_1???
+    b'EPPRT',
+
+    # not defined
+    b'PRPA', b'PRPHIVZ', b'PRPJ', b'PRRULV', b'RMAX', b'ADJFRQ', b'ARF',
+    b'ARS', # b'BSHDAMP',
+    b'EPSRC',
+
+    # or integer (not string)
+    b'BSHDMP',
+    b'BSHDMP4',
+    b'CONFAC',
+    b'CP',
+    b'DBCPAE',
+    b'DBCPATH',
+    b'DFREQ', b'DFRSPCF', b'DSTSPCF', b'DTRSPCF',
+    b'DUCTFMAX',
+]
+FLOAT_PARAMS_2 = [
+    b'BETA', b'CB1', b'CB2', b'CK1', b'CK2', b'CK3', b'CK41', b'CK42',
+    b'CM1', b'CM2',
+    b'G2', b'G4', b'G5', b'G6', b'G7', b'G8', b'G9', b'G10', b'G12', b'G13',
+    b'ALPHA1', b'ALPHA2', b'APPF',
+    b'CA1', b'CA2',
+    b'CP1', b'CP2',
+
+    # should this be FLOAT_PARAMS_1???
+    #b'EPPRT',
+]
+INT_PARAMS_2 = [b'APPI',]
+DOUBLE_PARAMS_1 = [] # b'Q'
+STR_PARAMS_1 = [
+    b'POSTEXT', b'PRTMAXIM', b'AUTOSPC', b'OGEOM', b'PRGPST',
+    b'RESVEC', b'RESVINER', b'ALTRED', b'OGPS', b'OIBULK', b'OMACHPR',
+    b'UNITSYS', b'F56', b'OUGCORD', b'OGEM', b'EXTSEOUT',
+    b'CDIF', b'SUPAERO', b'RSCON', b'AUTOMPC', b'DBCCONV',
+    b'AUTOSPRT', b'PBRPROP', b'OMID', b'HEATSTAT', b'SECOMB', b'ELEMITER',
+    b'ELITASPC', b'DBCONV', b'SHLDAMP', b'COMPMATT', b'SPCSTR', b'ASCOUP',
+    b'PRTRESLT', b'SRCOMPS', b'CHECKOUT', b'SEMAP', b'AESMETH', b'RESVALT',
+    b'ROTSYNC', b'SYNCDAMP', b'PRGPOST', b'WMODAL', b'SDAMPUP',
+    b'COLPHEXA', b'CHKOUT', b'CTYPE', b'DBNAME', b'VUHEXA', b'VUPENTA', b'VUTETRA',
+    b'MESH', b'OPTION', b'PRINT', b'SENAME', b'MECHFIX', b'RMXTRAN', b'FLEXINV',
+    b'ADSTAT', b'ACOUT', b'ACSYM', b'ACTYPE', b'ADBX', b'AUTOSEEL',
+    b'RDSPARSE',
+    b'SPARSEDR',
+    b'BSHDAMP',
+    b'CORROPT',
+    b'DBACOUS',
+    b'DBALLNOQ',
+    b'DBALLX',
+    b'DBAPI',
+    b'DBAPP',
+    b'DBCNT',
+    b'DBCOVWRT',
+    b'DBDNOPT',
+    b'DBDNR', b'DBDNR1', b'DBDNX', b'DBEXT', b'DBGOA', b'DBMAP',
+    b'DBOFP2X', b'DBOFPX', b'DBRCVX', b'DBSCRR', b'DBUPOPT', b'DBUPR',
+    b'DBUPX', b'DBXSEDR', b'DBXSEDRR', b'DBZUZR', b'DSOR', b'DSOX',
+    b'DVGRDN', b'DYNSPCF', b'EQVSCR',
+
+    # part of param, checkout
+    b'PRTBGPDT', b'PRTCSTM', b'PRTEQXIN', b'PRTGPDT',
+    b'PRTGPL', b'PRTGPTT', b'PRTMGG', b'PRTPG',
+
+    # superelements
+    b'EXTOUT', b'SESDAMP',
+
+    # TODO: remove these as they're in the matrix test and are user
+    #       defined PARAMs; arguably all official examples should just work
+    # TODO: add an option for custom PARAMs
+    b'ADB', b'AEDB', b'MREDUC', b'OUTDRM', b'OUTFORM', b'REDMETH', b'DEBUG',
+    b'AEDBX', b'AERO', b'AUTOSUP0', b'AXIOPT',
+]
 
 class OP2_Scalar(LAMA, ONR, OGPF,
-                 OEF, OES, OGS, OPG, OQG, OUG, OGPWG, MinorTables, FortranFormat):
-    """
-    Defines an interface for the Nastran OP2 file.
-    """
+                 OEF, OES, OGS, OPG, OQG, OUG, OGPWG, FortranFormat):
+    """Defines an interface for the Nastran OP2 file."""
     @property
     def total_effective_mass_matrix(self):
         """6x6 matrix"""
@@ -628,33 +367,51 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         """6xnmodes matrix"""
         return self.matrices['MEFWTS']#.dataframe
 
+    @property
+    def matrix_tables(self):
+        return MATRIX_TABLES
+
     def set_as_nx(self):
         self.is_nx = True
         self.is_msc = False
+        self.is_autodesk = False
+        self.is_nasa95 = False
         self.is_optistruct = False
-        self.is_radioss = False
         self._nastran_format = 'nx'
 
     def set_as_msc(self):
         self.is_nx = False
         self.is_msc = True
+        self.is_autodesk = False
+        self.is_nasa95 = False
         self.is_optistruct = False
-        self.is_radioss = False
         self._nastran_format = 'msc'
+
+    def set_as_autodesk(self):
+        self.is_nx = False
+        self.is_msc = False
+        self.is_autodesk = True
+        self.is_nasa95 = False
+        self.is_optistruct = False
+        self._nastran_format = 'autodesk'
+
+    def set_as_nasa95(self):
+        self.is_nx = False
+        self.is_msc = False
+        self.is_autodesk = False
+        self.is_optistruct = False
+        self.is_nasa95 = True
+        self._nastran_format = 'nasa95'
+        self._read_oes1_loads = self._read_oes1_loads_nasa95
+        self._read_oef1_loads = self._read_oef1_loads_nasa95
 
     def set_as_optistruct(self):
         self.is_nx = False
         self.is_msc = False
+        self.is_autodesk = False
+        self.is_nasa95 = False
         self.is_optistruct = True
-        self.is_radioss = False
         self._nastran_format = 'optistruct'
-
-    def set_as_radioss(self):
-        self.is_nx = False
-        self.is_msc = False
-        self.is_optistruct = False
-        self.is_radioss = True
-        self._nastran_format = 'radioss'
 
     def __init__(self, debug=False, log=None, debug_file=None):
         """
@@ -669,6 +426,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             (.. seealso:: import logging)
         debug_file : str; default=None (No debug)
             sets the filename that will be written to
+
         """
         assert isinstance(debug, bool), 'debug=%r' % debug
 
@@ -677,7 +435,13 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         self.op2_filename = None
         self.bdf_filename = None
         self.f06_filename = None
+        self.des_filename = None
+        self.h5_filename = None
         self._encoding = 'utf8'
+
+        #: should a MATPOOL "symmetric" matrix be stored as symmetric
+        #: it takes double the RAM, but is easier to use
+        self.apply_symmetry = True
 
         LAMA.__init__(self)
         ONR.__init__(self)
@@ -692,15 +456,14 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         OQG.__init__(self)
         OUG.__init__(self)
         OGPWG.__init__(self)
-        MinorTables.__init__(self)
         FortranFormat.__init__(self)
 
         self.is_vectorized = False
         self._close_op2 = True
 
-        self.result_names = set([])
+        self.result_names = set()
 
-        self.grid_point_weight = GridPointWeight()
+        self.grid_point_weight = {}
         self.words = []
         self.debug = debug
         self._last_comment = None
@@ -710,22 +473,25 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         if debug_file is None:
             self.debug_file = None
         else:
-            assert isinstance(debug_file, string_types), debug_file
+            assert isinstance(debug_file, str), debug_file
             self.debug_file = debug_file
+
+        self.op2_reader = OP2Reader(self)
 
     def set_subcases(self, subcases=None):
         """
-        Allows you to read only the subcases in the list of iSubcases
+        Allows you to read only the subcases in the list of isubcases
 
         Parameters
         ----------
         subcases : List[int, ...] / int; default=None->all subcases
             list of [subcase1_ID,subcase2_ID]
+
         """
         #: stores the set of all subcases that are in the OP2
-        #self.subcases = set([])
+        #self.subcases = set()
         if subcases is None or subcases == []:
-            #: stores if the user entered [] for iSubcases
+            #: stores if the user entered [] for isubcases
             self.is_all_subcases = True
             self.valid_subcases = []
         else:
@@ -750,9 +516,10 @@ class OP2_Scalar(LAMA, ONR, OGPF,
                      subcase_id_2: [time3, time4]}
 
         .. warning:: I'm not sure this still works...
+
         """
         expected_times = {}
-        for (isubcase, etimes) in iteritems(times):
+        for (isubcase, etimes) in times.items():
             etimes = list(times)
             etimes.sort()
             expected_times[isubcase] = array(etimes)
@@ -760,20 +527,28 @@ class OP2_Scalar(LAMA, ONR, OGPF,
 
     def _get_table_mapper(self):
         """gets the dictionary of function3 / function4"""
-        table_mapper = {
 
+        # MSC table mapper
+        table_mapper = {
             # per NX
             b'OESVM1' : [self._read_oes1_3, self._read_oes1_4],    # isat_random
             b'OESVM1C' : [self._read_oes1_3, self._read_oes1_4],   # isat_random
             b'OSTRVM1' : [self._read_oes1_3, self._read_ostr1_4],   # isat_random
             b'OSTRVM1C' : [self._read_oes1_3, self._read_ostr1_4],  # isat_random
 
-            b'OSTR2' : [self._read_oes2_3, self._read_oes2_4],
+            b'OSTRVM2' : [self._read_oes2_3, self._read_ostr2_4],
+
+            b'OESVM2' : [self._read_oes2_3, self._read_oes2_4],    # big random
             b'OES2C' : [self._read_oes2_3, self._read_oes2_4],
-            b'OSTR2C' : [self._read_oes2_3, self._read_oes2_4],
+            b'OSTR2' : [self._read_oes2_3, self._read_ostr2_4], # TODO: disable
+            b'OSTR2C' : [self._read_oes2_3, self._read_ostr2_4],
+            #b'OES2C' : [self._table_passer, self._table_passer], # stress
+            #b'OSTR2' : [self._table_passer, self._table_passer],  # TODO: enable
+            #b'OSTR2C' : [self._table_passer, self._table_passer],
 
+            b'OTEMP1' : [self._read_otemp1_3, self._read_otemp1_4],
+            # --------------------------------------------------------------------------
             # MSC TABLES
-
             # common tables
 
             # unorganized
@@ -782,48 +557,58 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'RADEATC': [self._read_oug1_3, self._read_oug_4], # Displacement Equivalent Inertia Attachment mode (OUG)
 
             # broken - isat_launch_100hz.op2 - wrong numwide
-            #b'RAQCONS': [self._read_oqg1_3, self._read_oqg_4], # Constraint mode MPC force table (OQG)
-            #b'RAQEATC': [self._read_oqg1_3, self._read_oqg_4], # Attachment mode MPC force table (OQG)
-            b'RAQCONS': [self._table_passer, self._table_passer], # temporary
-            b'RAQEATC': [self._table_passer, self._table_passer], # temporary
+            # spc forces
+            b'RAQCONS': [self._read_oqg1_3, self._read_oqg_4], # Constraint mode MPC force table (OQG)
+            b'RAQEATC': [self._read_oqg1_3, self._read_oqg_4], # Attachment mode MPC force table (OQG)
+            #b'RAQCONS': [self._table_passer, self._table_passer], # temporary
+            #b'RAQEATC': [self._table_passer, self._table_passer], # temporary
 
-            #b'RAFCONS': [self._read_oef1_3, self._read_oef1_4], # Element Force Constraint Mode (OEF)
-            #b'RAFEATC': [self._read_oef1_3, self._read_oef1_4], # Element Force Equivalent Inertia Attachment mode (OEF)
-            b'RAFCONS': [self._table_passer, self._table_passer], # temporary
-            b'RAFEATC': [self._table_passer, self._table_passer], # temporary
+            # element forces
+            b'RAFCONS': [self._read_oef1_3, self._read_oef1_4], # Element Force Constraint Mode (OEF)
+            b'RAFEATC': [self._read_oef1_3, self._read_oef1_4], # Element Force Equivalent Inertia Attachment mode (OEF)
+            #b'RAFCONS': [self._table_passer, self._table_passer], # temporary
+            #b'RAFEATC': [self._table_passer, self._table_passer], # temporary
 
-            #b'RAGCONS': [self._read_oef1_3, self._read_oef1_4], # Grid Point Forces Constraint Mode (OGPFB)
+            # grid point forces
+            b'RAGCONS': [self._read_ogpf1_3, self._read_ogpf1_4], # Grid Point Forces Constraint Mode (OGPFB)
+            b'RAGEATC': [self._read_ogpf1_3, self._read_ogpf1_4], # Grid Point Forces Equivalent Inertia Attachment mode (OEF)
+            #b'RAGCONS': [self._table_passer, self._table_passer], # Grid Point Forces Constraint Mode (OGPFB)
             #b'RAGEATC': [self._table_passer, self._table_passer], # Grid Point Forces Equivalent Inertia Attachment mode (OEF)
-            b'RAGCONS': [self._table_passer, self._table_passer], # temporary
-            b'RAGEATC': [self._table_passer, self._table_passer], # temporary
 
-            b'RAPCONS': [self._table_passer, self._table_passer], # Constraint mode ply stress table (OES)
-            b'RAPEATC': [self._table_passer, self._table_passer], # Attachment mode ply stress table (OES)
+            # stress
+            b'RAPCONS': [self._read_oes1_3, self._read_oes1_4], # Constraint mode ply stress table (OES)
+            b'RAPEATC': [self._read_oes1_3, self._read_oes1_4], # Attachment mode ply stress table (OES)
+            #b'RAPCONS': [self._table_passer, self._table_passer], # Constraint mode ply stress table (OES)
+            #b'RAPEATC': [self._table_passer, self._table_passer], # Attachment mode ply stress table (OES)
 
-            #b'RASCONS': [self._read_oes1_3, self._read_oes1_4], # Stress Constraint Mode (OES)
-            #b'RASEATC': [self._read_oes1_3, self._read_oes1_4], # Stress Equivalent Inertia Attachment mode (OES)
-            b'RASCONS': [self._table_passer, self._table_passer], # temporary
-            b'RASEATC': [self._table_passer, self._table_passer], # temporary
+            # stress
+            b'RASCONS': [self._read_oes1_3, self._read_oes1_4], # Stress Constraint Mode (OES)
+            b'RASEATC': [self._read_oes1_3, self._read_oes1_4], # Stress Equivalent Inertia Attachment mode (OES)
+            #b'RASCONS': [self._table_passer, self._table_passer], # temporary
+            #b'RASEATC': [self._table_passer, self._table_passer], # temporary
 
-            #b'RAEEATC': [self._table_passer, self._table_passer], # Strain Equivalent Inertia Attachment mode (OES)
-            #b'RAECONS': [self._read_oes1_3, self._read_oes1_4], # Strain Constraint Mode (OSTR)
-            b'RAEEATC': [self._table_passer, self._table_passer], # temporary
-            b'RAECONS': [self._table_passer, self._table_passer], # temporary
+            # strain
+            b'RAEEATC': [self._read_oes1_3, self._read_ostr1_4], # Strain Equivalent Inertia Attachment mode (OES)
+            b'RAECONS': [self._read_oes1_3, self._read_ostr1_4], # Strain Constraint Mode (OSTR)
+            #b'RAEEATC': [self._table_passer, self._table_passer], # temporary
+            #b'RAECONS': [self._table_passer, self._table_passer], # temporary
 
-            b'RANEATC': [self._table_passer, self._table_passer], # Strain Energy Equivalent Inertia Attachment mode (ORGY1)
-            b'RANCONS': [self._table_passer, self._table_passer], # Constraint mode element strain energy table (ORGY1)
+            # strain energy
+            b'RANEATC' : [self._read_onr1_3, self._read_onr1_4], # Strain Energy Equivalent Inertia Attachment mode (ORGY1)
+            b'RANCONS': [self._read_onr1_3, self._read_onr1_4], # Constraint mode element strain energy table (ORGY1)
+            #b'RANEATC': [self._table_passer, self._table_passer], # Strain Energy Equivalent Inertia Attachment mode (ORGY1)
+            #b'RANCONS': [self._table_passer, self._table_passer], # Constraint mode element strain energy table (ORGY1)
 
 
-            b'R1TABRG': [self._table_passer, self._read_r1tabrg],
+            b'R1TABRG': [self._table_passer, self.op2_reader.read_r1tabrg],
             #b'TOL': [self._table_passer, self._table_passer],
 
             b'MATPOOL': [self._table_passer, self._table_passer], # DMIG bulk data entries
 
+            # this comment may refer to CSTM?
             #F:\work\pyNastran\examples\Dropbox\pyNastran\bdf\cards\test\test_mass_01.op2
             #F:\work\pyNastran\examples\matpool\gpsc1.op2
-            #b'CSTM':    [self._table_crasher, self._table_crasher],
-            b'CSTM':    [self._table_passer, self._table_passer],
-            b'AXIC':    [self._table_passer, self._table_passer],
+            b'AXIC': [self._table_passer, self._table_passer],
 
             b'RSOUGV1': [self._table_passer, self._table_passer],
             b'RESOES1': [self._table_passer, self._table_passer],
@@ -833,14 +618,16 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             #=======================
             # OEF
             # element forces
+            #b'OEFITSTN' : [self._table_passer, self._table_passer], # works
+            b'OEFITSTN' : [self._read_oef1_3, self._read_oef1_4],
             b'OEFIT' : [self._read_oef1_3, self._read_oef1_4],  # failure indices
             b'OEF1X' : [self._read_oef1_3, self._read_oef1_4],  # element forces at intermediate stations
             b'OEF1'  : [self._read_oef1_3, self._read_oef1_4],  # element forces or heat flux
-            b'HOEF1':  [self._read_oef1_3, self._read_oef1_4], # element heat flux
+            b'HOEF1' : [self._read_oef1_3, self._read_oef1_4],  # element heat flux
             b'DOEF1' : [self._read_oef1_3, self._read_oef1_4],  # scaled response spectra - forces
 
             # off force
-            b'OEF2'    : [self._table_passer, self._table_passer],  # element forces or heat flux
+            b'OEF2' : [self._read_oef2_3, self._read_oef2_4],  # element forces or heat flux
             #=======================
             # OQG
             # spc forces
@@ -867,8 +654,12 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OQGATO2' : [self._read_oqg2_3, self._read_oqg_4],
             b'OQGCRM2' : [self._read_oqg2_3, self._read_oqg_4],
             b'OQGPSD2' : [self._read_oqg2_3, self._read_oqg_4],
-            b'OQGRMS2' : [self._read_oqg2_3, self._read_oqg_4],
-            b'OQGNO2'  : [self._read_oqg2_3, self._read_oqg_4],
+            b'OQGRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+            b'OQGNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
+            #b'OQGRMS2' : [self._read_oqg2_3, self._read_oqg_4],  # buggy on isat random
+            #b'OQGNO2'  : [self._read_oqg2_3, self._read_oqg_4],  # buggy on isat random
+
+            b'PSDF' : [self._read_psdf_3, self._read_psdf_4],  # MSC NASA/goesr
 
             #=======================
             # MPC Forces
@@ -882,33 +673,39 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OQMRMS1' : [self._read_oqg1_3, self._read_oqg_mpc_rms],
             b'OQMNO1'  : [self._read_oqg1_3, self._read_oqg_mpc_no],
 
-            #b'OQMG2'   : [self._read_oqg1_3, self._read_oqg_mpc_forces],
+            b'OQMG2'   : [self._read_oqg2_3, self._read_oqg_mpc_forces], # big random
             b'OQMATO2' : [self._read_oqg2_3, self._read_oqg_mpc_ato],
             b'OQMCRM2' : [self._read_oqg2_3, self._read_oqg_mpc_crm],
             b'OQMPSD2' : [self._read_oqg2_3, self._read_oqg_mpc_psd],
-            b'OQMRMS2' : [self._read_oqg2_3, self._read_oqg_mpc_rms],
-            b'OQMNO2'  : [self._read_oqg2_3, self._read_oqg_mpc_no],
+            b'OQMRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+            b'OQMNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
+            #b'OQMRMS2' : [self._read_oqg2_3, self._read_oqg_mpc_rms],  # buggy on isat random
+            #b'OQMNO2'  : [self._read_oqg2_3, self._read_oqg_mpc_no],  # buggy on isat random
 
             #=======================
             # OPG
             # applied loads
             b'OPG1'  : [self._read_opg1_3, self._read_opg1_4],  # applied loads in the nodal frame
-            b'OPG2' : [self._table_passer, self._table_passer],
             b'OPGV1' : [self._read_opg1_3, self._read_opg1_4],  # solution set applied loads?
             b'OPNL1' : [self._read_opg1_3, self._read_opg1_4],  # nonlinear loads
             b'OCRPG' : [self._read_opg1_3, self._read_opg1_4],  # post-buckling loads
 
-            b'OPGATO1' : [self._table_passer, self._table_passer],
-            b'OPGCRM1' : [self._table_passer, self._table_passer],
-            b'OPGPSD1' : [self._table_passer, self._table_passer],
-            b'OPGRMS1' : [self._table_passer, self._table_passer],
-            b'OPGNO1'  : [self._table_passer, self._table_passer],
+            b'OPG2' : [self._read_opg2_3, self._read_opg1_4],   # applied loads in the nodal frame
+            b'OPNL2' : [self._read_opg2_3, self._read_opg1_4],  # nonlinear loads
 
-            b'OPGATO2' : [self._table_passer, self._table_passer],
-            b'OPGCRM2' : [self._table_passer, self._table_passer],
-            b'OPGPSD2' : [self._table_passer, self._table_passer],
-            b'OPGRMS2' : [self._table_passer, self._table_passer],
-            b'OPGNO2'  : [self._table_passer, self._table_passer],
+            b'OPGATO1' : [self._read_opg1_3, self._read_opg1_4],
+            b'OPGCRM1' : [self._read_opg1_3, self._read_opg1_4],
+            b'OPGPSD1' : [self._read_opg1_3, self._read_opg1_4],
+            b'OPGRMS1' : [self._read_opg1_3, self._read_opg1_4],
+            b'OPGNO1'  : [self._read_opg1_3, self._read_opg1_4],
+
+            b'OPGATO2' : [self._read_opg2_3, self._read_opg1_4],
+            b'OPGCRM2' : [self._read_opg2_3, self._read_opg1_4],
+            b'OPGPSD2' : [self._read_opg2_3, self._read_opg1_4],
+            #b'OPGRMS2' : [self._table_passer, self._table_passer],
+            #b'OPGNO2'  : [self._table_passer, self._table_passer],
+            b'OPGRMS2' : [self._read_opg2_3, self._read_opg1_4],
+            b'OPGNO2'  : [self._read_opg2_3, self._read_opg1_4],
             #=======================
             # OGPFB1
             # grid point forces
@@ -919,18 +716,31 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             # strain energy density
             b'ONRGY'  : [self._read_onr1_3, self._read_onr1_4],
             b'ONRGY1' : [self._read_onr1_3, self._read_onr1_4],  # strain energy density
-            b'ONRGY2':  [self._table_passer, self._table_passer],
-            #=======================
+            b'ONRGY2':  [self._read_onr2_3, self._read_onr1_4],
+            #b'ONRGY2':  [self._table_passer, self._table_passer],
+            #===========================================================
             # OES
             # stress
             # OES1C - Table of composite element stresses or strains in SORT1 format
             # OESRT - Table of composite element ply strength ratio. Output by SDRCOMP
-            b'OES1X1' : [self._read_oes1_3, self._read_oes1_4],  # stress - nonlinear elements
-            b'OES1'   : [self._read_oes1_3, self._read_oes1_4],  # stress - linear only
-            b'OES1X'  : [self._read_oes1_3, self._read_oes1_4],  # element stresses at intermediate stations & nonlinear stresses
-            b'OES1C'  : [self._read_oes1_3, self._read_oes1_4],  # stress - composite
-            b'OESCP'  : [self._read_oes1_3, self._read_oes1_4],  # stress - nonlinear???
+            b'OES1X1' : [self._read_oes1_3, self._read_oes1_4], # stress - nonlinear elements
+            b'OES1'   : [self._read_oes1_3, self._read_oes1_4], # stress - linear only
+            b'OES1X'  : [self._read_oes1_3, self._read_oes1_4], # element stresses at intermediate stations & nonlinear stresses
+            b'OES1C'  : [self._read_oes1_3, self._read_oes1_4], # stress - composite
+            b'OESCP'  : [self._read_oes1_3, self._read_oes1_4], # stress - nonlinear???
             b'OESRT'  : [self._read_oes1_3, self._read_oes1_4], # ply strength ratio
+
+            # strain
+            b'OSTR1' : [self._read_oes1_3, self._read_ostr1_4],  # strain - autodesk/9zk6b5uuo.op2
+            b'OSTR1X'  : [self._read_oes1_3, self._read_ostr1_4],  # strain - isotropic
+            b'OSTR1C'  : [self._read_oes1_3, self._read_ostr1_4],  # strain - composite
+            b'OESTRCP' : [self._read_oes1_3, self._read_ostr1_4],
+
+            b'OSTR1PL' : [self._table_passer, self._table_passer], # ????
+            b'OSTR1THC' : [self._table_passer, self._table_passer], # ????
+            b'OSTR1CR' : [self._table_passer, self._table_passer], # ????
+            #b'OEFIIP'
+            b'XCASECC' : [self._table_passer, self._table_passer], # ????
 
             # special nonlinear tables
             # OESNLBR - Slideline stresses
@@ -943,49 +753,38 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OESNLBR' : [self._read_oes1_3, self._read_oes1_4],
             b'OESNL1X' : [self._read_oes1_3, self._read_oes1_4],
 
-            #b'OESNLXR' : [self._table_crasher, self._table_crasher],  # nonlinear stresses
-            #b'OESNLXD' : [self._table_crasher, self._table_crasher],  # nonlinear transient stresses
-            #b'OESNLBR' : [self._table_crasher, self._table_crasher],
-            #b'OESNL1X' : [self._table_crasher, self._table_crasher],
-
-            b'OESNLXR2' : [self._table_passer, self._table_passer],
-            b'OESNLBR2' : [self._table_passer, self._table_passer],
+            b'OESNL2' : [self._read_oes2_3, self._read_oes2_4],
+            b'OESNLXR2' : [self._read_oes2_3, self._read_oes2_4],
+            b'OESNLBR2' : [self._read_oes2_3, self._read_oes2_4],
+            #b'OESNLXR2' : [self._table_passer, self._table_passer],
+            #b'OESNLBR2' : [self._table_passer, self._table_passer],
 
             # off stress
-            b'OES2'    : [self._table_passer, self._table_passer],  # stress - linear only
-            b'OESPSD2C' : [self._table_passer, self._table_passer],
-            #b'OESATO2' : [self._table_passer, self._table_passer],
-            #b'OESRMS2' : [self._table_passer, self._table_passer],
-            #b'OESNO2'  : [self._table_passer, self._table_passer],
-            #b'OESCRM2' : [self._table_passer, self._table_passer],
+            b'OES2'    : [self._read_oes2_3, self._read_oes2_4],  # stress - linear only - disabled; need better tests
+            #b'OES2'    : [self._table_passer, self._table_passer],  # stress - linear only - disabled; need better tests
+
+            #b'OESPSD2C' : [self._table_passer, self._table_passer],
+            #b'OSTPSD2C' : [self._table_passer, self._table_passer],
             #=======================
-            # strain
-            b'OSTR1X'  : [self._read_oes1_3, self._read_ostr1_4],  # strain - isotropic
-            b'OSTR1C'  : [self._read_oes1_3, self._read_ostr1_4],  # strain - composite
-            b'OESTRCP' : [self._read_oes1_3, self._read_ostr1_4],
 
             # off strain
-            b'OSTRATO1' : [self._table_passer, self._table_passer],
-            b'OSTRCRM1' : [self._table_passer, self._table_passer],
-            b'OSTRPSD1' : [self._table_passer, self._table_passer],
-            b'OSTRRMS1' : [self._table_passer, self._table_passer], # isat_random
-            b'OSTRNO1' : [self._table_passer, self._table_passer],  # isat_random
+            b'OSTRATO1' : [self._read_oes1_3, self._read_ostr1_4],
+            b'OSTRCRM1' : [self._read_oes1_3, self._read_ostr1_4],
+            b'OSTRPSD1' : [self._read_oes1_3, self._read_ostr1_4],
+            b'OSTRRMS1' : [self._read_oes1_3, self._read_ostr1_4], # isat_random
+            b'OSTRNO1' : [self._read_oes1_3, self._read_ostr1_4],  # isat_random
 
-            b'OSTRATO2' : [self._table_passer, self._table_passer],
-            b'OSTRCRM2' : [self._table_passer, self._table_passer],
-            b'OSTRPSD2' : [self._table_passer, self._table_passer],
-            b'OSTRRMS2' : [self._table_passer, self._table_passer],
-            b'OSTRNO2'  : [self._table_passer, self._table_passer],
+            b'OSTRATO2' : [self._read_oes2_3, self._read_ostr2_4],
+            b'OSTRCRM2' : [self._read_oes2_3, self._read_ostr2_4],
+            b'OSTRPSD2' : [self._read_oes2_3, self._read_ostr2_4],
+            b'OSTRRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+            b'OSTRNO2' : [self._table_passer, self._table_passer],  # buggy on isat random
+            #b'OSTRRMS2' : [self._read_oes2_3, self._read_ostr2_4],  # buggy on isat random
+            #b'OSTRNO2' : [self._read_oes2_3, self._read_ostr2_4],  # buggy on isat random
 
-            b'OSTRMS1C' : [self._table_passer, self._table_passer], # isat_random
-            b'OSTNO1C' : [self._table_passer, self._table_passer],  # isat_random
-            #b'OSTRRMS1' : [self._read_oes1_3, self._read_oes1_4], # isat_random
-            #b'OSTRNO1' : [self._read_oes1_3, self._read_oes1_4],  # isat_random
-            #b'OSTRMS1C' : [self._read_oes1_3, self._read_oes1_4], # isat_random
-            #b'OSTRMS1C' : [self._read_oes1_3, self._read_oes1_4], # isat_random
-            #b'OSTNO1C' : [self._read_oes1_3, self._read_oes1_4],  # isat_random
+            b'OSTRMS1C' : [self._read_oes1_3, self._read_ostr1_4], # isat_random
+            b'OSTNO1C' : [self._read_oes1_3, self._read_ostr1_4],  # isat_random
 
-            b'OSTPSD2C' : [self._table_passer, self._table_passer],
             #=======================
             # OUG
             # displacement/velocity/acceleration/eigenvector/temperature
@@ -998,16 +797,29 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OUGV1PAT': [self._read_oug1_3, self._read_oug_4],  # OUG1 + coord ID
             b'OUPV1'   : [self._read_oug1_3, self._read_oug_4],  # scaled response spectra - displacement
             b'TOUGV1'  : [self._read_oug1_3, self._read_oug_4],  # grid point temperature
-            b'ROUGV1'  : [self._read_oug1_3, self._read_oug_4], # relative OUG
+            b'ROUGV1'  : [self._read_oug1_3, self._read_oug_4],  # relative OUG
+            b'OPHSA'   : [self._read_oug1_3, self._read_oug_4],  # Displacement output table in SORT1
+            b'OUXY1'   : [self._read_oug1_3, self._read_oug_4],  # Displacements in SORT1 format for h-set or d-set.
+
+            b'OUGV2'   : [self._read_oug2_3, self._read_oug_4],  # displacements in nodal frame
+            b'ROUGV2'  : [self._read_oug2_3, self._read_oug_4],  # relative OUG
+            b'OUXY2'   : [self._read_oug2_3, self._read_oug_4],  # Displacements in SORT2 format for h-set or d-set.
+
+            # modal contribution
+            b'OUGMC1'  : [self._read_oug1_3, self._read_ougmc_4],
+            b'OQGMC1'  : [self._read_oqg1_3, self._read_ougmc_4],
+            b'OESMC1'  : [self._read_oes1_3, self._read_oesmc_4],
+            b'OSTRMC1'  : [self._read_oes1_3, self._read_oesmc_4],
 
             #F:\work\pyNastran\examples\Dropbox\move_tpl\sbuckl2a.op2
             b'OCRUG' : [self._read_oug1_3, self._read_oug_4],  # post-buckling displacement
 
-            b'OPHIG' :  [self._read_oug1_3, self._read_oug_4],  # eigenvectors in basic coordinate system
-            b'BOPHIG':  [self._read_oug1_3, self._read_oug_4],  # eigenvectors in basic coordinate system
+            b'OPHIG' : [self._read_oug1_3, self._read_oug_4],  # eigenvectors in basic coordinate system
+            b'BOPHIG' : [self._read_oug1_3, self._read_oug_4],  # eigenvectors in basic coordinate system
+            b'BOPHIGF' : [self._read_oug1_3, self._read_oug_4],  # Eigenvectors in the basic coordinate system for the fluid portion of the model.
+            b'BOPHIGS' : [self._read_oug1_3, self._read_oug_4],  # Eigenvectors in the basic coordinate system for the structural portion of the model.
 
-            b'OUGV2'   : [self._read_oug2_3, self._read_oug_4],  # displacements in nodal frame
-            b'ROUGV2'  : [self._read_oug2_3, self._read_oug_4], # relative OUG
+            b'BOPG1' : [self._read_opg1_3, self._read_opg1_4],  # applied loads in basic coordinate system
 
             b'OUGATO1' : [self._read_oug1_3, self._read_oug_ato],
             b'OUGCRM1' : [self._read_oug1_3, self._read_oug_crm],
@@ -1018,8 +830,10 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OUGATO2' : [self._read_oug2_3, self._read_oug_ato],
             b'OUGCRM2' : [self._read_oug2_3, self._read_oug_crm],
             b'OUGPSD2' : [self._read_oug2_3, self._read_oug_psd],
-            b'OUGRMS2' : [self._read_oug2_3, self._read_oug_rms],
-            b'OUGNO2'  : [self._read_oug2_3, self._read_oug_no],
+            b'OUGRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+            b'OUGNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
+            #b'OUGRMS2' : [self._read_oug2_3, self._read_oug_rms],  # buggy on isat random
+            #b'OUGNO2'  : [self._read_oug2_3, self._read_oug_no],  # buggy on isat random
 
             #=======================
             # extreme values of the respective table
@@ -1041,7 +855,9 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OBC1' : [self._table_passer, self._table_passer],
             b'OBC2' : [self._table_passer, self._table_passer], # Contact pressures and tractions at grid points.
 
-            b'OBG1' : [self._table_passer, self._table_passer], # Glue normal and tangential tractions at grid point in basic coordinate system
+            # Glue normal and tangential tractions at grid point in basic coordinate system
+            b'OBG1' : [self._table_passer, self._table_passer],
+            b'OBG2' : [self._table_passer, self._table_passer],
 
             b'OQGGF1' : [self._table_passer, self._table_passer], # Glue forces at grid point in basic coordinate system
             b'OQGGF2' : [self._table_passer, self._table_passer],
@@ -1055,11 +871,14 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             # OGS
             # grid point stresses
             b'OGS1' : [self._read_ogs1_3, self._read_ogs1_4],  # grid point stresses
+            #b'OGS2' : [self._read_ogs1_3, self._read_ogs1_4],  # grid point stresses
             #=======================
             # eigenvalues
             b'BLAMA' : [self._read_buckling_eigenvalue_3, self._read_buckling_eigenvalue_4], # buckling eigenvalues
             b'CLAMA' : [self._read_complex_eigenvalue_3, self._read_complex_eigenvalue_4],   # complex eigenvalues
             b'LAMA'  : [self._read_real_eigenvalue_3, self._read_real_eigenvalue_4],         # eigenvalues
+            b'LAMAS' : [self._read_real_eigenvalue_3, self._read_real_eigenvalue_4],         # eigenvalues-structure
+            b'LAMAF' : [self._read_real_eigenvalue_3, self._read_real_eigenvalue_4],         # eigenvalues-fluid
 
             # ===========================geom passers===========================
             # geometry
@@ -1099,20 +918,21 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'DYNAMICS' : [self._table_passer, self._table_passer],
             b'DIT' : [self._table_passer, self._table_passer],
             b'DITS' : [self._table_passer, self._table_passer],
+            b'AXIC' : [self._table_passer, self._table_passer],
             # =========================end geom passers=========================
 
             # ===passers===
-            b'EQEXIN': [self._table_passer, self._table_passer],
-            b'EQEXINS': [self._table_passer, self._table_passer],
+            #b'EQEXIN': [self._table_passer, self._table_passer],
+            #b'EQEXINS': [self._table_passer, self._table_passer],
 
             b'GPDT' : [self._table_passer, self._table_passer],     # grid points?
             b'BGPDT' : [self._table_passer, self._table_passer],    # basic grid point defintion table
             b'BGPDTS' : [self._table_passer, self._table_passer],
             b'BGPDTOLD' : [self._table_passer, self._table_passer],
 
-            b'PVT' : [self._table_passer, self._table_passer], # PVT - Parameter Variable Table
-            b'PVT0' : [self._table_passer, self._table_passer],  # user parameter value table
-            b'DESTAB' : [self._table_passer, self._table_passer],
+            b'PVT' : [self._read_pvto_3, self._read_pvto_4], # PVT - Parameter Variable Table
+            b'PVTS' : [self._read_pvto_3, self._read_pvto_4], # ???
+            b'PVT0' : [self._read_pvto_3, self._read_pvto_4],  # user parameter value table
             b'TOLD' : [self._table_passer, self._table_passer],
             b'CASECC' : [self._table_passer, self._table_passer],  # case control deck
 
@@ -1135,17 +955,28 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'CONTACT' : [self._table_passer, self._table_passer],
             b'CONTACTS' : [self._table_passer, self._table_passer],
             b'OEKE1' : [self._table_passer, self._table_passer],
-            b'DSCMCOL' : [self._table_passer, self._table_passer],
-            b'DBCOPT' : [self._table_passer, self._table_passer],
+            #b'DSCMCOL' : [self._table_passer, self._table_passer],
+            #b'DBCOPT' : [self._table_passer, self._table_passer],
             #b'FRL0': [self._table_passer, self._table_passer],  # frequency response list
 
             #==================================
-            # new
-            b'OFMPF2M' : [self._table_passer, self._table_passer],
-            b'OLMPF2M' : [self._table_passer, self._table_passer],
-            b'OPMPF2M' : [self._table_passer, self._table_passer],
-            b'OSMPF2M' : [self._table_passer, self._table_passer],
-            b'OGPMPF2M' : [self._table_passer, self._table_passer],
+            # modal participation factors
+            # OFMPF2M Table of fluid mode participation factors by normal mode.
+            b'OFMPF2M' : [self._read_mpf_3, self._read_mpf_4],
+            # OLMPF2M Load mode participation factors by normal mode.
+            b'OLMPF2M' : [self._read_mpf_3, self._read_mpf_4],
+            # OPMPF2M Panel mode participation factors by normal mode.
+            b'OPMPF2M' : [self._read_mpf_3, self._read_mpf_4],
+            # OPMPF2M Panel mode participation factors by normal mode.
+            b'OSMPF2M' : [self._read_mpf_3, self._read_mpf_4],
+            # OGMPF2M Grid mode participation factors by normal mode.
+            b'OGPMPF2M' : [self._read_mpf_3, self._read_mpf_4],
+
+            #OFMPF2E Table of fluid mode participation factors by excitation frequencies.
+            #OSMPF2E Table of structure mode participation factors by excitation frequencies.
+            #OPMPF2E Table of panel mode participation factors by excitation frequencies.
+            #OLMPF2E Table of load mode participation factors by excitation frequencies.
+            #OGMPF2E Table of grid mode participation factors by excitation frequencies.
 
             # velocity
             b'OVGATO1' : [self._read_oug1_3, self._read_oug_ato],
@@ -1157,12 +988,14 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OVGATO2' : [self._read_oug2_3, self._read_oug_ato],
             b'OVGCRM2' : [self._read_oug2_3, self._read_oug_crm],
             b'OVGPSD2' : [self._read_oug2_3, self._read_oug_psd],
+            #b'OVGRMS2' : [self._table_passer, self._table_passer],
+            #b'OVGNO2'  : [self._table_passer, self._table_passer],
             b'OVGRMS2' : [self._read_oug2_3, self._read_oug_rms],
             b'OVGNO2'  : [self._read_oug2_3, self._read_oug_no],
 
             #==================================
             #b'GPL': [self._table_passer, self._table_passer],
-            b'OMM2' : [self._table_passer, self._table_passer],
+            #b'OMM2' : [self._table_passer, self._table_passer],  # max/min table - kinda useless
             b'ERRORN' : [self._table_passer, self._table_passer],  # p-element error summary table
             #==================================
 
@@ -1179,22 +1012,32 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OAGATO2' : [self._read_oug2_3, self._read_oug_ato],
             b'OAGCRM2' : [self._read_oug2_3, self._read_oug_crm],
             b'OAGPSD2' : [self._read_oug2_3, self._read_oug_psd],
+            #b'OAGRMS2' : [self._table_passer, self._table_passer],
+            #b'OAGNO2'  : [self._table_passer, self._table_passer],
             b'OAGRMS2' : [self._read_oug2_3, self._read_oug_rms],
             b'OAGNO2'  : [self._read_oug2_3, self._read_oug_no],
 
             # stress
-            b'OESATO1' : [self._table_passer, self._table_passer],
-            b'OESCRM1' : [self._table_passer, self._table_passer],
-            b'OESPSD1' : [self._table_passer, self._table_passer],
-            b'OESRMS1' : [self._table_passer, self._table_passer],
-            b'OESNO1'  : [self._table_passer, self._table_passer],
-            b'OESXRMS1' : [self._table_passer, self._table_passer],
+            b'OESATO1' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESCRM1' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESPSD1' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESRMS1' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESNO1'  : [self._read_oes1_3, self._read_oes1_4],
 
-            b'OESATO2' : [self._table_passer, self._table_passer],
-            b'OESCRM2' : [self._table_passer, self._table_passer],
-            b'OESPSD2' : [self._table_passer, self._table_passer],
-            b'OESRMS2' : [self._table_passer, self._table_passer],
-            b'OESNO2'  : [self._table_passer, self._table_passer],
+            # OESXRM1C : Composite element RMS stresses in SORT1 format for random analysis that includes von Mises stress output.
+            b'OESXRMS1' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESXRM1C' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESXNO1' : [self._read_oes1_3, self._read_oes1_4],
+            b'OESXNO1C' : [self._read_oes1_3, self._read_oes1_4],
+
+
+            b'OESATO2' : [self._read_oes2_3, self._read_oes2_4],
+            b'OESCRM2' : [self._read_oes2_3, self._read_oes2_4],
+            b'OESPSD2' : [self._read_oes2_3, self._read_oes2_4],
+            #b'OESRMS2' : [self._read_oes1_3, self._read_oes1_4],  # buggy on isat random
+            #b'OESNO2'  : [self._read_oes1_3, self._read_oes1_4],  # buggy on isat random
+            b'OESRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+            b'OESNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
 
             # force
             b'OEFATO1' : [self._read_oef1_3, self._read_oef1_4],
@@ -1203,15 +1046,290 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             b'OEFRMS1' : [self._read_oef1_3, self._read_oef1_4],
             b'OEFNO1'  : [self._read_oef1_3, self._read_oef1_4],
 
-            b'OEFATO2' : [self._table_passer, self._table_passer],
-            b'OEFCRM2' : [self._table_passer, self._table_passer],
-            b'OEFPSD2' : [self._table_passer, self._table_passer],
-            b'OEFRMS2' : [self._table_passer, self._table_passer],
-            b'OEFNO2'  : [self._table_passer, self._table_passer],
+            b'OEFATO2' : [self._read_oef2_3, self._read_oef2_4],
+            b'OEFCRM2' : [self._read_oef2_3, self._read_oef2_4],
+            b'OEFPSD2' : [self._read_oef2_3, self._read_oef2_4],
+            #b'OEFRMS2' : [self._read_oef2_3, self._read_oef2_4], # buggy on isat random
         }
+        if self.is_nx and 0:
+            table_mapper2 = {
+                #b'OUGRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+                #b'OUGNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
+                b'OUGRMS2' : [self._read_oug2_3, self._read_oug_rms],  # buggy on isat random
+                b'OUGNO2'  : [self._read_oug2_3, self._read_oug_no],  # buggy on isat random
+
+                #b'OQMRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+                #b'OQMNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
+                b'OQMRMS2' : [self._read_oqg2_3, self._read_oqg_mpc_rms],  # buggy on isat random
+                b'OQMNO2'  : [self._read_oqg2_3, self._read_oqg_mpc_no],  # buggy on isat random
+
+                #b'OSTRRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+                #b'OSTRNO2' : [self._table_passer, self._table_passer],  # buggy on isat random
+                b'OSTRRMS2' : [self._read_oes2_3, self._read_ostr2_4],  # buggy on isat random
+                b'OSTRNO2' : [self._read_oes2_3, self._read_ostr2_4],  # buggy on isat random
+
+                b'OESRMS2' : [self._read_oes1_3, self._read_oes1_4],  # buggy on isat random
+                b'OESNO2'  : [self._read_oes1_3, self._read_oes1_4],  # buggy on isat random
+                #b'OESRMS2' : [self._table_passer, self._table_passer],  # buggy on isat random
+                #b'OESNO2'  : [self._table_passer, self._table_passer],  # buggy on isat random
+
+                b'OEFNO2'  : [self._read_oef2_3, self._read_oef2_4],
+                #b'OEFNO2' : [self._table_passer, self._table_passer], # buggy on isat_random_steve2.op2
+            }
+            for key, value in table_mapper2.items():
+                table_mapper[key] = value
+            #table_mapper.update(table_mapper2)
         return table_mapper
 
-    def _not_available(self, data, ndata):
+    def _read_mpf_3(self, data, ndata: int) -> int:
+        """reads table 3 (the header table)
+
+        OFMPF2E Table of fluid mode participation factors by excitation frequencies.
+        OFMPF2M Table of fluid mode participation factors by normal mode.
+        OSMPF2E Table of structure mode participation factors by excitation frequencies.
+        OSMPF2M Table of structure mode participation factors by normal mode.
+        OPMPF2E Table of panel mode participation factors by excitation frequencies.
+        OPMPF2M Table of panel mode participation factors by normal mode.
+        OLMPF2E Table of load mode participation factors by excitation frequencies.
+        OLMPF2M Table of load mode participation factors by normal mode.
+        OGMPF2E Table of grid mode participation factors by excitation frequencies.
+        OGMPF2M Table of grid mode participation factors by normal mode.
+        """
+        #self._set_times_dtype()
+        self.nonlinear_factor = np.nan
+        self.is_table_1 = True
+        self.is_table_2 = False
+        unused_three = self.parse_approach_code(data)
+        self.words = [
+            'approach_code', 'table_code', '???', 'isubcase',
+            '???', '???', '???', 'random_code',
+            'format_code', 'num_wide', '???', '???',
+            'acoustic_flag', '???', '???', '???',
+            '???', '???', '???', '???',
+            '???', '???', 'thermal', '???',
+            '???', 'Title', 'subtitle', 'label']
+
+        ## random code
+        self.random_code = self.add_data_parameter(data, 'random_code', b'i', 8, False)
+
+        ## format code
+        self.format_code = self.add_data_parameter(data, 'format_code', b'i', 9, False)
+
+        ## number of words per entry in record
+        self.num_wide = self.add_data_parameter(data, 'num_wide', b'i', 10, False)
+
+        ## acoustic pressure flag
+        self.acoustic_flag = self.add_data_parameter(data, 'acoustic_flag', b'i', 13, False)
+
+        ## thermal flag; 1 for heat transfer, 0 otherwise
+        self.thermal = self.add_data_parameter(data, 'thermal', b'i', 23, False)
+
+        #if self.analysis_code == 1:   # statics / displacement / heat flux
+            ## load set number
+            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
+            #self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
+            #self.setNullNonlinearFactor()
+        #elif self.analysis_code == 2:  # real eigenvalues
+            ## mode number
+            #self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
+            ## eigenvalue
+            #self.eign = self.add_data_parameter(data, 'eign', b'f', 6, False)
+            ## mode or cycle .. todo:: confused on the type - F1???
+            #self.mode_cycle = self.add_data_parameter(data, 'mode_cycle', b'i', 7, False)
+            #self.update_mode_cycle('mode_cycle')
+            #self.data_names = self.apply_data_code_value('data_names', ['mode', 'eign', 'mode_cycle'])
+        #elif self.analysis_code == 3: # differential stiffness
+            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+            #self.data_code['lsdvmn'] = self.lsdvmn
+        #elif self.analysis_code == 4: # differential stiffness
+            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+        if self.analysis_code == 5:   # frequency
+            # frequency
+            self.node_id = self.add_data_parameter(data, 'node_id', b'i', 5, fix_device_code=True)
+            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
+            #self.freq = self.add_data_parameter(data, 'freq', b'f', 5)
+            #self.data_names = self.apply_data_code_value('data_names', ['freq'])
+        #elif self.analysis_code == 6:  # transient
+            ## time step
+            #self.dt = self.add_data_parameter(data, 'dt', b'f', 5)
+            #self.data_names = self.apply_data_code_value('data_names', ['dt'])
+        #elif self.analysis_code == 7:  # pre-buckling
+            ## load set number
+            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            #self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
+        #elif self.analysis_code == 8:  # post-buckling
+            ## load set number
+            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            ## real eigenvalue
+            #self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
+            #self.data_names = self.apply_data_code_value('data_names', ['lsdvmn', 'eigr'])
+        #elif self.analysis_code == 9:  # complex eigenvalues
+            ## mode number
+            #self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
+            ## real eigenvalue
+            #self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
+            ## imaginary eigenvalue
+            #self.eigi = self.add_data_parameter(data, 'eigi', b'f', 7, False)
+            #self.data_names = self.apply_data_code_value('data_names', ['mode', 'eigr', 'eigi'])
+        #elif self.analysis_code == 10:  # nonlinear statics
+            ## load step
+            #self.lftsfq = self.add_data_parameter(data, 'lftsfq', b'f', 5)
+            #self.data_names = self.apply_data_code_value('data_names', ['lftsfq'])
+        #elif self.analysis_code == 11:  # old geometric nonlinear statics
+            ## load set number
+            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            #self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
+        #elif self.analysis_code == 12:  # contran ? (may appear as aCode=6)  --> straight from DMAP...grrr...
+            ## load set number
+            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            #self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
+        else:
+            msg = f'invalid analysis_code...analysis_code={self.analysis_code}\ndata={self.data_code}'
+            raise RuntimeError(msg)
+
+        #print self.code_information()
+        #
+        self.fix_format_code()
+        if self.num_wide == 8:
+            self.format_code = 1
+            self.data_code['format_code'] = 1
+        else:
+            #self.fix_format_code()
+            if self.format_code == 1:
+                self.format_code = 2
+                self.data_code['format_code'] = 2
+            assert self.format_code in [2, 3], self.code_information()
+
+        self._parse_thermal_code()
+        if self.is_debug_file:
+            self.binary_debug.write('  approach_code  = %r\n' % self.approach_code)
+            self.binary_debug.write('  tCode          = %r\n' % self.tCode)
+            self.binary_debug.write('  isubcase       = %r\n' % self.isubcase)
+        self._read_title(data)
+        self._write_debug_bits()
+
+    def _read_mpf_4(self, data, ndata):
+        """unused"""
+        if self.read_mode == 1: # or self.table_name_str not in ['OFMPF2M']:
+            return ndata
+        #print(self.table_name_str, ndata, self.num_wide)  # 176
+        #self.show_ndata(100, types='ifs')
+
+        structi = Struct('fiff')
+        nelements = ndata // 16
+        ndev = ndata % 16
+        assert ndev == 0, ndev
+
+        for i in range(nelements):
+            datai = data[i*16 : (i+1)*16]
+            freq, dunno_int, mag, phase = structi.unpack(datai)
+            assert dunno_int == 2, str(self.node_id, freq, dunno_int, mag, phase)
+            #print(self.node_id, freq, dunno_int, mag, phase)
+        #print()
+        if self.isubtable == -4:
+            self.log.warning('%s results were read, but not saved' % self.table_name_str)
+        return ndata
+
+    def _read_pvto_3(self, data, ndata):
+        """unused"""
+        raise RuntimeError(self.read_mode)
+
+    def _read_pvto_4(self, data, ndata):
+        """reads PARAM cards"""
+        if self.read_mode == 1:
+            return ndata
+
+        iloc = self.f.tell()
+        try:
+            ndata2 = self._read_pvto_4_helper(data, ndata)
+        except NotImplementedError as e:
+            self.log.error(str(e))
+            if 'dev' in __version__ and self.IS_TESTING:
+                raise  # only for testing
+            self.f.seek(iloc)
+            ndata2 = ndata
+        return ndata2
+
+    def _read_pvto_4_helper(self, data, ndata: int) -> int:
+        """reads PARAM cards"""
+        xword = (4 * self.factor)
+        nvalues = ndata // xword
+        assert ndata % xword == 0, ndata
+
+        if self.size == 4:
+            structs8 = self.struct_8s
+            #struct2s8 = Struct(b'4s8s')
+            struct2i = self.struct_2i
+            struct2f = Struct(b'ff')
+            struct2d = Struct(b'dd')
+        else:
+            struct2i = self.struct_2q
+            structs8 = self.struct_16s
+            struct2f = Struct(b'dd')
+
+        i = 0
+
+        #print('---------------------------')
+        #self.show_data(data, types='ifsqL')
+        while i < nvalues:
+            #print('---------------------------')
+            #print('*i=%s nvalues=%s' % (i, nvalues))
+            word = data[i*xword:(i+2)*xword].rstrip()
+            if self.size == 8:
+                word = reshape_bytes_block(word)
+            #print('word=%r' % word)
+            #word = s8.unpack(word)[0]#.decode(self._encoding)
+
+            # the first two entries are typically trash, then we can get values
+            if word in INT_PARAMS_1:
+                slot = data[(i+2)*xword:(i+4)*xword]
+                value = struct2i.unpack(slot)[1]
+                i += 4
+            elif word in FLOAT_PARAMS_1:
+                slot = data[(i+2)*xword:(i+4)*xword]
+                value = struct2f.unpack(slot)[1]
+                i += 4
+            elif word in FLOAT_PARAMS_2:
+                slot = data[(i+3)*xword:(i+5)*xword]
+                value = struct2f.unpack(slot)
+                i += 5
+            elif word in INT_PARAMS_2:
+                slot = data[(i+3)*xword:(i+5)*xword]
+                value = struct2i.unpack(slot)
+                i += 5
+            elif word in DOUBLE_PARAMS_1:
+                slot = data[(i+1)*xword:(i+8)*xword]
+                try:
+                    value = struct2d.unpack(slot)[1]
+                except:
+                    print(word)
+                    raise
+                i += 8
+            #elif word in [b'VUHEXA']:
+                #self.show_data(data[i*4:(i+5)*4], types='ifs', endian=None)
+                #aaa
+            elif word in STR_PARAMS_1:
+                i += 3
+                slot = data[i*xword:(i+2)*xword]
+                bvalue = structs8.unpack(slot)[0]
+                if self.size == 8:
+                    bvalue = reshape_bytes_block(bvalue)
+                value = bvalue.decode('latin1').rstrip()
+                i += 2
+            else:
+                self.show_data(data[i*xword+12:i*4+i*4+12], types='ifsdq')
+                self.show_data(data[i*xword+8:(i+4)*4], types='ifsdq')
+                self.log.error('%r' % word)
+                raise NotImplementedError('%r is not a supported PARAM' % word)
+
+            key = word.decode('latin1')
+            param = PARAM(key, [value], comment='')
+            self.params[key] = param
+            #print(f'{key} = {value}')
+            #print(param.rstrip())
+        return nvalues
+
+    def _not_available(self, data: bytes, ndata: int):
         """testing function"""
         if ndata > 0:
             raise RuntimeError('this should never be called...'
@@ -1228,6 +1346,14 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         """auto-table skipper"""
         if self.is_debug_file:
             self.binary_debug.write('  skipping table = %s\n' % self.table_name)
+        if self.table_name not in GEOM_TABLES and self.isubtable > -4:
+            self.log.warning('    skipping table: %s' % self.table_name_str)
+        if not is_release and self.isubtable > -4:
+            if self.table_name in GEOM_TABLES and not self.make_geom:
+                pass
+            else:
+                print('dont skip table %r' % self.table_name_str)
+                raise RuntimeError('dont skip table %r' % self.table_name_str)
         return ndata
 
     def _validate_op2_filename(self, op2_filename):
@@ -1243,6 +1369,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         -------
         op2_filename : str
             a valid file string
+
         """
         if op2_filename is None:
             from pyNastran.utils.gui_io import load_file_dialog
@@ -1250,33 +1377,21 @@ class OP2_Scalar(LAMA, ONR, OGPF,
                 "All files (*.*)|*.*"
             wildcard_qt = "Nastran OP2 (*.op2);;All files (*)"
             title = 'Please select a OP2 to load'
-            op2_filename, wildcard_level = load_file_dialog(
+            op2_filename, unused_wildcard_level = load_file_dialog(
                 title, wildcard_wx, wildcard_qt, dirname='')
             assert op2_filename is not None, op2_filename
         return op2_filename
 
     def _create_binary_debug(self):
-        """
-        Instatiates the ``self.binary_debug`` variable/file
-        """
+        """Instatiates the ``self.binary_debug`` variable/file"""
         if hasattr(self, 'binary_debug') and self.binary_debug is not None:
             self.binary_debug.close()
             del self.binary_debug
 
-        wb = 'w'
-        if PY2:
-            wb = 'wb'
+        self.is_debug_file, self.binary_debug = create_binary_debug(
+            self.op2_filename, self.debug_file, self.log)
 
-        if self.debug_file is not None:
-            #: an ASCII version of the op2 (creates lots of output)
-            self.log.debug('debug_file = %s' % self.debug_file)
-            self.binary_debug = open(self.debug_file, wb)
-            self.binary_debug.write(self.op2_filename + '\n')
-            self.is_debug_file = True
-        else:
-            self.is_debug_file = False
-
-    def read_op2(self, op2_filename=None, combine=False):
+    def read_op2(self, op2_filename=None, combine=False, load_as_h5=False, h5_file=None, mode=None):
         """
         Starts the OP2 file reading
 
@@ -1284,6 +1399,17 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         ----------
         op2_filename : str
             the op2 file
+        combine : bool; default=True
+            True : objects are isubcase based
+            False : objects are (isubcase, subtitle) based;
+                    will be used for superelements regardless of the option
+        load_as_h5 : default=None
+            False : don't setup the h5_file
+            True : loads the op2 as an h5 file to save memory
+                   stores the result.element/data attributes in h5 format
+        h5_file : h5File; default=None
+            None : ???
+            h5File : ???
 
         +--------------+-----------------------+
         | op2_filename | Description           |
@@ -1293,6 +1419,20 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         |    string    | the path is used      |
         +--------------+-----------------------+
         """
+        fname = os.path.splitext(op2_filename)[0]
+        self.op2_filename = op2_filename
+        self.bdf_filename = fname + '.bdf'
+        self.f06_filename = fname + '.f06'
+        self.des_filename = fname + '.des'
+        self.h5_filename = fname + '.h5'
+
+        self.op2_reader.load_as_h5 = load_as_h5
+        if load_as_h5:
+            h5_file = None
+            import h5py
+            self.h5_file = h5py.File(self.h5_filename, 'w')
+            self.op2_reader.h5_file = self.h5_file
+
         self._count = 0
         if self.read_mode == 1:
             #sr = list(self._results.saved)
@@ -1309,36 +1449,91 @@ class OP2_Scalar(LAMA, ONR, OGPF,
                     raise IOError('op2_filename=%r is empty.' % op2_filename)
                 raise IOError('op2_filename=%r is not a binary OP2.' % op2_filename)
 
-        bdf_extension = '.bdf'
-        f06_extension = '.f06'
-        fname = os.path.splitext(op2_filename)[0]
-
-        self.op2_filename = op2_filename
-        self.bdf_filename = fname + bdf_extension
-        self.f06_filename = fname + f06_extension
-
         self._create_binary_debug()
         self._setup_op2()
-        self._read_version()
+        _op2 = self.op2_reader.op2
+        #is_nasa_nastran = False
+        #if is_nasa_nastran:
+            #self.show(104, types='ifs', endian=None)
+            #self.show(52, types='ifs', endian=None)
+            #aa
+            #data = _op2.f.read(4)
+            #_op2.n += 8
+            #_op2.f.seek(_op2.n)
+        #else:
+        self.op2_reader.read_nastran_version(mode)
+        data = _op2.f.read(4)
+        _op2.f.seek(_op2.n)
+        if len(data) == 0:
+            raise FatalError('There was a Nastran FATAL Error.  Check the F06.\n'
+                             'No tables exist...check for a license issue')
 
         #=================
-        table_name = self._read_table_name(rewind=True, stop_on_failure=False)
+        table_name = self.op2_reader._read_table_name(rewind=True, stop_on_failure=False)
         if table_name is None:
-            raise FatalError('There was a Nastran FATAL Error.  Check the F06.\nNo tables exist...')
+            raise FatalError('There was a Nastran FATAL Error.  Check the F06.\n'
+                             'No tables exist...check for a license issue')
 
         self._make_tables()
         table_names = self._read_tables(table_name)
+
+        self.close_op2(force=False)
+        #self.remove_unpickable_data()
+        return table_names
+
+    def close_op2(self, force=True):
+        """closes the OP2 and debug file"""
         if self.is_debug_file:
             self.binary_debug.write('-' * 80 + '\n')
             self.binary_debug.write('f.tell()=%s\ndone...\n' % self.f.tell())
             self.binary_debug.close()
 
-        if self._close_op2:
-            self.f.close()
+        if self._close_op2 or force:
+            if self.f is not None:
+                # can happen if:
+                #  - is ascii file
+                self.f.close()
             del self.binary_debug
             del self.f
-        #self.remove_unpickable_data()
-        return table_names
+            self._cleanup_data_members()
+            self._cleanup_words()
+            #self.op2_reader.h5_file.close()
+
+    def _cleanup_words(self):
+        """
+        Remove internal parameters that are not useful and just clutter
+        the object attributes.
+        """
+        words = [
+            'isubcase', 'int3', '_table4_count', 'nonlinear_factor',
+            'is_start_of_subtable', 'superelement_adaptivity_index',
+            'thermal_bits', 'is_vectorized', 'pval_step', #'_frequencies',
+            '_analysis_code_fmt', 'isubtable', '_data_factor', 'sort_method',
+            'acoustic_flag', 'approach_code', 'format_code_original',
+            'element_name', 'sort_bits', 'code', 'n', 'use_vector', 'ask',
+            'stress_bits', 'expected_times', 'table_code', 'sort_code',
+            'is_all_subcases', 'num_wide', '_table_mapper', 'label',
+            'apply_symmetry',
+            'words', 'device_code', 'table_name', '_count', 'additional_matrices',
+            # 350
+            'data_names', '_close_op2',
+            'op2_reader',
+            # 74
+            'generalized_tables',
+            # 124
+            'is_table_1', 'is_table_2', 'ntotal', 'element_mapper',
+            'is_debug_file', 'debug_file',
+            '_results', 'skip_undefined_matrices',
+            # 140
+            #---------------------------------------------------------
+            # dont remove...
+            # make_geom, title, read_mode
+            # result_names, op2_results
+
+        ]
+        for word in words:
+            if hasattr(self, word):
+                delattr(self, word)
 
     def _setup_op2(self):
         """
@@ -1346,6 +1541,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
           - open the file
           - set the endian
           - preallocate some struct objects
+
         """
         #: file index
         self.n = 0
@@ -1361,161 +1557,36 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             flag_data = self.f.read(20)
             self.f.seek(0)
 
-            if unpack(b'>5i', flag_data)[0] == 4:
+            #(8, 3, 0, 8, 24)
+            little_data = unpack(b'<5i', flag_data)
+            big_data = unpack(b'>5i', flag_data)
+            if big_data[0] in [4, 8]:
                 self._uendian = '>'
                 self._endian = b'>'
-            elif unpack(b'<5i', flag_data)[0] == 4:
+                size = big_data[0]
+            elif little_data[0] in [4, 8] or 1:
                 self._uendian = '<'
                 self._endian = b'<'
+                size = little_data[0]
             #elif unpack(b'<ii', flag_data)[0] == 4:
                 #self._endian = b'<'
             else:
                 # Matrices from test show
                 # (24, 10, 10, 6, 2) before the Matrix Name...
+                print(little_data, big_data)
+                self.show(30, types='ifs', endian='<')
+                self.show(30, types='ifs', endian='>')
+                self.show(12, types='ifs', endian='<')
+                self.show(12, types='ifs', endian='>')
                 #self.show_data(flag_data, types='iqlfsld', endian='<')
                 #print('----------')
                 #self.show_data(flag_data, types='iqlfsld', endian='>')
                 raise FatalError('cannot determine endian')
-            #if PY2:
-                #self._endian = b(self._endian)
         else:
-            self._goto(self.n)
-
+            self.op2_reader._goto(self.n)
 
         if self.read_mode == 1:
-            self._set_structs()
-
-    def _read_version(self):
-        """reads the version header"""
-        #try:
-        markers = self.get_nmarkers(1, rewind=True)
-        #except:
-            #self._goto(0)
-            #try:
-                #self.f.read(4)
-            #except:
-                #raise FatalError("The OP2 is empty.")
-            #raise
-        if self.is_debug_file:
-            if self.read_mode == 1:
-                self.binary_debug.write('read_mode = %s (vectorized; 1st pass)\n' % self.read_mode)
-            elif self.read_mode == 2:
-                self.binary_debug.write('read_mode = %s (vectorized; 2nd pass)\n' % self.read_mode)
-
-        if markers == [3,]:  # PARAM, POST, -1
-            if self.is_debug_file:
-                self.binary_debug.write('marker = 3 -> PARAM,POST,-1?\n')
-            self.post = -1
-            self.read_markers([3])
-            data = self.read_block()   # TODO: is this the date?
-            #assert len(data) == 12, len(data)
-
-            self.read_markers([7])
-            data = self.read_block()
-
-            if data == b'NASTRAN FORT TAPE ID CODE - ':
-                macro_version = 'nastran'
-            elif b'IMAT v' in data:
-                imat_version = data[6:11].encode('utf8')
-                macro_version = 'IMAT %s' % imat_version
-            else:
-                version_ints = Struct(self._endian + b'7i').unpack(data)
-                if version_ints == (1, 2, 3, 4, 5, 6 , 7):
-                    macro_version = 'MSFC'
-                else:
-                    self.show_data(data)
-                    raise NotImplementedError(data)
-                #self.show_data(data)
-            if self.is_debug_file:
-                self.binary_debug.write('%r\n' % data)
-            #print('macro_version = %r' % macro_version)
-
-
-            data = self._read_record()
-            if self.is_debug_file:
-                self.binary_debug.write('%r\n' % data)
-            version = data.strip()
-
-            if macro_version == 'nastran':
-                if version.startswith(b'NX'):
-                    self.set_as_nx()
-                    self.set_table_type()
-                elif version.startswith(b'MODEP'):
-                    # TODO: why is this separate?
-                    # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_ac11103.op2
-                    self.set_as_nx()
-                    self.set_table_type()
-                elif version.startswith(b'AEROFREQ'):
-                    # TODO: why is this separate?
-                    # C:\Users\Steve\Dropbox\pyNastran_examples\move_tpl\loadf.op2
-                    self.set_as_msc()
-                    self.set_table_type()
-                elif version.startswith(b'AEROTRAN'):
-                    # TODO: why is this separate?
-                    # C:\Users\Steve\Dropbox\pyNastran_examples\move_tpl\loadf.op2
-                    self.set_as_msc()
-                    self.set_table_type()
-                elif version in [b'XXXXXXXX', b'V2005R3B']:
-                    self.set_as_msc()
-                    self.set_table_type()
-                elif version == b'OS12.210':
-                    self.set_as_optistruct()
-                    self.set_table_type()
-                elif version == b'OS11XXXX':
-                    self.set_as_radioss()
-                    self.set_table_type()
-                #elif data[:20] == b'XXXXXXXX20141   0   ':
-                    #self.set_as_msc()
-                    #self.set_table_type()
-                else:
-                    raise RuntimeError('unknown version=%r' % version)
-            elif macro_version.startswith('IMAT'):
-                assert version.startswith(b'ATA'), version
-                self._nastran_format = macro_version
-            elif macro_version == 'MSFC':
-                self._nastran_format = macro_version
-                #self.show_data(version)
-                #assert version.startswith(b'ATA'), version
-
-            if self.is_debug_file:
-                self.binary_debug.write(data.decode(self._encoding) + '\n')
-            self.read_markers([-1, 0])
-        elif markers == [2,]:  # PARAM, POST, -2
-            if self.is_debug_file:
-                self.binary_debug.write('marker = 2 -> PARAM,POST,-2?\n')
-            self.post = -2
-        else:
-            raise NotImplementedError(markers)
-
-    #def create_unpickable_data(self):
-        #raise NotImplementedError()
-        ##==== not needed ====
-        ##self.f
-        ##self.binary_debug
-
-        ## needed
-        #self._geom1_map
-        #self._geom2_map
-        #self._geom3_map
-        #self._geom4_map
-        #self._dit_map
-        #self._dynamics_map
-        #self._ept_map
-        #self._mpt_map
-        #self._table_mapper
-
-    #def remove_unpickable_data(self):
-        #del self.f
-        #del self.binary_debug
-        #del self._geom1_map
-        #del self._geom2_map
-        #del self._geom3_map
-        #del self._geom4_map
-        #del self._dit_map
-        #del self._dynamics_map
-        #del self._ept_map
-        #del self._mpt_map
-        #del self._table_mapper
+            self._set_structs(size)
 
     def _make_tables(self):
         return
@@ -1523,7 +1594,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         #table_mapper = self._get_table_mapper()
         #RESULT_TABLES = table_mapper.keys()
 
-    def _read_tables(self, table_name):
+    def _read_tables(self, table_name: bytes) -> List[bytes]:
         """
         Reads all the geometry/result tables.
         The OP2 header is not read by this function.
@@ -1532,9 +1603,18 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         ----------
         table_name : bytes str
             the first table's name
+
+        Returns
+        -------
+        table_names : List[bytes str]
+            the table names that were read
+
         """
+        op2_reader = self.op2_reader
         table_names = []
+        self.table_count = defaultdict(int)
         while table_name is not None:
+            self.table_count[table_name] += 1
             table_names.append(table_name)
 
             if self.is_debug_file:
@@ -1546,51 +1626,29 @@ class OP2_Scalar(LAMA, ONR, OGPF,
 
             self.table_name = table_name
             #if 0:
-                #self._skip_table(table_name)
+                #op2_reader._skip_table(table_name)
             #else:
+            #print(table_name, table_name in op2_reader.mapped_tables)
             if table_name in self.generalized_tables:
+                t0 = self.f.tell()
                 self.generalized_tables[table_name](self)
+                assert self.f.tell() != t0, 'the position was unchanged...'
+            elif table_name in op2_reader.mapped_tables:
+                t0 = self.f.tell()
+                op2_reader.mapped_tables[table_name]()
+                assert self.f.tell() != t0, 'the position was unchanged...'
             elif table_name in GEOM_TABLES:
-                self._read_geom_table()  # DIT (agard)
-            elif table_name == b'GPL':
-                self._read_gpl()
-            #elif table_name == b'MEFF':
-                #self._read_meff()
-            elif table_name == b'INTMOD':
-                self._read_intmod()
-            elif table_name == b'HISADD':
-                self._read_hisadd()
-            elif table_name == b'FRL':  # frequency response list
-                self._skip_table(self.table_name)
-            elif table_name == b'EXTDB':
-                self._read_extdb()
-            elif table_name == b'OMM2':
-                self._read_omm2()
-            elif table_name == b'TOL':
-                self._read_tol()
-            elif table_name == b'PCOMPTS': # blade
-                self._read_pcompts()
-            elif table_name == b'MONITOR':
-                self._read_monitor()
-            elif table_name == b'AEMONPT':
-                self._read_aemonpt()
-            elif table_name == b'FOL':
-                self._read_fol()
-            elif table_name == b'SDF':
-                self._read_sdf()
-            elif table_name in [b'IBULK', b'CDDATA']:
-                self._read_ibulk()
-            elif table_name == b'CMODEXT':
-                self._read_cmodext()
+                op2_reader.read_geom_table()  # DIT (agard)
             elif table_name in MATRIX_TABLES:
-                self._read_matrix(table_name)
+                op2_reader.read_matrix(table_name)
             elif table_name in RESULT_TABLES:
-                self._read_results_table()
+                op2_reader.read_results_table()
             elif self.skip_undefined_matrices:
-                self._read_matrix(table_name)
+                op2_reader.read_matrix(table_name)
             elif table_name.strip() in self.additional_matrices:
-                self._read_matrix(table_name)
+                op2_reader.read_matrix(table_name)
             else:
+                #self.show(1000, types='ifsq')
                 msg = (
                     'Invalid Table = %r\n\n'
                     'If you have matrices that you want to read, see:\n'
@@ -1609,132 +1667,18 @@ class OP2_Scalar(LAMA, ONR, OGPF,
                     "      b'OES1X1' : False,\n"
                     '  }\n\n'
 
-                    'If you want to take control of the OP2 reader (mainly useful for obscure tables), see:\n'
+                    'If you want to take control of the OP2 reader (mainly useful '
+                    'for obscure tables), see:\n'
                     "  methods_dict = {\n"
                     "      b'OUGV1' : [method],\n"
                     '  }\n'
-                    '  model.set_additional_generalized_tables_to_read(methods_dict)\n' % table_name
+                    '  model.set_additional_generalized_tables_to_read(methods_dict)\n' % (
+                        table_name)
                 )
                 raise NotImplementedError(msg)
 
-            table_name = self._read_table_name(rewind=True, stop_on_failure=False)
+            table_name = op2_reader._read_table_name(rewind=True, stop_on_failure=False)
         return table_names
-
-    def _read_tol(self):
-        """
-        This is probably broken for MSC Nastran
-
-        TOL
-        ---
-        -2 - nitimes?
-        -3 - list of times?
-        """
-        table_name = self._read_table_name(rewind=False, stop_on_failure=True)
-        self.read_markers([-1])
-        data = self._read_record()
-        #self.show_data(data)
-
-        self.read_markers([-2, 1, 0])
-        #self.show_ndata(440, types='if')
-        data = self._read_record()
-        #print('----')
-        self.read_markers([-3, 1, 0])
-        #self.show_ndata(440, types='if')
-        #print('----')
-        self.read_markers([0])
-        #data = self._read_record()
-
-
-        #self.show_ndata(440, types='ifs')
-
-        #self.show_data(data)
-        #aaaa
-
-    def _skip_table(self, table_name):
-        """bypasses the next table as quickly as possible"""
-        if table_name in ['DIT', 'DITS']:  # tables
-            self._read_dit()
-        elif table_name in ['PCOMPTS']:
-            self._read_pcompts()
-        else:
-            self._skip_table_helper()
-
-    def _read_dit(self):
-        """
-        Reads the DIT table (poorly).
-        The DIT table stores information about table cards
-        (e.g. TABLED1, TABLEM1).
-        """
-        table_name = self._read_table_name(rewind=False)
-        self.read_markers([-1])
-        data = self._read_record()
-
-        self.read_markers([-2, 1, 0])
-        data = self._read_record()
-        table_name, = self.struct_8s.unpack(data)
-
-        self.read_markers([-3, 1, 0])
-        data = self._read_record()
-
-        self.read_markers([-4, 1, 0])
-        data = self._read_record()
-
-        self.read_markers([-5, 1, 0])
-
-        itable = -6
-        while 1:
-            markers = self.get_nmarkers(1, rewind=True)
-            if markers == [0]:
-                break
-            data = self._read_record()
-            self.read_markers([itable, 1, 0])
-            itable -= 1
-
-        #self.show(100)
-        self.read_markers([0])
-
-    def _read_table_name(self, rewind=False, stop_on_failure=True):
-        """Reads the next OP2 table name (e.g. OUG1, OES1X1)"""
-        table_name = None
-        data = None
-        if self.is_debug_file:
-            self.binary_debug.write('_read_table_name - rewind=%s\n' % rewind)
-        ni = self.n
-        structi = self.struct_8s
-        if stop_on_failure:
-            data = self._read_record(debug=False, macro_rewind=rewind)
-            table_name, = structi.unpack(data)
-            if self.is_debug_file and not rewind:
-                self.binary_debug.write('marker = [4, 2, 4]\n')
-                self.binary_debug.write('table_header = [8, %r, 8]\n\n' % table_name)
-            table_name = table_name.strip()
-        else:
-            try:
-                data = self._read_record(macro_rewind=rewind)
-                table_name, = structi.unpack(data)
-                table_name = table_name.strip()
-            except:
-                # we're done reading
-                self.n = ni
-                self.f.seek(self.n)
-
-                try:
-                    # we have a trailing 0 marker
-                    self.read_markers([0], macro_rewind=rewind)
-                except:
-                    # if we hit this block, we have a FATAL error
-                    if not self._nastran_format.lower().startswith('imat'):
-                        raise FatalError('There was a Nastran FATAL Error.  '
-                                         'Check the F06.\nlast table=%r' % self.table_name)
-                table_name = None
-
-                # we're done reading, so we're going to ignore the rewind
-                rewind = False
-
-        if rewind:
-            self.n = ni
-            self.f.seek(self.n)
-        return table_name
 
     def set_additional_generalized_tables_to_read(self, tables):
         """
@@ -1754,6 +1698,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
           }
 
           model.set_additional_generalized_tables_to_read(generalized_tables)
+
         """
         self._update_generalized_tables(tables)
         self.generalized_tables = tables
@@ -1775,6 +1720,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
                 function to read table 3 results (e.g., metadata)
             method4 : function
                 function to read table 4 results (e.g., the actual results)
+
         """
         self._update_generalized_tables(tables)
         table_mapper = self._get_table_mapper()
@@ -1783,7 +1729,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
             """overloaded version of _get_table_mapper"""
             #if is_added:
                 #return table_mapper
-            for _key, methods in iteritems(tables):
+            for _key, methods in tables.items():
                 if methods is False:
                     table_mapper[_key] = [self._table_passer, self._table_passer]
                 else:
@@ -1798,6 +1744,7 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         helper function for:
          - set_additional_generalized_tables_to_read
          - set_additional_result_tables_to_read
+
         """
         global NX_RESULT_TABLES
         global MSC_RESULT_TABLES
@@ -1805,10 +1752,9 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         failed_keys = []
         keys = list(tables.keys())
         for _key in keys:
-            if PY3:
-                if not isinstance(_key, bytes):
-                    failed_keys.append(_key)
-            if self.is_nx:
+            if not isinstance(_key, bytes):
+                failed_keys.append(_key)
+            if hasattr(self, 'is_nx') and self.is_nx:
                 NX_RESULT_TABLES.append(_key)
             else:
                 MSC_RESULT_TABLES.append(_key)
@@ -1820,16 +1766,16 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         #RESULT_TABLES.sort()
         #assert 'OESXRMS1' in RESULT_TABLES, RESULT_TABLES
 
-    def set_additional_matrices_to_read(self, matrices):
+    def set_additional_matrices_to_read(self, matrices: Union[List[str], Dict[str, bool]]):
         """
         Matrices (e.g., KHH) can be sparse or dense.
 
         Parameters
         ----------
-        matrices : List[bytes]; Dict[bytes] = bool
-            List[bytes] :
+        matrices : List[str]; Dict[str] = bool
+            List[str]:
                 simplified method to add matrices; value will be True
-            Dict[bytes] = bool:
+            Dict[str] = bool:
                 a dictionary of key=name, value=True/False,
                 where True/False indicates the matrix should be read
 
@@ -1839,171 +1785,29 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         .. note:: Do not use this for result tables like OUGV1, which
                   store results like displacement.  Those are not matrices.
                   Matrices are things like DMIGs.
+
         """
         if isinstance(matrices, list):
             matrices2 = {}
             for matrix in matrices:
-                assert isinstance(matrix, string_types), 'matrix=%r' % str(matrix)
+                assert isinstance(matrix, str), 'matrix=%r' % str(matrix)
                 matrices2[matrix] = True
             matrices = matrices2
 
         self.additional_matrices = matrices
-        if PY2:
-            self.additional_matrices = matrices
-        else:
-            self.additional_matrices = {}
-            for matrix_name, matrix in iteritems(matrices):
-                self.additional_matrices[b(matrix_name)] = matrix
-
-    def _skip_table_helper(self):
-        """
-        Skips the majority of geometry/result tables as they follow a very standard format.
-        Other tables don't follow this format.
-        """
-        self.table_name = self._read_table_name(rewind=False)
-        if self.is_debug_file:
-            self.binary_debug.write('skipping table...%r\n' % self.table_name)
-        self.read_markers([-1])
-        data = self._skip_record()
-        self.read_markers([-2, 1, 0])
-        data = self._skip_record()
-        self._skip_subtables()
-
-    def _get_marker_n(self, nmarkers):
-        """
-        Gets N markers
-
-        A marker is a flag that is used.  It's a series of 3 ints (4, n, 4)
-        where n changes from marker to marker.
-
-        Parameters
-        ----------
-        nmarkers : int
-            the number of markers to read
-
-        Returns
-        -------
-        markers : List[int, int, int]
-            a list of nmarker integers
-        """
-        markers = []
-        struc = Struct('3i')
-        for i in range(nmarkers):
-            block = self.f.read(12)
-            marker = struc.unpack(block)
-            markers.append(marker)
-        return markers
-
-    def _read_geom_table(self):
-        """
-        Reads a geometry table
-        """
-        self.table_name = self._read_table_name(rewind=False)
-        if self.is_debug_file:
-            self.binary_debug.write('_read_geom_table - %s\n' % self.table_name)
-        self.read_markers([-1])
-        data = self._read_record()
-
-        self.read_markers([-2, 1, 0])
-        data, ndata = self._read_record_ndata()
-        if ndata == 8:
-            subtable_name, = self.struct_8s.unpack(data)
-        else:
-            strings, ints, floats = self.show_data(data)
-            msg = 'Unhandled table length error\n'
-            msg += 'table_name = %s\n' % self.table_name
-            msg += 'len(data) = %i\n' % ndata
-            msg += 'strings  = %r\n' % strings
-            msg += 'ints     = %r\n' % str(ints)
-            msg += 'floats   = %r' % str(floats)
-            raise NotImplementedError(msg)
-
-        self.subtable_name = subtable_name.rstrip()
-        self._read_subtables()
-
-    def _read_results_table(self):
-        """
-        Reads a results table
-        """
-        if self.is_debug_file:
-            self.binary_debug.write('read_results_table - %s\n' % self.table_name)
-        self.table_name = self._read_table_name(rewind=False)
-        self.read_markers([-1])
-        if self.is_debug_file:
-            self.binary_debug.write('---markers = [-1]---\n')
-            #self.binary_debug.write('marker = [4, -1, 4]\n')
-        data = self._read_record()
-
-        self.read_markers([-2, 1, 0])
-        if self.is_debug_file:
-            self.binary_debug.write('---markers = [-2, 1, 0]---\n')
-        data, ndata = self._read_record_ndata()
-        if ndata == 8:
-            subtable_name = self.struct_8s.unpack(data)
-            if self.is_debug_file:
-                self.binary_debug.write('  recordi = [%r]\n'  % subtable_name)
-                self.binary_debug.write('  subtable_name=%r\n' % subtable_name)
-        elif ndata == 28:
-            subtable_name, month, day, year, zero, one = unpack(self._endian + b'8s5i', data)
-            if self.is_debug_file:
-                self.binary_debug.write('  recordi = [%r, %i, %i, %i, %i, %i]\n'  % (
-                    subtable_name, month, day, year, zero, one))
-                self.binary_debug.write('  subtable_name=%r\n' % subtable_name)
-            self._print_month(month, day, year, zero, one)
-        elif ndata == 612: # ???
-            strings, ints, floats = self.show_data(data)
-            msg = 'len(data) = %i\n' % ndata
-            #msg += 'strings  = %r\n' % strings
-            #msg += 'ints     = %r\n' % str(ints)
-            #msg += 'floats   = %r' % str(floats)
-            print(msg)
-            subtable_name, = self.struct_8s.unpack(data[:8])
-            print('subtable_name = %r' % subtable_name.strip())
-        else:
-            strings, ints, floats = self.show_data(data)
-            msg = 'len(data) = %i\n' % ndata
-            msg += 'strings  = %r\n' % strings
-            msg += 'ints     = %r\n' % str(ints)
-            msg += 'floats   = %r' % str(floats)
-            raise NotImplementedError(msg)
-        if hasattr(self, 'subtable_name'):
-            raise RuntimeError('the file hasnt been cleaned up; subtable_name_old=%s new=%s' % (
-                self.subtable_name, subtable_name))
-        self.subtable_name = subtable_name
-        self._read_subtables()
-
-    def _print_month(self, month, day, year, zero, one):
-        """
-        Creates the self.date attribute from the 2-digit year.
-
-        Parameters
-        ----------
-        month : int
-            the month (integer <= 12)
-        day :  int
-            the day (integer <= 31)
-        year : int
-            the day (integer <= 99)
-        zero : int
-            a dummy integer (???)
-        one : int
-            a dummy integer (???)
-        """
-        month, day, year = self._set_op2_date(month, day, year)
-
-        #self.log.debug("%s/%s/%4i zero=%s one=%s" % (month, day, year, zero, one))
-        #if self.is_debug_file:
-        if self.is_debug_file:
-            self.binary_debug.write('  [subtable_name, month=%i, day=%i, year=%i, '
-                                    'zero=%i, one=%i]\n\n' % (month, day, year, zero, one))
-        #assert zero == 0, zero  # is this the RTABLE indicator???
-        assert one in [0, 1], one  # 0, 50
+        self.additional_matrices = {}
+        for matrix_name, matrix in matrices.items():
+            if isinstance(matrix_name, bytes):
+                self.additional_matrices[matrix_name] = matrix
+            else:
+                self.additional_matrices[matrix_name.encode('latin1')] = matrix
 
     def _finish(self):
         """
         Clears out the data members contained within the self.words variable.
         This prevents mixups when working on the next table, but otherwise
         has no effect.
+
         """
         for word in self.words:
             if word != '???' and hasattr(self, word):
@@ -2013,23 +1817,151 @@ class OP2_Scalar(LAMA, ONR, OGPF,
         if hasattr(self, 'subtable_name'):
             del self.subtable_name
 
+    def _read_psdf_3(self, data, ndata):
+        """reads the PSDF table"""
+        #(50, 2011, 4001, 0, 302130, 3
+        # strip off the title
+        unused_three = self.parse_approach_code(data)
+        self.words = [
+            'approach_code', 'table_code', '???', 'isubcase',
+            '???', '???', '???', 'random_code',
+            'format_code', 'num_wide', '???', '???',
+            'acoustic_flag', '???', '???', '???',
+            '???', '???', '???', '???',
+            '???', '???', 'thermal', '???',
+            '???', 'Title', 'subtitle', 'label'
+        ]
+
+        ## random code
+        self.random_code = self.add_data_parameter(data, 'random_code', b'i', 8, False)
+        self._read_title(data)
+
+        # simplifying to see the data better
+        del self.data_code['title']
+        del self.data_code['label']
+        del self.data_code['subtitle']
+        del self.data_code['subtitle_original']
+        del self.data_code['superelement_adaptivity_index']
+        #del self.data_code['pval_step']
+        del self.data_code['table_name']
+
+        del self.data_code['_encoding']
+        del self.data_code['load_as_h5']
+        del self.data_code['h5_file']
+        del self.data_code['is_msc']
+        #del self.data_code['is_nasa95']
+        del self.data_code['pval_step']
+
+        # wrong
+        del self.data_code['isubcase']
+        #del self.data_code['random_code']
+        #del self.data_code['sort_bits']
+        #del self.data_code['device_code']
+        #del self.data_code['sort_code']
+        #del self.data_code['sort_method']
+        #print(self.data_code)
+
+        #aaa
+        #self._read_oug1_3(data, ndata)
+        if self.read_mode == 1:
+            return ndata
+        # just stripping off title
+        #self.show_data(data[:200], types='if')
+
+        #  stripping off zeros
+        #self.show_data(data[:52], types='ifs')
+
+        #self.show_data(data[:40], types='if')
+
+        approach_code, tcode, int3, frame_id, int5, dof, float7, rms_value, float9, int10, stress_strain_flag = unpack(
+            self._endian + b'6i 3f 2i', data[:44])
+        self.stress_strain_flag = stress_strain_flag
+
+        ints = np.frombuffer(data[:200], dtype=self.idtype)
+        if ints[11:].max() > 0:
+            self.log.warning(f'ints11 = {ints[11:].tolist()}')
+
+        node = int5 // 10
+        #dof = int5 % 10
+        #from pyNastran.op2.op2_interface.op2_codes import TABLE_CODE_MAP
+        #title = self.title
+        #subtitle = self.subtitle
+        #label = self.label
+        #approach_code={iapproach_code}  tcode={tcode} table_code={self.table_code}
+        #print(f'analysis_code={self.analysis_code} '
+        #print(f'title={title!r} subtitle={subtitle!r} label={label!r}')
+
+        if (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 1, 0):
+            word = 'displacements'
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 2, 0):
+            word = 'load_vectors'
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 3, 0):
+            word = 'spc_forces'
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 4, 0):
+            word = 'force'
+
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 5, 0):
+            word = 'stress'
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 5, 2):
+            word = 'strain'
+
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 10, 0):
+            word = 'velocities'
+        elif (self.analysis_code, self.table_code, self.stress_strain_flag) == (5, 11, 0):
+            word = 'accelerations'
+        else:  # pragma: no cover
+            #print(f'table_code={self.table_code} table={TABLE_CODE_MAP[self.table_code]!r}')
+            print(f'analysis_code={self.analysis_code} approach_code={approach_code} tcode={tcode} table_code={self.table_code} '
+                  f'int3={int3} frame_id={frame_id} node={node} dof={dof} '
+                  f'float7={float7} rms_value={rms_value:.5e} float9={float9:.4e} int10={int10} stress_strain_flag={stress_strain_flag}')
+            raise NotImplementedError(f'analysis_code={self.analysis_code} '
+                                      f'table_code={self.table_code} '
+                                      f'stress_strain_flag={self.stress_strain_flag} is not supported')
+
+        self.node = node
+        self.dof = dof
+        self.word = word
+        return ndata
+        #self.show_data(data, types='ifs', endian=None)
+        #aaaa
+
+    def _read_psdf_4(self, data, ndata):
+        """reads the PSDF table"""
+        if self.read_mode == 1:
+            return ndata
+        #self.show_data(data[:100], types='ifs', endian=None)
+        data2 = np.frombuffer(data, dtype=self.fdtype)
+        ndata = len(data2)
+        nfreqs = ndata // 2
+        data2 = data2.reshape(nfreqs, 2)
+        #last2 = data2[-2:, 1]
+        #self.log.warning(f'skipping PSDF; nfreqs={nfreqs} [{last2[0]:.6e},{last2[1]:.6e}] '
+                         #f'ymin={data2[:,1].min():.6e} ymax={data2[:,1].max():.6e}') #  {self.data_code}
+        # self.show_data(), self._read_psdf_4
+        key = (self.label, self.node, self.dof)
+        slot = getattr(self.op2_results.psds, self.word)
+        assert key not in slot, slot
+        slot[key] = data2
+        del self.node
+        del self.dof
+        del self.word
 
 def main():  # pragma: no cover
     """testing pickling"""
-    from pickle import dumps, dump, load, loads
+    from pickle import dump, load
     txt_filename = 'solid_shell_bar.txt'
     pickle_file = open(txt_filename, 'wb')
     op2_filename = 'solid_shell_bar.op2'
     op2 = OP2_Scalar()
     op2.read_op2(op2_filename)
-    print(op2.displacements[1])
+    #print(op2.displacements[1])
     dump(op2, pickle_file)
     pickle_file.close()
 
     pickle_file = open(txt_filename, 'r')
     op2 = load(pickle_file)
     pickle_file.close()
-    print(op2.displacements[1])
+    #print(op2.displacements[1])
 
 
     #import sys
@@ -2040,6 +1972,20 @@ def main():  # pragma: no cover
     #(model, ext) = os.path.splitext(op2_filename)
     #f06_outname = model + '.test_op2.f06'
     #o.write_f06(f06_outname)
+
+def create_binary_debug(op2_filename: str, debug_file: str, log) -> Tuple[bool, Any]:
+    """helper method"""
+    binary_debug = None
+
+    if debug_file is not None:
+        #: an ASCII version of the op2 (creates lots of output)
+        log.debug('debug_file = %s' % debug_file)
+        binary_debug = open(debug_file, 'w')
+        binary_debug.write(op2_filename + '\n')
+        is_debug_file = True
+    else:
+        is_debug_file = False
+    return is_debug_file, binary_debug
 
 
 if __name__ == '__main__':  # pragma: no cover

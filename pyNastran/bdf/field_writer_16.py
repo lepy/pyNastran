@@ -1,28 +1,22 @@
 """
 Defines functions for single precision 16 character field writing.
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six.moves import range
-
 import sys
 from typing import List, Union, Optional, Any
 from numpy import float32, isnan  # type: ignore
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.utils import wipe_empty_fields
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 
-def set_string16_blank_if_default(value, default):
-    # type: (Any, Any) -> str
+def set_string16_blank_if_default(value: Any, default: Any) -> str:
     """helper method for writing BDFs"""
     val = set_blank_if_default(value, default)
     if val is None:
         return '                '
     return '%16s' % val
 
-def print_scientific_16(value):
-    # type: (float) -> str
+def print_scientific_16(value: float) -> str:
     """
     Prints a value in 16-character scientific notation.
     This is a sub-method and shouldnt typically be called
@@ -60,8 +54,7 @@ def print_scientific_16(value):
     return field
 
 
-def print_float_16(value):
-    # type: (float) -> str
+def print_float_16(value: float) -> str:
     """
     Prints a float in nastran 16-character width syntax
     using the highest precision possbile.
@@ -88,8 +81,8 @@ def print_float_16(value):
                 field = field2
                 field = field.strip(' 0')
             return '%16s' % field
-        elif value < 0.1:
-            field = "%16.15f" % value
+        #elif value < 0.1:
+            #field = "%16.15f" % value
         elif value < 1.:
             field = "%16.15f" % value
         elif value < 10.:
@@ -145,10 +138,10 @@ def print_float_16(value):
                 field = field2.rstrip(' 0')
                 field = field.replace('-0.', '-.')
             return '%16s' % field
-        elif value > -0.1:
+        #elif value > -0.1:
             # -0.01 >x>-0.1...should be 5 (maybe scientific...)
-            field = "%16.14f" % value
-            field = field.replace('-0.', '-.')
+            #field = "%16.14f" % value
+            #field = field.replace('-0.', '-.')
         elif value > -1.:
             # -0.1  >x>-1.....should be 6, but the baseline 0 is kept...
             field = "%16.14f" % value
@@ -184,7 +177,7 @@ def print_float_16(value):
             try:
                 ifield = field.index('.')
             except ValueError:
-                print('field =', field)
+                print('field = %s' % field)
                 raise
             if ifield < 16:
                 field = '%15s.' % (int(round(value, 0)))
@@ -205,8 +198,15 @@ def print_field_16(value):
     """
     Prints a 16-character width field
 
-    :param value:   the value to print
-    :returns field: an 16-character string
+    Parameters
+    ----------
+    value : int / float / str / None
+        the value to print
+
+    Returns
+    -------
+    field : str
+        an 16-character string
     """
     if isinstance(value, integer_types):
         field = "%16s" % value

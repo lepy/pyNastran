@@ -156,7 +156,7 @@ to get ``xyz`` and set the defaults in a single step.  Additionally, the
 ``card`` object is useful when parsing "continuation cards", but is typically
 disabled.
 
-After an excessively long branch of ``cardNames`` in
+After an excessively long branch of ``card_names`` in
 :py:meth:`pyNastran.bdf.BDF.read_bdf`, the card object is turned into a GRID,
 CTRIA3, CQUAD4, PSHELL, MAT1 or any of 200 other card types.  There are roughly
 as many nodes as there are elements, which make up roughly 95% of the cards in
@@ -289,8 +289,8 @@ Cross Referencing is performed by looping over the card objects and calling the
 ``card.cross_reference()`` method.  This will setup all cross-referencing and
 a full list of the status of various cards is listed in ``bdf_crossReferencing.txt``.
 
-:mod:`bdf_write_mesh.py`: Writing the BDF
------------------------------------------
+:mod:`write_mesh.py`: Writing the BDF
+-------------------------------------
 
 The BDF is written by looping through all the objects and calling the
 ``card.write_bdf(size=8/16, is_double=True/False)`` method.

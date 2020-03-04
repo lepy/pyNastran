@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import print_function, unicode_literals
-
 from numpy import setdiff1d, unique, array, hstack
 
 from qtpy import QtCore
@@ -8,6 +6,7 @@ from qtpy.QtWidgets import (
     QDialog, QLineEdit, QPushButton, QGridLayout, QVBoxLayout, QHBoxLayout, QApplication,
     QColorDialog, QLabel,
 )
+from qtpy.QtGui import QColor
 
 from pyNastran.bdf.utils import parse_patran_syntax, parse_patran_syntax_dict
 from pyNastran.bdf.cards.collpase_card import collapse_colon_packs
@@ -110,6 +109,7 @@ class ChangeBCs(QDialog):
         self.setLayout(vbox)
 
     def set_connections(self):
+        """creates the actions for the menu"""
         self.connect(self.name_button, QtCore.SIGNAL('clicked()'), self.on_default_name)
         self.connect(self.coords_button, QtCore.SIGNAL('clicked()'), self.on_default_coords)
         self.connect(self.elements_button, QtCore.SIGNAL('clicked()'), self.on_default_elements)
@@ -164,7 +164,7 @@ class ChangeBCs(QDialog):
     def on_edit_color(self):
         c = [int(255 * i) for i in self.text_col]
         #print('c =', c)
-        col = QColorDialog.getColor(QtGui.QColor(*c), self, "Choose a text color")
+        col = QColorDialog.getColor(QColor(*c), self, "Choose a text color")
         self.color.SetColor(col)
 
     def on_default_color(self):
@@ -177,9 +177,9 @@ class ChangeBCs(QDialog):
             value = parse_patran_syntax(text, pound=pound)
             cell.setStyleSheet("QLineEdit{background: white;}")
             return value, True
-        except ValueError as e:
+        except ValueError as error:
             cell.setStyleSheet("QLineEdit{background: red;}")
-            cell.setToolTip(str(e))
+            cell.setToolTip(str(error))
             return None, False
 
     def check_patran_syntax_dict(self, cell, pound=None):
@@ -189,9 +189,9 @@ class ChangeBCs(QDialog):
             cell.setStyleSheet("QLineEdit{background: white;}")
             cell.setToolTip('')
             return value, True
-        except (ValueError, SyntaxError, KeyError) as e:
+        except (ValueError, SyntaxError, KeyError) as error:
             cell.setStyleSheet("QLineEdit{background: red;}")
-            cell.setToolTip(str(e))
+            cell.setToolTip(str(error))
             return None, False
 
     def check_float(self, cell):

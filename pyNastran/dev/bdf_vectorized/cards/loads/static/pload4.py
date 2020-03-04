@@ -1,5 +1,3 @@
-from __future__ import print_function
-from six.moves import zip, range
 import numpy as np
 from numpy import arange, array, zeros, searchsorted, unique, full, nan, where
 
@@ -21,6 +19,7 @@ class PLOAD4(VectorizedLoad):
         ----------
         model : BDF
            the BDF object
+
         """
         VectorizedLoad.__init__(self, model)
         del self._comments
@@ -127,8 +126,8 @@ class PLOAD4(VectorizedLoad):
 
             self.g1 = full(ncards, nan, 'int32')
             self.g34 = full(ncards, nan, 'int32')
-            self.line_load_dir = full(ncards, nan, '|S4')
-            self.surf_or_line = full(ncards, nan, '|S4')
+            self.line_load_dir = full(ncards, nan, '|U4')
+            self.surf_or_line = full(ncards, nan, '|U4')
             self.cid = zeros(ncards, dtype='int32')
             self.nvector = zeros((ncards, 3), dtype=float_fmt)
         else:

@@ -46,11 +46,262 @@ Solver
         solve, calculate responses
    - added D matricies for PSHELL, PCOMP, PSOLID
 
------------------------v1.1.0 released 2018/?/?-----------------------
+Solver (New):
+   - not released
+   - rewriting pyNastran solver (SOL 101)
+      - uses case control deck to identify loads/BCs
+      - F06/OP2 output
+      - SOL 101 - Static Displacement
+         - outputs:
+           - OLOAD Resultant
+           - Grid Point Weight Generator (calculated; no table)
+           - Displacement
+           - Applied Load
+           - SPC Forces
+           - Stress
+           - Strain
+           - Element Force
+           - MPC Forces (TODO)
+           - Strain Energy (TODO)
+         - cards:
+           - GRID
+             - CD support - verified for CORDxR
+             - PS support - not verified
+             - SEID support
+           - CORDx
+           - CELAS1/CELAS2
+             - no SPOINTs
+             - stress/strain/force output - verified
+             - stiffness matrix - verified
+           - CELAS3/CELAS4
+             - no GRIDs
+             - no stress/strain/force output
+             - stiffness matrix - verified
+           - CONM1/CONM2
+             - no cid
+             - GRID only
+             - mass matrix - not verified
+           - CROD/CONROD/CTUBE
+             - mass matrix - verified
+             - stiffness matrix - verified
+             - output - verified
+           - constraints:
+             - SPC, SPC1
+           - loads:
+             - LOAD
+             - FORCE/MOMENT
+               - GRID only
+             - SLOAD
+               - SPOINT only
+             - SPCD
+           - CBAR
+             - PBAR/PBARL
+             - stiffness matrix - not verified
+             - no mass matrix
+             - no output
+             - not verified
+           - CBEAM
+             - PBEAM (no PBEAML)
+             - no warping
+             - stiffness matrix - not verified
+             - no mass matrix
+             - no output
+           - PSHELL/PCOMP
+             - CTRIA3
+               - no stiffness matrix
+               - mass matrix - not verified
+             - CQUAD4
+               - mass matrix - not verified
+               - stiffness matrix - not verified
+               - no PSHELL mid3
+               - no output
+
+-----------------------v1.3   released 2020/?/??-----------------------
+BDF:
+ - bug fixes:
+ - new cards:
+   - DTI besides UNITS are now supported
+   - PBEAM3, TEMPB3
+ - enhancements:
+   - added deck guessing with punch=None
+   - better parser for test_bdf
+   - PCOMPG now supports DVPRELx
+   - added get_position for SPOINT
+   - added inertia for PBARL/L
+   - bdf mirror:
+     - added PLOTEL, RROD, RBAR, RBAR1, RBE1, AELIST, AESURF support
+   - bdf_equivalence:
+     - method='new' no longer requires neq_max
+     - use method='old' for old behavior (deprecated)
+ - minor enhancements:
+   - handling ;; in DEQATN
+   - support for SURF cid=None in _get_forces_moments_array
+   - added check for number of loads = nscale factors for LOAD
+   - more PARAM validation
+- changes:
+   - warning on RBAR dof check instead of RuntimeError
+
+OP2:
+ - enhancements:
+   - more hdf5 results
+   - a few more cards supported in the OP2 geometry reader
+   - adding op2 writer (includes geometry support)
+   - adding composite failure indicies (OEFIT)
+   - improved sensitivity support (DSCMCOL)
+   - preliminary 64-bit support
+
+GUI:
+ - bug fixes:
+   - better argument handling
+ - enhancements:
+    - Can now load custom fringe/displacement/force results with an incorrect
+      number of nodes/elements.  It's assumed that the node/element id in the
+      first column should be the same as the id for the model.  Thus, you just
+      filter out extra nodes/elements or you set some blank nodes/elements.
+       - For integer results, no masking is applied.
+       - For float results, masking is applied and nan corresponds to no color.
+    - added mark_elements, mark_elements_by_case
+
+-----------------------v1.2.2 released 2020/1/x-----------------------
+BDF:
+ - bug fixes:
+   - PBARL & PBEAML DBOX now has defaults for DIM5-DIM10
+   - added AECOMPL, DEFORM to bdf attributes
+   - added RHO to MAT10 updater
+   - Better case control SET parser (can now handle 1,THRU,10,EXCEPT,7,8,
+     which doesn't have spaces that makes parsing easier).  It's also orders
+     of magnitude faster on large problems.
+   - Fixed NDDL bug in MONPNT2
+   - Added check for DVPRELx to prevent referencing property fields when another
+     similar property is used (e.g., a DVPRELx references a PCOMPG, but the PCOMP
+     field id numbers are used to update the card).
+   - added some missing hdf5 object support
+   - fixing DEQATN bug caused by using python builtin
+   - fixed missing variable in mass properties error message
+   - aero
+     - fixed issue where CAERO1 didn't set the xyz1 and xyz4 points to arrays
+       when loading an HDF5 file
+     - caero2 now sets box ids
+   - elements/properties
+     - added I12, J to PBEAM updater; fixed error message
+     - fixed Area calculation for PBARL/CHAN, HAT1, DBOX
+     - fixed PBAR optimization treating I12 as I1; added J
+   - convert better handles:
+     - T1-T4 in quad shells
+     - fixed bug in CGAP x/g0
+   - bdf mirror:
+     - fixed bug where max element id is less than max rigid_element id
+     - fixed bug with shells that have blanks (e.g., CTRIA6, CQUAD8)
+     - plane is now case insensitive and auto-sorted
+     - CAERO1 now supports lspan/lchord and Cp
+     - CAERO1 handles xy plane properly now (doesn't assume it's xz)
+     - fixing bug in set_param
+OP2:
+ - geom bug fixes:
+    - fixed reading bugs for QHBDY and SPCOFF
+    - better identifing duplicate property id (PBCOMP -> PBEAM)
+    - fixed CONVM error (it can be 6 or 7 fields, not only 6)
+    - fixed ACCEL key
+ - bug fixes:
+    - R1TABRG now stores response_types as strings
+      (instead of bytes for Python 3)
+    - f06 writer now writes CDAMP3/4 names correctly
+
+GUI:
+ - bug fixes:
+  - added check on highlight menu for model existance
+  - fixed import for new version download menu
+  - improved command line error message
+  - fixed support for CAEROx models without elements
+  - export_cases now supports integers
+
+-----------------------v1.2.1 released 2019/5/24-----------------------
+OP2:
+ - fixed bug with OUGV1PAT table
+
+-----------------------v1.2.0 released 2019/5/21-----------------------
+Programmatics:
+ - This is the last Python 2.7 release.
+ - Dropping Python 3.5 support
+ - Supports Python 2.7, 3.6-3.7
+ - GUI is compatible with PyQt4/PyQt5 as well as PySide/PySide2
+ - improved testing of old versions of packages
+
+BDF:
+ - 373 cards supported (up from 343)
+ - added abiltity to write models to separate include files
+     ```python
+     >>> model = BDF()
+     >>> model.read_bdf(bdf_filename, save_file_structure=True)
+
+     out_filenames = {
+         bdf_filename : bdf_filename_new,
+         include_filename : include_filename_new,
+     }
+     >>> model.write_bdfs(out_filenames, relative_dirname=None, is_windows=None)
+     >>> ifile = model.grids[1].ifile
+     ```
+
+ - HDF5 import/export
+      ```python
+     >>> model = read_bdf(bdf_filename)
+     >>> model.export_hdf5_filename(hdf5_filename)
+     >>> model_new = OP2()
+     >>> model_new.load_hdf5_filename(hdf5_filename)
+     ```
+
+ - preliminary superelement support
+     ```python
+     >>> model.read_bdf(bdf_filename)
+     >>> model.superelement_models[1].nodes
+     ```
+
+
+OP2:
+ - reorganization of random op2 results into op2.results.psd (or ato, no, crm, rms) to aide in finding data
+ - reorganization of op2 class to reduce number of functions in the object.  This affects any custom table reading.
+ - improved optimzation response reading
+ - limited SORT2 support
+ - fixed CD transformation bug for BOUGV1 and BOPHIG1 tables
+ - Improved HDF5 export/import support (e.g., matrices, random results)
+
+ - Can optionally save directly to HDF5 instead of numpy (limited).
+ - Loading OP2s to an HDF5 file to decrease memory usage
+      ```python
+     >>> op2_model = OP2()
+     >>> op2_model.load_as_h5 = True
+     >>> op2_model.read_op2(op2_filename)
+     ```
+
+OP2Geom:
+ - HDF5 support
+ - reading EQEXIN/S, GPT, GPDT, CSTM/S tables (recovery of nodes & coordinate with OP2Geom)
+ - fixed theta/mcid reading for CTRIA3/CQUAD4
+ - fixed CQUAD8 bug
+
+GUI:
+ - sped up HTML logging
+ - much improved groups menu
+ - options for Nastran in preferences menu to speed up loading/limit memory usage
+ - pyNastran BDF pickle reading
+ - pyNastran OP2 HDF5 reading (not MSC's format)
+ - visualization when pickling nodes/elements
+ - min/max labels
+ - highlight menu
+ - Patran-style colors
+ - custom force vectors
+ - AVL support
+
+
+Known issues:
+ - Transient Pandas Dataframes will fail for newer versions of numpy/pandas.  If anyone knows how to use a MultiIndex,
+   this is probably pretty easy to fix.
+
+-----------------------v1.1.0 released 2018/6/26-----------------------
 This is a major release.  As in the v1.0 release, the focus has been on testing.
 
-The bigest change has been to cross-referencing.  All cross-referenced 
-objects now have an ``_ref`` attribute that is cross-referened, which 
+The bigest change has been to cross-referencing.  All cross-referenced
+objects now have an ``_ref`` attribute that is cross-referened, which
 is ``None`` if the model is not cross referenced.  Objects maintain the
 uncross-referenced form as well.  For a CQUAD4, instead of:
  ``model.elements[eid].nodes[0].nid``
@@ -97,6 +348,13 @@ BDF:
      - caero sub-panels ids are now renumbered
      - renumbering mapper object returned now
    - improved removed_unused card support
+   - improved mirroring
+   - read_bdf StringIO option now parses pyNastran header
+   - subcase copying speedup (helps with SETs)
+   - preliminary ZONA loading
+   - added atmosphere2.make_flfacts_eas_sweep, make_flfacts_mach_sweep, and
+     make_flfacts_alt_sweep with an EAS (equivalent airspeed) limiter
+   - rotate_v_wa_wb for CBAR/CBEAM to determine element vectors
 
   - Bug fixes:
    - more add_card documentation (e.g., add_grid, add_ctria3)
@@ -109,15 +367,17 @@ BDF:
    - fixed PBARL/PBEAML DBOX error
    - fixed PositionWRT bug
    - fixed LOAD card messing up load ids after cross referencing
-   - fixed TRIM default on aeqr (was 0.0/rigid; should be 1.0/elastic) 
+   - fixed TRIM default on aeqr (was 0.0/rigid; should be 1.0/elastic)
    - NLPCI now gets written when there are no other dynamic cards
+   - fixed CBUSH cid=0 bug
+   - fixed TABLED4/TABLEM4 stopping error
 
   - API changes:
-   - model.Node(nid, allow_empty_nodes=False msg='') no longer supports 
+   - model.Node(nid, allow_empty_nodes=False msg='') no longer supports
      allow_empty_nodes.  Use:
        model.EmptyNode(nid, msg='') instead for that
        model.Node(nid, msg='') is the new form
-   - model.Nodes(nid, allow_empty_nodes=False msg='') no longer supports 
+   - model.Nodes(nid, allow_empty_nodes=False msg='') no longer supports
      allow_empty_nodes.  Use:
        model.EmptyNodes(nid, msg='') instead for that
        model.Nodes(nid, msg='') is the new form
@@ -136,15 +396,17 @@ BDF:
    - LOAD cards are now stored in model.load_combinations instead of model.loads
 
   - Known bugs:
-   - dynamic loads cross-referencing is buggy; 
+   - dynamic loads cross-referencing is buggy;
      reject the cards if there is a problem
    - PBEAM defaults with ENDA are slightly incorrect.
 
 OP2:
   - New features:
-   - added model.set_additional_generalized_tables_to_read(tables) to 
+   - added model.set_additional_generalized_tables_to_read(tables) to
      create custom OP2 readers
    - added complex/average strain energy
+   - save/load hdf5 support
+   - EIGRL support
 
   - Bug fixes:
    - improved table skipping
@@ -152,6 +414,11 @@ OP2:
    - fixed CEN/3, CEN/4 writing for RealPlateBilinearForceArray
    - improved geometry table reading
    - real sparse matrices take much less memory now; were being converted to dense matrices
+   - added RBAR on NX vs. MSC
+   - fixed RBE2 with alpha bug
+   - fixed CREEP bug
+   - fixed RBE3 bug
+   - fixed PBCOMP bug
 
   - API changes:
     - xlsx exporter removed
@@ -170,6 +437,8 @@ GUI:
     - delete secondary actor support
     - delete result cases support
     - improved view buttons
+    - preferences menu
+    - right click support on results sidebar to apply fringe/displacement/veactor results
 
   - Bug fixes:
     - displays control surfaces again (aesurf)
@@ -180,6 +449,7 @@ GUI:
     - "Toggle CONM2s" updates the "Edit Geometry Properties" menu
     - fixing Windows taskbar icon bug
     - fixing first launch bug
+    - qscintilla works in pyqt5
 
   - Known bugs:
     - after animating a model from within the GUI, the mouse behavior changes
@@ -210,16 +480,16 @@ Programmatics:
  - Dropping Python 3.3 support
  - Adding Python 3.6 support
 
-BDF :
+BDF:
  - This version makes it much easier to programmatically create BDFs with the
    ``add_grid``, ``add_ctria3(...)``, etc. methods.  Almost every card has a
     method and many have documentation of every parameter.
 
-OP2 :
+OP2:
  - Added support for MATPOOL matrices and RANDOM OUG-style tables.
  - First release of read_op2_geom.  Much improved OP2 Geometry reading.
 
-F06 :
+F06:
  - added a preliminary flutter (SOL 145) parser
    - supports multiple subcases
    - PK and PKNL methods supported
@@ -227,7 +497,7 @@ F06 :
    - input/output units
    - mode switching not fixed yet
 
-GUI :
+GUI:
   - Animation plots
   - NaN colors
   - improved picking tolerancing

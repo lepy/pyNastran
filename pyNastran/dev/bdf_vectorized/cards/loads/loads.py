@@ -1,16 +1,14 @@
-from __future__ import print_function
 from collections import defaultdict
-from six import  iteritems
-from six.moves import StringIO
+from io import StringIO
 from numpy import array, union1d
 from pyNastran.dev.bdf_vectorized.cards.loads.load import LOAD
 
 
-#class LOAD(object):
+#class LOAD:
     #def __init__(self, model):
         #self.load = defaultdict(list)
 
-class VectorizedCardDict(object):
+class VectorizedCardDict:
     def __len__(self):
         return self.n
 
@@ -62,11 +60,8 @@ class VectorizedCardDict(object):
         return self._objs[load_id]
 
     def items(self):
-        for key, value in iteritems(self._objs):
+        for key, value in self._objs.items():
             yield key, value
-
-    def iteritems(self):
-        return self.items()
 
     def __repr__(self):
         file_obj = StringIO()
@@ -109,7 +104,7 @@ class LOADs(VectorizedCardDict):
             for load in self._objs[lid]:
                 load.write_card(bdf_file, size=size, is_double=is_double, load_id=lid)
 
-class Loads(object):
+class Loads:
     def __init__(self, model):
         self.model = model
 
@@ -203,19 +198,19 @@ class Loads(object):
 
         else:
             #self.loadcase.write_card(bdf_file, size)
-            for load_id, loads in sorted(iteritems(self.load)):
+            for load_id, loads in sorted(self.load.items()):
                 for load in loads:
                     load.write_card(bdf_file, size)
 
-            for load_id, loads in sorted(iteritems(self.dload)):
+            for load_id, loads in sorted(self.dload.items()):
                 for load in loads:
                     load.write_card(bdf_file, size)
 
-            #for load_id, loads in sorted(iteritems(self.sload)):
+            #for load_id, loads in sorted(self.sload.items()):
                 #for load in loads:
                     #load.write_card(bdf_file, size)
 
-            #for load_id, loads in sorted(iteritems(self.lseq)):
+            #for load_id, loads in sorted(self.lseq.items()):
                 #for load in loads:
                     #load.write_card(bdf_file, size)
 

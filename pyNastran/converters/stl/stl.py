@@ -1,20 +1,17 @@
 #pylint:  disable=C0111
-from __future__ import print_function
 import copy
 from struct import unpack, Struct, pack
-
-from six import iteritems
-from six.moves import zip, range
+from collections import defaultdict
 
 import numpy as np
 import scipy
 
-
-from pyNastran.bdf.field_writer_8 import print_card_8
+from cpylog import get_logger2
 from pyNastran.utils import is_binary_file
-from pyNastran.utils.log import get_logger2
 
-def read_stl(stl_filename, log=None, debug=False):
+
+def read_stl(stl_filename, remove_elements_with_bad_normals=False,
+             log=None, debug=False):
     """
 
     Reads an STL file
@@ -23,18 +20,23 @@ def read_stl(stl_filename, log=None, debug=False):
     ----------
     stl_filename : str
         the filename to read
+    remove_elements_with_bad_normals : bool; default=False
+        removes elements with NAN normal
 
     Returns
     -------
     model : STL()
        the stl model
+
     """
     model = STL(log=log, debug=debug)
     model.read_stl(stl_filename)
+    if remove_elements_with_bad_normals:
+        model.remove_elements_with_bad_normals()
     return model
 
 
-class STL(object):
+class STL:
     #model_type = 'stl'
     #is_structured = False
     #is_outward_normals = True
@@ -78,7 +80,7 @@ class STL(object):
             should the vectors be normalized
         """
         self.log.info("---writing STL...%r---" % stl_out_filename)
-        assert len(self.nodes) > 0
+        self._validate()
         solid_name = 'dummy_name'
         if is_binary:
             self.write_binary_stl(stl_out_filename,
@@ -123,6 +125,7 @@ class STL(object):
         normalize_normal_vectors : bool; default=False
             should the vectors be normalized
         """
+        self._validate()
         with open(stl_filename, 'wb') as infile:
             if hasattr(self, 'header'):
                 self.header.ljust(80, '\0')
@@ -145,7 +148,12 @@ class STL(object):
             n = np.cross(avector, bvector)
             del avector, bvector
             if normalize_normal_vectors:
-                n /= np.linalg.norm(n, axis=1)[:, np.newaxis]
+                normals_norm = np.linalg.norm(n, axis=1)
+                inotnan = np.where(normals_norm != 0.)[0]
+                inan = np.where(normals_norm == 0.)[0]
+
+                n[inan, :] = np.nan
+                n[inotnan, :] /= normals_norm[inotnan, np.newaxis]
 
             s = Struct('12fH')
             for eid, unused_element in enumerate(elements):
@@ -215,18 +223,17 @@ class STL(object):
         self.elements = elements
 
         nodes = np.zeros((nnodes, 3), 'float64')
-        for node, inode in iteritems(nodes_dict):
+        for node, inode in nodes_dict.items():
             nodes[inode] = node
         self.nodes = nodes
 
 
-    def _get_normals_data(self, elements, nodes=None):
+    def _get_normals_data(self, elements):
         """
         This is intended as a submethod to help handle the problem of bad normals
         """
-        if nodes is None:
-            nodes = self.nodes
-        self.log.debug("get_normals...elements.shape %s" % str(elements.shape))
+        nodes = self.nodes
+        #self.log.debug("get_normals...elements.shape %s" % str(elements.shape))
         p1 = nodes[elements[:, 0]]
         p2 = nodes[elements[:, 1]]
         p3 = nodes[elements[:, 2]]
@@ -234,11 +241,13 @@ class STL(object):
         v13 = p3 - p1
         v123 = np.cross(v12, v13)
         normals_norm = np.linalg.norm(v123, axis=1)
-        inan = np.where(normals_norm == 0)[0]
+        inan = np.where(normals_norm == 0.)[0]
         return v123, normals_norm, inan
 
-    def remove_elements_with_bad_normals(self, elements, nodes=None):
-        v123, normals_norm, inan = self._get_normals_data(elements, nodes=nodes)
+    def remove_elements_with_bad_normals(self):
+        """removes dot and line elements"""
+        elements = self.elements
+        v123, normals_norm, inan = self._get_normals_data(elements)
         if len(inan):
             inotnan = np.where(normals_norm != 0)[0]
             self.elements = elements[inotnan, :]
@@ -253,8 +262,7 @@ class STL(object):
         return normals
 
     def get_area(self, elements, stop_on_failure=True):
-        unused_v123, normals_norm, inan = self._get_normals_data(
-            elements, nodes=self.nodes)
+        unused_v123, normals_norm, inan = self._get_normals_data(elements)
 
         if stop_on_failure:
             msg = 'Failed Elements: %s\n' % inan
@@ -266,7 +274,7 @@ class STL(object):
                 raise RuntimeError(msg)
         return 0.5 * normals_norm
 
-    def get_normals(self, elements, nodes=None, stop_on_failure=True):
+    def get_normals(self, elements, stop_on_failure=True):
         """
         Parameters
         ----------
@@ -278,9 +286,8 @@ class STL(object):
             True:  crash if there are coincident points
             False: delete elements
         """
-        if nodes is None:
-            nodes = self.nodes
-        v123, normals_norm, inan = self._get_normals_data(elements, nodes=nodes)
+        nodes = self.nodes
+        v123, normals_norm, inan = self._get_normals_data(elements)
 
         if stop_on_failure:
             msg = 'Failed Elements: %s\n' % inan
@@ -301,10 +308,10 @@ class STL(object):
             normals[:, 2] /= normals_norm
         else:
             inotnan = np.where(normals_norm != 0.)[0]
-            inan = np.where(normals_norm == 0.)[0]
+            #inan = np.where(normals_norm == 0.)[0]
             if len(inan):
-                normals_norm[inan] = np.array([1., 0., 0.])
-                #normals_norm[inan] = 1.
+                #normals_norm[inan] = np.array([1., 0., 0.])
+                normals_norm[inan] = 1.
                 #normals_norm[inan, [1,2]] = 0.
             #elements = elements[inotnan, :]
             #normals_norm = normals_norm[inotnan]
@@ -322,7 +329,6 @@ class STL(object):
                 normals[inotnan, 0] /= normals_norm[inotnan]
                 normals[inotnan, 1] /= normals_norm[inotnan]
                 normals[inotnan, 2] /= normals_norm[inotnan]
-
         return normals
 
 
@@ -351,15 +357,13 @@ class STL(object):
         else:
             self.elements[i, :] = elements2 #[i, :]
 
-    def get_normals_at_nodes(self, elements, normals=None, nid_to_eid=None):
+    def get_normals_at_nodes(self, normals=None, nid_to_eid=None):
         """
         Calculates the normal vector of the nodes based on the average
         element normal.
 
         Parameters
         ----------
-        elements : ????
-            The elements...should be removed
         normals : (n, 3) ndarray floats
             The elemental normals
         nid_to_eid : Dict[int] = [int, int, ... ]
@@ -371,12 +375,12 @@ class STL(object):
         normals_at_nodes : (nnodes, 3) ndarray ints
             the normals
         """
+        elements = self.elements
+        nodes = self.nodes
         if normals is None:
-            nodes = self.nodes
-            normals = self.get_normals(elements, nodes=self.nodes)
+            normals = self.get_normals(elements)
 
         if nid_to_eid is None:
-            from collections import defaultdict
             nid_to_eid = defaultdict(list)
             eid = 0
             for (n1, n2, n3) in elements:
@@ -388,7 +392,7 @@ class STL(object):
 
         normals_at_nodes = np.zeros(nodes.shape, 'float64')
         eid = 0
-        for nid, elementsi in iteritems(nid_to_eid):
+        for nid, elementsi in nid_to_eid.items():
             pe = normals[elementsi]
             m = pe.mean(axis=0)
             normals_at_nodes[nid] = m / np.linalg.norm(m)
@@ -396,10 +400,11 @@ class STL(object):
         return normals_at_nodes
 
     def equivalence_nodes(self, tol=1e-5):
+        """equivalences the nodes of the model and updates the elements"""
         nnodes = self.nodes.shape[0]
 
         # build the kdtree
-        kdt = scipy.spatial.KDTree(self.nodes)
+        kdt = scipy.spatial.cKDTree(self.nodes)
 
         # find the node ids of interest
         nids_new = np.unique(self.elements.ravel())
@@ -429,124 +434,9 @@ class STL(object):
                 ireplace = np.where(self.elements == r)
                 self.elements[ireplace] = r_new_nid
 
-    def project_boundary_layer(self, nodes, elements, volume_bdfname):
-        """
-        Create a boundary layer mesh.
-
-        Parameters
-        ----------
-        nodes : (n, 3) ndarray floats
-            The nodes on the surface.
-        elements : (n, 3) ndarray ints
-            The elements on the surface.
-        volume_bdfname : str
-            The CPENTA bdf file to write.
-
-        Returns
-        -------
-        nodes2 : (n, 3) ndarray floats
-            The boundary layer nodes
-        elements2 : (n, 6) ndarray ints
-            The boundary layer elements
-        """
-        self.log.info("project_mesh...")
-
-        normals_at_nodes = self.get_normals_at_nodes(elements, normals=None, nid_to_eid=None)
-
-        #print "normals_at_nodes[4]", normals_at_nodes[4]
-        #----------- make boundary layer---------------
-        # deltaN = a^N * delta
-        delta = 0.1
-        b = 1.0
-        a = 1.1
-        N = 13
-        r = np.array(range(N))
-        #r = 1100
-
-        delta_ns = b * a**r * delta
-        self.log.info('delta_ns = %s' % delta_ns)
-        if not isinstance(delta_ns, np.ndarray):
-            delta_ns = np.array([delta_ns])
-        N = len(delta_ns)
-
-        nid = 0
-        nnodes = nodes.shape[0]
-        nodes2 = np.zeros((nnodes * (N+1), 3), 'float64')
-        nodes2[:nnodes, :] = nodes
-
-        nelements = elements.shape[0]
-        elements2 = np.zeros((nelements * (N+1), 3), 'int32')
-        elements2[:nelements, :] = elements
-
-        ni = 0
-        cid = None
-        nid = 1
-        eid2 = 1
-        pid = 100
-        mid = 100
-        with open(volume_bdfname, 'wb') as bdf:
-            bdf.write('CEND\nBEGIN BULK\n')
-            bdf.write('$NODES in Layer=0\n')
-            for (x, y, z) in nodes:
-                card = ['GRID', nid, cid, x, y, z]
-                bdf.write(print_card_8(card))
-                nid += 1
-
-            for deltaN in delta_ns:
-                outer_points = nodes + normals_at_nodes * deltaN
-                nodes2[ni*nnodes : (ni+1)*nnodes, :] = outer_points
-
-                nnbase = ni * nnodes
-                unused_nnshift = (ni+1) * nnodes
-
-                nebase = (ni) * nelements
-                neshift = (ni + 1) * nelements
-                elements2[neshift : neshift + nelements, :] = elements + nnodes * (ni + 1)
-
-                self.log.info('nodes = %s' % str(nodes))
-                self.log.info('deltaN = %s' % str(deltaN))
-                self.log.info('normals_at_nodes = %s' % str(normals_at_nodes))
-                self.log.info('outer_points = %s' % str(outer_points))
-                bdf.write('$NODES in Layer=%i\n' % (ni + 1))
-                for x, y, z in outer_points:
-                    card = ['GRID', nid, cid, x, y, z]
-                    bdf.write(print_card_8(card))
-                    nid += 1
-
-                bdf.write('$SOLID ELEMENTS in Layer=%i\n' % (ni + 1))
-                for eid in range(nelements):
-                    (n1, n2, n3) = elements2[nebase  + eid] + 1
-                    (n4, n5, n6) = elements2[neshift + eid] + 1
-                    card = ['CPENTA', eid2, pid, n1, n2, n3, n4, n5, n6]
-                    bdf.write(print_card_8(card))
-                    eid2 += 1
-
-                card = ['PSOLID', pid, mid]
-                bdf.write(print_card_8(card))
-
-                E = 1e7
-                G = None
-                nu = 0.3
-                card = ['MAT1', mid, E, G, nu]
-                bdf.write(print_card_8(card))
-
-                pid += 1
-                mid += 1
-                ni += 1
-
-        #print(elements2)
-        #for node in nodes:
-            #normal = normals_elements[nid]
-            #nid += 1
-        #print(deltaN)
-
-        #----------- make far field---------------
-        unused_nodes3 = nodes2[nnbase:, :]
-
-        elements3 = elements2[nebase:, :]
-        self.log.debug("done projecting...")
-        return nodes2, elements2
-
+    def _validate(self):
+        assert len(self.nodes) > 0, 'No nodes were found in the model'
+        assert len(self.elements) > 0, 'No nodes were found in the model'
 
     def write_stl_ascii(self, out_filename, solid_name, float_fmt='%.6f',
                         normalize_normal_vectors=False, stop_on_failure=True):
@@ -563,18 +453,18 @@ class STL(object):
          endfacet
         end solid
         """
-        nodes = self.nodes
-        elements = self.elements
         self.log.info("---write_stl_ascii...%r---" % out_filename)
-        msg = ''
+        self._validate()
         noormal_format = ' facet normal %s %s %s\n' % (float_fmt, float_fmt, float_fmt)
         vertex_format = '     vertex %s %s %s\n' % (float_fmt, float_fmt, float_fmt)
-        msg += 'solid %s\n' % solid_name
+        msg = 'solid %s\n' % solid_name
+
+        normals = self.get_normals(self.elements, stop_on_failure=stop_on_failure)
+
+        nodes = self.nodes
+        elements = self.elements
         with open(out_filename, 'w') as out:
             out.write(msg)
-
-            unused_nelements = elements.shape[0]
-            normals = self.get_normals(elements, stop_on_failure=stop_on_failure)
             for element, normal in zip(elements, normals):
                 try:
                     p1, p2, p3 = nodes[element]
@@ -676,21 +566,46 @@ class STL(object):
         self.elements = np.array(elements, 'int32')
         nodes = np.zeros((nnodes, 3), 'float64')
 
-        for node, inode in iteritems(nodes_dict):
+        for node, inode in nodes_dict.items():
             nodes[inode] = node
         self.nodes = nodes
 
-    def scale_nodes(self, xscale, yscale, zscale):
+    def scale_nodes(self, xscale, yscale=None, zscale=None):
+        """
+        Scales the model
+
+        Parameters
+        ----------
+        xscale : float
+            the scaling factor for the x axis; also the default scaling factor
+        yscale/zscale : float; default=xscale
+            the scaling factors for the y/z axes
+        """
+        if yscale is None:
+            yscale = xscale
+        if zscale is None:
+            zscale = xscale
         self.nodes[:, 0] *= xscale
         self.nodes[:, 1] *= yscale
         self.nodes[:, 2] *= zscale
 
     def shift_nodes(self, xshift, yshift, zshift):
+        """Shifts the model"""
         self.nodes[:, 0] += xshift
         self.nodes[:, 1] += yshift
         self.nodes[:, 2] += zshift
 
     def flip_axes(self, axes, scale):
+        """
+        Swaps the axes
+
+        Parameters
+        ----------
+        axes : str
+            'xy', 'yz', 'xz'
+        scale : float
+            why is this here, but is not applied to all axes?
+        """
         if axes == 'xy':
             x = copy.deepcopy(self.nodes[:, 0])
             y = copy.deepcopy(self.nodes[:, 1])
@@ -749,7 +664,8 @@ class STL(object):
         elements2 = []
         elements3 = []
         for element in self.elements:
-            epoints = nodes[element, xyzi][0]
+            # the 3 "y" locations for the element
+            epoints = nodes[element, xyzi] # [0]
             je = np.where(epoints <= tol)[0]
             if len(je) < 3:  # not a symmetry element, so we save it
                 elements2.append(element)

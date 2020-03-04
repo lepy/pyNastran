@@ -1,13 +1,16 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank)
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class ShearElement(object):
+class ShearElement:
     """base class for CSHEAR"""
     card_name = ''
     def __init__(self, model):
@@ -64,7 +67,7 @@ class ShearElement(object):
             self._nids = []
             self.is_current = True
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 
@@ -200,14 +203,14 @@ class CSHEARv(ShearElement):
         return msg
 
 
-class Shears(object):
+class Shears:
     """
     Stores CSHEAR elements that exist in 3D space
     """
     def __init__(self, model):
         self.model = model
         self.cshear = model.cshear
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:

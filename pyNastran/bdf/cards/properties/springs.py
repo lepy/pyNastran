@@ -6,22 +6,24 @@ All spring properties are defined in this file.  This includes:
  * PELAST
 
 All spring properties are SpringProperty and Property objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class SpringProperty(Property):
     def __init__(self):
         Property.__init__(self)
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -42,6 +44,12 @@ class PELAS(SpringProperty):
         'K1' : 'k',
         'GE1' : 'ge',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        k = 1.
+        return PELAS(pid, k, ge=0., s=0., comment='')
 
     def __init__(self, pid, k, ge=0., s=0., comment=''):
         """
@@ -119,12 +127,13 @@ class PELAS(SpringProperty):
         s = data[3]
         return PELAS(pid, k, ge, s, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         #if model.sol in [108, 129]:
         if self.pid in model.pelast:
             self.pelast_ref = model.pelast[self.pid]
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.pelast_ref = None
 
     def K(self):
@@ -163,6 +172,14 @@ class PELAST(SpringProperty):
     _field_map = {
         1: 'pid', 2:'tkid', 3:'tgeid', 4:'tknid',
     }
+    pname_fid_map = {
+    'TKID' : 'tknid',
+    }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        return PELAST(pid, tkid=0, tgeid=0, tknid=0, comment='')
 
     def __init__(self, pid, tkid=0, tgeid=0, tknid=0, comment=''):
         """
@@ -237,7 +254,7 @@ class PELAST(SpringProperty):
         (pid, tkid, tgeid, tknid) = data
         return PELAST(pid, tkid, tgeid, tknid, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 

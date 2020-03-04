@@ -1,5 +1,3 @@
-from __future__ import print_function
-from six import iteritems
 from pyNastran.gui.menus.groups_modify.groups_modify import GroupsModify
 
 def on_set_modify_groups(self):
@@ -19,17 +17,19 @@ def on_set_modify_groups(self):
     if not len(self.groups):  # no 'main' group
         self.log_error('No main group to create.')
         return
-    print('groups.keys() =', self.groups.keys())
+    print('groups.keys() = %s' % self.groups.keys())
 
+    group_active = self.group_active
+    assert isinstance(group_active, str), group_active
     data = {
-        'font_size' : self.font_size,
+        'font_size' : self.settings.font_size,
         0 : self.groups['main'],
         'clicked_ok' : False,
         'close' : False,
     }
 
     i = 1
-    for name, group in sorted(iteritems(self.groups)):
+    for name, group in sorted(self.groups.items()):
         if name == 'main':
             continue
         data[i] = group
@@ -37,7 +37,7 @@ def on_set_modify_groups(self):
 
     if not self._modify_groups_window_shown:
         self._modify_groups_window = GroupsModify(
-            data, win_parent=self, group_active=self.group_active)
+            data, win_parent=self, group_active=group_active)
         self._modify_groups_window.show()
         self._modify_groups_window_shown = True
         self._modify_groups_window.exec_()

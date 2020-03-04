@@ -1,4 +1,5 @@
-from __future__ import print_function
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from collections import defaultdict
 from itertools import count
 import numpy as np
@@ -14,7 +15,8 @@ from pyNastran.bdf.field_writer_double import print_scientific_double
 from pyNastran.bdf.cards.base_card import _format_comment
 from pyNastran.bdf.cards.base_card import expand_thru
 
-class Loads(object):
+
+class Loads:
     """intializes the Loads"""
     def __init__(self, model):
         """
@@ -187,7 +189,7 @@ class Loads(object):
         return self.repr_indent(indent='')
 
 
-class BaseLoad(object):
+class BaseLoad:
     """base class for FORCE, PLOAD4"""
     card_name = ''
     def __init__(self, model):
@@ -208,7 +210,7 @@ class BaseLoad(object):
             add_card = True
         return add_card
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 
@@ -1485,7 +1487,7 @@ class LSEQv(BaseLoad):
         excite_id = integer(card, 2, 'excite_id')
         load_id = integer_or_blank(card, 3, 'lid', 0)
         temp_id = integer_or_blank(card, 4, 'tid', 0)
-        if load_id is 0 and temp_id is 0:
+        if load_id != 0 and temp_id != 0:
             msg = 'LSEQ load_id/temp_id are both 0; load_id=%s temp_id=%s' % (load_id, temp_id)
             raise RuntimeError(msg)
         assert len(card) <= 5, 'len(LSEQ card) = %i\ncard=%s' % (len(card), card)

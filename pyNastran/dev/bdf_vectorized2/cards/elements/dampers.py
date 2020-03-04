@@ -1,14 +1,17 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class Dampers(object):
+class Dampers:
     """intializes the Dampers"""
     def __init__(self, model):
         self.model = model
@@ -19,7 +22,7 @@ class Dampers(object):
         self.cvisc = model.cvisc    # TODO: temp
         self.plotel = model.plotel  # TODO: temp
         #self.cdamp5 = model.cdamp5
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:
@@ -73,7 +76,7 @@ class Dampers(object):
         return self.repr_indent(indent='')
 
 
-class DamperElement(object):
+class DamperElement:
     """base class for CDAMP1, CDAMP2, CDAMP3, CDAMP4, CDAMP5"""
     card_name = ''
 
@@ -89,7 +92,7 @@ class DamperElement(object):
             add_card = True
         return add_card
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 

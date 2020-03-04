@@ -1,5 +1,3 @@
-from six import iteritems
-from six.moves import zip
 from collections import defaultdict
 from numpy import zeros, array
 
@@ -11,7 +9,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (integer,
 
 from .loads import VectorizedCardDict
 
-class TEMP(object):
+class TEMP:
     type = 'TEMP'
     def __init__(self, model):
         self.model = model
@@ -75,11 +73,11 @@ class TEMP(object):
             if self.is_default:
                 bdf_file.write('TEMPD*  %16i%s\n' % (self.temp_id, print_float_16(self.default)))
 
-class TEMPP1(object):
+class TEMPP1:
     def __init__(self, model):
         """
         TEMPP1 SID  EID1 TBAR TPRIME T1   T2   NA    NA
-               EID2 EID3 EID4 EID5   EID6 EID7 -etc.-
+               EID2 EID3 EID4 EID5   EID6 EID7  etc.
 
         TEMPP1 EID2 THRU EIDi EIDj THRU EIDk
         TEMPP1 1    THRU 10   30   THRU 61
@@ -187,7 +185,7 @@ class TEMPs(VectorizedCardDict):
 
     def write_card(self, bdf_file, size=8, is_double=False, load_id=None, sort_data=False):
         #self.model.log.debug('TEMPs keys=%s' % self._objs.keys())
-        for load_id, load in sorted(iteritems(self._objs)):
+        for load_id, load in sorted(self._objs.items()):
             #self.model.log.debug('TEMPs write_card load_id=%s' % load_id)
             load.write_card(bdf_file, size=size, is_double=is_double)
         self.tempp1.write_card(bdf_file, size=size, is_double=is_double)

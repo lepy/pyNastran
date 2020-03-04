@@ -1,36 +1,40 @@
 """
 All axisymmetric shell elements are defined in this file.  This includes:
  * AXIC
- * PRESAX
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six.moves import range
+ * AXIF
+ * CCONEAX
+ * PCONEAX
+ * POINTAX
+ * RINGFL
+ * RINGAX
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.bdf.field_writer_8 import (
     set_blank_if_default,
-    #set_default_if_blank,
-    #print_card_8, print_field_8)
 )
-#from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank, double, blank,
+    string, string_or_blank, integer_or_string, fields,
 )
-#from pyNastran.bdf.cards.utils import wipe_empty_fields
-#from pyNastran.bdf.cards.elements.shell import TriShell, _triangle_area_centroid_normal, _normal
 from pyNastran.bdf.cards.base_card import BaseCard, Element
 
-#from pyNastran.bdf.field_writer_8 import set_blank_if_default
-from pyNastran.bdf.cards.base_card import Property #, Material
-from pyNastran.bdf.cards.thermal.loads import ThermalLoad
+from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
-from pyNastran.bdf.field_writer_double import print_card_double
+
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class AXIC(BaseCard):
     type = 'AXIC'
+    @classmethod
+    def _init_from_empty(cls):
+        nharmonics = 1
+        return AXIC(nharmonics, comment='')
+
     def __init__(self, nharmonics, comment=''):
         if comment:
             self.comment = comment
@@ -47,6 +51,7 @@ class AXIC(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         nharmonics = integer(card, 1, 'nharmonics')
         assert len(card) == 2, 'len(AXIC card) = %i\ncard=%s' % (len(card), card)
@@ -56,7 +61,99 @@ class AXIC(BaseCard):
         list_fields = ['AXIC', self.nharmonics]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        card = self.repr_fields()
+        msg = self.comment + print_card_8(card)
+        return msg
+
+class AXIF(BaseCard):
+    """
+    AXIF CID G  DRHO DB NOSYM F
+         N1  N2 N3   N4  N5    etc.
+    """
+    type = 'AXIF'
+
+    @classmethod
+    def _init_from_empty(cls):
+        cid = 1
+        g = 1.
+        drho = 1.
+        db = 1.
+        no_sym = 'YES'
+        f = 'NONE'
+        n = 1
+        return AXIF(cid, g, drho, db, no_sym, f, n, comment='')
+
+    def __init__(self, cid, g, drho, db, no_sym, f, n, comment=''):
+        """
+        cid : int
+            Fluid coordinate system identification number. (Integer > 0)
+        G : float
+            Value of gravity for fluid elements in the axial direction. (Real)
+        drho : float
+            Default mass density for fluid elements. (Real > 0.0 or blank)
+        db : float
+            Default bulk modulus for fluid elements.
+        no_sym : str
+            Request for nonsymmetric (sine) terms of series.
+            {YES, NO}
+        F : str; default=None
+            Flag specifying harmonics. (Blank if harmonic is specified, or Character:
+            'NONE')
+        Ni : List[int]
+            Harmonic numbers for the solution, represented by an increasing
+            sequence of integers. On continuation entries, without the 'THRU'
+            option, blank fields are ignored. 'THRU' implies all numbers including
+            upper and lower harmonics. (0 < Integer < 100, or Character: 'THRU',
+            'STEP' or blank)
+        """
+        if comment:
+            self.comment = comment
+        self.cid = cid
+        self.g = g
+        self.drho = drho
+        self.db = db
+        self.no_sym = no_sym
+        self.f = f
+        self.n = n
+
+    @classmethod
+    def add_card(cls, card, comment=''):
+        """
+        Adds a AXIF card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        cid = integer(card, 1, 'cid')
+        g = double(card, 2, 'g')
+        drho = double(card, 3, 'drho')
+        db = double_or_blank(card, 4, 'db')
+        no_sym = string(card, 5, 'no_sym')
+        f = string_or_blank(card, 6, 'f')
+        n = fields(integer_or_string, card, 'n', i=9, j=len(card))
+        #cid : int
+        #G : float
+        #drho : float
+        #db : float
+        #no_sym : str
+        #F : str
+        #Ni : List[int]
+
+
+        assert len(card) >= 7, 'len(AXIF card) = %i\ncard=%s' % (len(card), card)
+        return AXIF(cid, g, drho, db, no_sym, f, n, comment=comment)
+
+    def raw_fields(self):
+        list_fields = ['AXIF', self.cid, self.g, self.drho, self.db, self.no_sym, self.f] + self.n
+        return list_fields
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         msg = self.comment + print_card_8(card)
         return msg
@@ -72,6 +169,14 @@ class POINTAX(BaseCard):
     +---------+----+-----+------+
     """
     type = 'POINTAX'
+
+    @classmethod
+    def _init_from_empty(cls):
+        nid = 1
+        ringax = 1
+        phi = 60.
+        return POINTAX(nid, ringax, phi, comment='')
+
     def __init__(self, nid, ringax, phi, comment=''):
         """
         Creates a POINTAX card
@@ -84,6 +189,9 @@ class POINTAX(BaseCard):
             Identification number of a RINGAX entry.
         phi : float
             Azimuthal angle in degrees.
+        comment : str; default=''
+            a comment for the card
+
         """
         if comment:
             self.comment = comment
@@ -102,6 +210,7 @@ class POINTAX(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         nid = integer(card, 1, 'nid')
         ringax = integer(card, 2, 'ringax')
@@ -113,11 +222,106 @@ class POINTAX(BaseCard):
         list_fields = ['POINTAX', self.nid, self.ringax, self.phi]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         msg = self.comment + print_card_8(card)
         return msg
 
+
+class RINGFL(BaseCard):
+    type = 'RINGFL'
+
+    #: allows the get_field method and update_field methods to be used
+    #_field_map = {1: 'mid', 3:'R', 4:'z', 7:'ps'}
+
+    @classmethod
+    def _init_from_empty(cls):
+        ringfl = 1
+        xa = 1.
+        xb = 2.
+        return RINGFL(ringfl, xa, xb, comment='')
+
+    def __init__(self, ringfl, xa, xb, comment=''):  # this card has missing fields
+        # type: (int, float, float, Optional[str], str) -> None
+        """
+        Creates the RINGFL card
+        """
+        #Ring.__init__(self)
+        if comment:
+            self.comment = comment
+
+        self.ringfl = ringfl
+        self.xa = xa
+        self.xb = xb
+
+    @classmethod
+    def add_card(cls, card, icard=0, comment=''):
+        """
+        Adds a RINGAX card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        ioffset = 2 * icard
+        j = icard + 1
+        ringfl = integer(card, 1+ioffset, 'ringfl_%i' % j)
+        xa = double(card, 2+ioffset, 'xa_%i' % j)
+        xb = double_or_blank(card, 3+ioffset, 'xa_%i' % j)
+        assert len(card) <= 9, 'len(RINGFL card) = %i\ncard=%s' % (len(card), card)
+        return RINGFL(ringfl, xa, xb, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment=''):
+        """
+        Adds a RINGAX card from the OP2
+
+        Parameters
+        ----------
+        data : List[varies]
+            a list of fields defined in OP2 format
+        comment : str; default=''
+            a comment for the card
+
+        """
+        nid = data[0]
+        R = data[1]
+        z = data[2]
+        ps = data[3]
+        assert len(data) == 4, data
+        return RINGAX(nid, R, z, ps, comment=comment)
+
+    def raw_fields(self):
+        """
+        Gets the fields in their unmodified form
+
+        Returns
+        -------
+        fields : List[varies]
+            the fields that define the card
+
+        """
+        list_fields = ['RINGFL', self.ringfl, self.xa, self.xb]
+        return list_fields
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        """
+        The writer method used by BDF.write_card()
+
+        Parameters
+        -----------
+        size : int; default=8
+            the size of the card (8/16)
+
+        """
+        card = self.repr_fields()
+        if size == 8:
+            return self.comment + print_card_8(card)
+        return self.comment + print_card_16(card)
 
 class RINGAX(BaseCard):
     """
@@ -133,6 +337,13 @@ class RINGAX(BaseCard):
 
     #: allows the get_field method and update_field methods to be used
     _field_map = {1: 'mid', 3:'R', 4:'z', 7:'ps'}
+
+    @classmethod
+    def _init_from_empty(cls):
+        nid = 1
+        R = 1.
+        z = 1.
+        return RINGAX(nid, R, z, ps=None, comment='')
 
     def __init__(self, nid, R, z, ps=None, comment=''):  # this card has missing fields
         # type: (int, float, float, Optional[str], str) -> None
@@ -164,6 +375,7 @@ class RINGAX(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         nid = integer(card, 1, 'nid')
         blank(card, 2, 'blank')
@@ -188,6 +400,7 @@ class RINGAX(BaseCard):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         nid = data[0]
         R = data[1]
@@ -204,13 +417,13 @@ class RINGAX(BaseCard):
         -------
         fields : List[varies]
             the fields that define the card
+
         """
         list_fields = ['RINGAX', self.nid, None, self.R, self.z, None,
                        None, self.ps]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
-        # (int, bool) -> str
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         """
         The writer method used by BDF.write_card()
 
@@ -218,6 +431,7 @@ class RINGAX(BaseCard):
         -----------
         size : int; default=8
             the size of the card (8/16)
+
         """
         card = self.repr_fields()
         if size == 8:
@@ -237,6 +451,13 @@ class CCONEAX(Element):
     _field_map = {
         1: 'eid', 2:'pid',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        pid = 1
+        rings = [1, 2]
+        return CCONEAX(eid, pid, rings, comment='')
 
     def _update_field_helper(self, n, value):
         if n == 3:
@@ -260,15 +481,16 @@ class CCONEAX(Element):
             node ids
         comment : str; default=''
             a comment for the card
+
         """
         Element.__init__(self)
         if comment:
             self.comment = comment
         self.eid = eid
         self.pid = pid
-        #self.prepare_node_ids(nids)
+        #self.nodes = self.prepare_node_ids(nids)
         self.rings = rings
-        assert len(self.rings) == 2
+        assert len(self.rings) == 2, rings
         self.rings_ref = None
         self.pid_ref = None
         self.rings_ref = None
@@ -284,6 +506,7 @@ class CCONEAX(Element):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         eid = integer(card, 1, 'eid')
         pid = integer_or_blank(card, 2, 'pid', eid)
@@ -306,12 +529,18 @@ class CCONEAX(Element):
             raise NotImplementedError(self.rings_ref)
         return self.rings
 
-    def cross_reference(self, model):
-        msg = ' which is required by CCONEAX eid=%s' % (self.eid)
+    def cross_reference(self, model: BDF) -> None:
+        msg = ', which is required by CCONEAX eid=%s' % (self.eid)
         #self.rings_ref
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model: BDF, xref_errors):
+        msg = ', which is required by CCONEAX eid=%s' % (self.eid)
+        #self.rings_ref
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.pid = self.Pid()
         self.pid_ref = None
         self.rings_ref = None
@@ -323,7 +552,7 @@ class CCONEAX(Element):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -339,8 +568,6 @@ class PCONEAX(Property):
     +---------+-------+--------+------+-------+-------+-------+-------+-------+
     |         | PHI7  |  PHI8  | PHI9 | PHI10 | PHI11 | PHI12 | PHI13 | PHI14 |
     +---------+-------+--------+------+-------+-------+-------+-------+-------+
-
-    +---------+-------+--------+------+-------+-------+-------+-------+-------+
     | PCONEAX |   2   |   4    | 1.0  |   6   | 16.3  |   8   |  2.1  |  0.5  |
     +---------+-------+--------+------+-------+-------+-------+-------+-------+
     |         | 0.001 | -0.002 | 23.6 | 42.9  |       |       |       |       |
@@ -351,6 +578,13 @@ class PCONEAX(Property):
         1: 'pid', 2:'mid1', 3:'t1', 4:'mid2', 5:'i', 6:'mid3', 7:'t2',
         8: 'nsm', 9:'z1', 10:'z2',
     }
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid1 = 1
+        return PCONEAX(pid, mid1, t1=None, mid2=0, i=None, mid3=None, t2=None,
+                       nsm=0., z1=None, z2=None, phi=None, comment='')
+
     def _update_field_helper(self, n, value):
         if n <= 0:
             msg = 'Field %r=%r is an invalid %s entry.' % (n, value, self.type)
@@ -358,7 +592,7 @@ class PCONEAX(Property):
         self.phi[n - 10] = value
 
     def __init__(self, pid, mid1, t1=None, mid2=0, i=None, mid3=None, t2=None,
-                 nsm=None, z1=None, z2=None, phi=None, comment=''):
+                 nsm=0., z1=None, z2=None, phi=None, comment=''):
         """
         Creates a PCONEAX
 
@@ -384,6 +618,9 @@ class PCONEAX(Property):
             Fiber distances from the middle surface for stress recovery.
         phi : List[float]
             Azimuthal coordinates (in degrees) for stress recovery.
+        comment : str; default=''
+            a comment for the card
+
         """
         Property.__init__(self)
         if comment:
@@ -416,6 +653,7 @@ class PCONEAX(Property):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         #: Property ID
         pid = integer(card, 1, 'pid')
@@ -437,9 +675,9 @@ class PCONEAX(Property):
         else:
             t2 = blank(card, 7, 't3')
 
-        nsm = double(card, 8, 'nsm')
-        z1 = double(card, 9, 'z1')
-        z2 = double(card, 10, 'z2')
+        nsm = double_or_blank(card, 8, 'nsm', 0.0)
+        z1 = double_or_blank(card, 9, 'z1', None)
+        z2 = double_or_blank(card, 10, 'z2', None)
 
         j = 1
         phi = []
@@ -450,7 +688,7 @@ class PCONEAX(Property):
         return PCONEAX(pid, mid1, t1, mid2, i, mid3, t2, nsm, z1, z2, phi,
                        comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -458,8 +696,9 @@ class PCONEAX(Property):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ' which is required by PCONEAX=%s' %(self.pid)
+        msg = ', which is required by PCONEAX=%s' %(self.pid)
         if self.mid1 > 0:
             self.mid1_ref = model.Material(self.mid1, msg=msg)
         if self.mid2 > 0:
@@ -467,7 +706,8 @@ class PCONEAX(Property):
         if self.mid3 > 0:
             self.mid3_ref = model.Material(self.mid3, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid1 = self.Mid1()
         self.mid2 = self.Mid2()
         self.mid3 = self.Mid3()
@@ -515,157 +755,8 @@ class PCONEAX(Property):
                        self.nsm, self.z1, self.z2] + self.phi
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
-        return self.comment + print_card_16(card)
-
-
-class PRESAX(BaseCard):
-    """
-    +--------+-----+------+------+------+------+------+
-    |   1    |  2  |   3  |  4   |  5   |   6  |   7  |
-    +========+=====+======+======+======+======+======+
-    | PRESAX | SID |   P  | RID1 | RID2 | PHI1 | PHI2 |
-    +--------+-----+------+------+------+------+------+
-    | PRESAX |  3  | 7.92 |  4   |   3  | 20.6 | 31.4 |
-    +--------+-----+------+------+------+------+------+
-    | PRESAX | 300 |  .1  |  2   |   1  | -90. | +90. |
-    +--------+-----+------+------+------+------+------+
-    """
-    type = 'PRESAX'
-    def __init__(self, sid, pressure, rid1, rid2, phi1=0., phi2=360., comment=''):
-        if comment:
-            self.comment = comment
-        self.sid = sid
-        self.pressure = pressure
-        self.rid1 = rid1
-        self.rid2 = rid2
-        self.phi1 = phi1
-        self.phi2 = phi2
-
-    @classmethod
-    def add_card(cls, card, comment=''):
-        """
-        Adds a PRESAX card from ``BDF.add_card(...)``
-
-        Parameters
-        ----------
-        card : BDFCard()
-            a BDFCard object
-        comment : str; default=''
-            a comment for the card
-        """
-        sid = integer(card, 1, 'sid')
-        pressure = double(card, 2, 'pressure')
-        rid1 = integer(card, 3, 'rid1')
-        rid2 = integer(card, 4, 'rid2')
-        phi1 = double_or_blank(card, 5, 'phi1', 0.)
-        phi2 = double_or_blank(card, 6, 'phi2', 360.)
-        assert len(card) == 7, 'len(PRESAX card) = %i\ncard=%s' % (len(card), card)
-        return PRESAX(sid, pressure, rid1, rid2, phi1, phi2, comment=comment)
-
-    def cross_reference(self, model):
-        pass
-
-    def raw_fields(self):
-        list_fields = ['PRESAX', self.sid, self.pressure, self.rid1, self.rid2,
-                       self.phi1, self.phi2]
-        return list_fields
-
-    def write_card(self, size=8, is_double=False):
-        card = self.repr_fields()
-        msg = self.comment + print_card_8(card)
-        return msg
-
-class TEMPAX(ThermalLoad):
-    """
-    Defines temperature sets for conical shell problems.
-
-    +--------+-----+------+-------+-------+-----+-------+------+----+
-    |    1   |  2  |   3  |   4   |   5   |  6  |   7   |   8  |  9 |
-    +========+=====+======+=======+=======+=====+=======+======+====+
-    | TEMPAX | SID | RID1 |  PHI1 |  T1   | SID | RID2  | PHI2 | T2 |
-    +--------+-----+------+-------+-------+-----+-------+------+----+
-    | TEMPAX |  4  |   7  |  30.0 | 105.3 |     |       |      |    |
-    +--------+-----+------+-------+-------+-----+-------+------+----+
-    """
-    type = 'TEMPAX'
-
-    def __init__(self, sid, ring, phi, temperature, comment=''):
-        """
-        Creates a TEMPAX card
-
-        Parameters
-        ----------
-        sid : int
-            Load set identification number
-        temperatures : dict[nid] : temperature
-            nid : int
-                node id
-            temperature : float
-                the nodal temperature
-        comment : str; default=''
-            a comment for the card
-        """
-        ThermalLoad.__init__(self)
-        if comment:
-            self.comment = comment
-        #: Load set identification number. (Integer > 0)
-        self.sid = sid
-
-        self.ring = ring
-        self.phi = phi
-        self.temperature = temperature
-
-    @classmethod
-    def add_card(cls, card, icard=0, comment=''):
-        """
-        Adds a TEMPAX card from ``BDF.add_card(...)``
-
-        Parameters
-        ----------
-        card : BDFCard()
-            a BDFCard object
-        icard : int; default=0
-            ???
-        comment : str; default=''
-            a comment for the card
-        """
-        istart = 1 + icard * 4
-        sid = integer(card, istart, 'sid')
-        ring = integer(card, istart + 1, 'ring' + str(icard))
-        phi = double(card, istart + 2, 'phi' + str(icard))
-        temperature = double(card, istart + 3, 'T' + str(icard))
-
-        return TEMPAX(sid, ring, phi, temperature, comment=comment)
-
-    def cross_reference(self, model):
-        pass
-
-    def safe_cross_reference(self, model, debug=True):
-        pass
-
-    def uncross_reference(self):
-        pass
-
-    def raw_fields(self):
-        """Writes the TEMPAX card"""
-        list_fields = ['TEMPAX', self.sid, self.ring, self.phi, self.temperature]
-        return list_fields
-
-    def repr_fields(self):
-        """Writes the TEMP card"""
-        return self.raw_fields()
-
-    def get_loads(self):
-        return [self]
-
-    def write_card(self, size=8, is_double=False):
-        card = self.repr_fields()
-        if size == 8:
-            return self.comment + print_card_8(card)
-        if is_double:
-            return self.comment + print_card_double(card)
         return self.comment + print_card_16(card)

@@ -1,5 +1,4 @@
-from __future__ import print_function
-from six.moves import StringIO
+from io import StringIO
 import unittest
 
 from pyNastran.dev.bdf_vectorized.bdf import BDF, BDFCard
@@ -15,7 +14,7 @@ class TestSolids(unittest.TestCase):
     def test_cpenta_01(self):
         model = BDF(debug=False)
         lines = ['CPENTA,85,22,201,202,203,205,206,207']
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -31,7 +30,7 @@ class TestSolids(unittest.TestCase):
         model = BDF(debug=False)
         lines = ['CPENTA,85,22,201,202,203,205,206,207,+PN2',
                  '+PN2,209,210,217,  ,  ,  ,213,214,218']
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -48,7 +47,7 @@ class TestSolids(unittest.TestCase):
         lines = [
             'CHEXA,85,22,201,202,203,205,206,207,+PN2',
             '+PN2,209,210']
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -65,7 +64,7 @@ class TestSolids(unittest.TestCase):
         lines = [
             'CHEXA,85,22,201,202,203,205,206,207,+PN2',
             '+PN2,209,210,217,  ,  ,  ,213,214,218']
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -80,7 +79,7 @@ class TestSolids(unittest.TestCase):
     def test_ctetra_01(self):
         model = BDF(debug=False)
         lines = ['CTETRA,85,22,201,202,203,205']
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -96,7 +95,7 @@ class TestSolids(unittest.TestCase):
         model = BDF(debug=False)
         lines = ['CTETRA,85,22,201,202,203,205,206,207,+PN2',
                  '+PN2,209,210,217']
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -183,20 +182,20 @@ class TestSolids(unittest.TestCase):
         #assert isinstance(element, ElementsSolid), type(element)
         assert isinstance(element, (CTETRA4, CPENTA6, CHEXA8,
                                     CTETRA10, CPENTA15, CHEXA20)), type(element)
-        self.assertEquals(element.type, etype)
-        self.assertEquals(element.n, 1)
-        self.assertEquals(element.i, 1)
-        self.assertEquals(element.get_element_id_by_element_index(), eid)
-        #self.assertEquals(element.pid.type, ptype)
-        self.assertEquals(element.get_property_id_by_element_index(), pid)
-        self.assertEquals(element.get_property_id_by_element_id([eid]), pid)
-        #self.assertEquals(element.pid.mid.type, mtype)
-        self.assertEquals(element.get_material_id_by_element_id([eid]), mid)
-        #self.assertEquals(element.get_material_id_by_element_index(), mid)
-        self.assertEquals(element.get_volume_by_element_id([eid]), V)
-        #self.assertEquals(element.get_volume_by_element_index(), V)
-        self.assertEquals(element.get_mass_by_element_id(), mass)
-        #self.assertEquals(element.get_mass_by_element_index(), mass)
+        self.assertEqual(element.type, etype)
+        self.assertEqual(element.n, 1)
+        self.assertEqual(element.i, 1)
+        self.assertEqual(element.get_element_id_by_element_index(), eid)
+        #self.assertEqual(element.pid.type, ptype)
+        self.assertEqual(element.get_property_id_by_element_index(), pid)
+        self.assertEqual(element.get_property_id_by_element_id([eid]), pid)
+        #self.assertEqual(element.pid.mid.type, mtype)
+        self.assertEqual(element.get_material_id_by_element_id([eid]), mid)
+        #self.assertEqual(element.get_material_id_by_element_index(), mid)
+        self.assertEqual(element.get_volume_by_element_id([eid]), V)
+        #self.assertEqual(element.get_volume_by_element_index(), V)
+        self.assertEqual(element.get_mass_by_element_id(), mass)
+        #self.assertEqual(element.get_mass_by_element_index(), mass)
 
     def test_solid_03(self):
         mid = 2

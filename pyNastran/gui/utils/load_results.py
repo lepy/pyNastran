@@ -1,93 +1,36 @@
-from __future__ import print_function
+"""
+defines:
+ - res_obj, title = create_res_obj(
+       islot, headers, header, A, fmt_dict, result_type,
+       is_deflection=False, is_force=False,
+       dim_max=None, xyz_cid0=None, colormap='jet')
+ - B, nids_index, fmt_dict_without_index, names_without_index = load_deflection_csv(
+       out_filename, encoding='latin1')
+ - A, fmt_dict, names = load_csv(out_filename, encoding='latin1')
+ - grid_ids, xyz, bars, tris, quads = load_user_geom(fname, log=None, encoding='latin1')
+
+"""
 import os
-#import re
 import sys
 import traceback
-from codecs import open as codec_open
-from six.moves import urllib
+from typing import List, Tuple, Any
 
 import numpy as np
 import pyNastran
 from pyNastran.utils import _filename
-from pyNastran.utils.numpy_utils import loadtxt_nice
+
+from pyNastran.femutils.io import loadtxt_nice
 from pyNastran.gui.gui_objects.gui_result import GuiResult
-from pyNastran.converters.nastran.displacements import DisplacementResults
+from pyNastran.gui.gui_objects.displacements import DisplacementResults, ForceTableResults
+from pyNastran.converters.stl.stl import read_stl
 
 
-def check_for_newer_version():
-    """
-    Checks to see if a newer version of pyNastran has been released.
-    Only checks this for the GUI.
-
-    Looks for:
-        ## pyNastran v0.7.2 has been Released (4/25/2015)
-
-    Specifically, it finds, 'has been released'
-       then takes the the part that:
-         - starts with 'v',
-         - strips the 'v'
-         - makes a version tuple:
-           - (0,7,2)
-       and compares that to the current version
-    """
-    is_newer = False
-    version_current = pyNastran.__version__
-    target_url = 'https://raw.githubusercontent.com/SteveDoyle2/pyNastran/master/README.md'
-    try:
-        # it's a file like object and works just like a file
-        # import urllib2
-        # data = urllib.request.urlopen(target_url)
-        data = urllib.request.urlopen(target_url)
-    except: #  urllib2.URLError
-        #print(help(urllib))
-        #raise
-        return None, None, False
-    for btye_line in data: # files are iterable
-        line_lower = btye_line.lower().decode('utf-8')
-        if 'has been released' in line_lower:
-            sline = line_lower.split()
-            version_latest = [slot for slot in sline if slot.startswith('v')][0][1:]
-            break
-
-    is_dev = False
-    if 'dev' in version_current:
-        is_dev = True
-
-    try:
-        major, minor, rev = version_current.split('+')[0].split('.')
-    except ValueError:
-        print('sline = %s' % sline)
-        print('version_current = %s' % version_current)
-        raise
-    major = int(major)
-    minor = int(minor)
-    rev = int(rev)
-    tuple_current_version = (major, minor, rev)
-
-    try:
-        major, minor, rev = version_latest.split('_')[0].split('.')
-    except ValueError:
-        print('sline = %s' % sline)
-        print('version_latest = %s' % version_latest)
-        raise
-
-    major = int(major)
-    minor = int(minor)
-    rev = int(rev)
-    tuple_latest_version = (major, minor, rev)
-    #print('tuple_latest_version = %s' % str(tuple_latest_version))  # (0,7,2)
-    #print('tuple_current_version = %s' % str(tuple_current_version))  # (0,8,0)
-
-    #is_newer = True
-    if (tuple_current_version < tuple_latest_version or
-            (is_dev and tuple_current_version <= tuple_latest_version)):
-        print('pyNastran %s is now availible; current=%s' % (version_latest, version_current))
-        is_newer = True
-    #print('*pyNastran %s is now availible; current=%s' % (version_latest, version_current))
-    return version_latest, version_current, is_newer
-
-def create_res_obj(islot, headers, header, A, fmt_dict, result_type,
-                   dim_max=None, xyz_cid0=None):
+def create_res_obj(islot: int,
+                   headers: List[str], # str too?
+                   header: str,  # List[str] too?
+                   A, fmt_dict, result_type,
+                   is_deflection: bool=False, is_force: bool=False,
+                   dim_max=None, xyz_cid0=None, colormap: str='jet') -> Tuple[Any, str]:
     """
     Parameters
     ----------
@@ -103,7 +46,7 @@ def create_res_obj(islot, headers, header, A, fmt_dict, result_type,
             secondary dimension
             N/A : 1D array
             3 : deflection
-    headers : List[str]???
+    headers : List[str]
         the titles???
     fmt_dict : dict[header] = fmt
         the format of the arrays
@@ -129,14 +72,14 @@ def create_res_obj(islot, headers, header, A, fmt_dict, result_type,
         vector_size = 1
     elif dimension == 2:
         vector_size = datai.shape[1]
-    else:
+    else:  # pramga: no cover
         raise RuntimeError('dimension=%s' % (dimension))
 
     if vector_size == 1:
         res_obj = GuiResult(
             islot, header, title, location, datai,
             nlabels=None, labelsize=None, ncolors=None,
-            colormap='jet', data_format=fmti,
+            colormap=colormap, data_format=fmti,
         )
     elif vector_size == 3:
         # title is 3 values
@@ -150,35 +93,48 @@ def create_res_obj(islot, headers, header, A, fmt_dict, result_type,
         data_formats = [fmti] * 3
         scalar = None
         dxyz = datai
-        xyz = xyz_cid0
-        res_obj = DisplacementResults(
-            islot, titles, headers,
-            xyz, dxyz, scalar, scales, data_formats=data_formats,
-            nlabels=None, labelsize=None, ncolors=None,
-            colormap='jet',
-            set_max_min=True)
-    else:
+        if is_deflection:
+            xyz = xyz_cid0
+            res_obj = DisplacementResults(
+                #subcase_id, titles, headers, xyz, dxyz, unused_scalar
+                islot, titles, headers,
+                xyz, dxyz, scalar, scales, data_formats=data_formats,
+                nlabels=None, labelsize=None, ncolors=None,
+                colormap=colormap,
+                set_max_min=True)
+        elif is_force:
+            # scalar is unused
+            res_obj = ForceTableResults(
+                islot, titles, headers,
+                dxyz, scalar, scales, data_formats=data_formats,
+                nlabels=None, labelsize=None, ncolors=None,
+                colormap=colormap,
+                set_max_min=True)
+        else:  # pramga: no cover
+            raise RuntimeError('is_deflection=%s is_force=%s' % (is_deflection, is_force))
+    else:  # pramga: no cover
         raise RuntimeError('vector_size=%s' % (vector_size))
     return res_obj, title
 
-def load_deflection_csv(out_filename, encoding='latin1'):
+def load_deflection_csv(out_filename: str, encoding: str='latin1'):
     """
     The GUI deflection CSV loading function.
 
     Considers:
       - extension in determining how to load a file (e.g. commas or not)
       - header line of file for information regarding data types
+
     """
     ext = os.path.splitext(out_filename)[1].lower()
     if ext not in ['.csv', '.dat', '.txt']:
         raise NotImplementedError('extension=%r is not supported (use .dat, .txt, or .csv)' % ext)
 
-    with codec_open(_filename(out_filename), 'r', encoding=encoding) as file_obj:
+    with open(_filename(out_filename), 'r', encoding=encoding) as file_obj:
         names, fmt_dict, dtype, delimiter = _load_format_header(file_obj, ext, force_float=False)
 
         try:
             #A = np.loadtxt(file_obj, dtype=dtype, delimiter=delimiter)
-            A = loadtxt_nice(file_obj, delimiter=delimiter)
+            A = loadtxt_nice(file_obj, comments='#', delimiter=delimiter)
         except:
             traceback.print_exc(file=sys.stdout)
             msg = 'extension=%r nheaders=%s delimiter=%r dtype=%s' % (
@@ -205,12 +161,13 @@ def load_deflection_csv(out_filename, encoding='latin1'):
         raise ValueError(msg)
 
     B = {}
+    nids_index = A[:, 0]
     for i, name in enumerate(names_without_index):
-        B[name] = A[:, 3*i:3*i+3]
+        B[name] = A[:, 1+3*i:1+3*i+3]
 
     assert len(B) == len(fmt_dict_without_index), 'B.keys()=%s fmt_dict.keys()=%s' % (list(B.keys()), list(fmt_dict_without_index.keys()))
     assert len(B) == len(names_without_index), 'B.keys()=%s names.keys()=%s' % (list(B.keys()), names_without_index)
-    return B, fmt_dict_without_index, names_without_index
+    return B, nids_index, fmt_dict_without_index, names_without_index
 
 def load_csv(out_filename, encoding='latin1'):
     """
@@ -224,12 +181,11 @@ def load_csv(out_filename, encoding='latin1'):
     if ext not in ['.csv', '.dat', '.txt']:
         raise NotImplementedError('extension=%r is not supported (use .dat, .txt, or .csv)' % ext)
 
-    with codec_open(_filename(out_filename), 'r', encoding=encoding) as file_obj:
+    with open(_filename(out_filename), 'r', encoding=encoding) as file_obj:
         names, fmt_dict, dtype, delimiter = _load_format_header(file_obj, ext, force_float=False)
-
         try:
             #A = loadtxt(file_obj, dtype=dtype, delimiter=delimiter)
-            A = loadtxt_nice(file_obj, dtype=dtype, delimiter=delimiter)
+            A = loadtxt_nice(file_obj, dtype=dtype, comments='#', delimiter=delimiter)
         except:
             traceback.print_exc(file=sys.stdout)
             msg = 'extension=%r nheaders=%s delimiter=%r dtype=%s' % (
@@ -237,8 +193,8 @@ def load_csv(out_filename, encoding='latin1'):
             raise RuntimeError(msg)
     return A, fmt_dict, names
 
-def _load_format_header(file_obj, ext, force_float=False):
-    header_line = file_obj.readline().strip()
+def _check_header_line(ext, header_line):
+    """helper for _load_format_header"""
     if not header_line.startswith('#'):
         msg = 'Expected file of the form:\n'
         if ext in ['.dat', '.txt']:
@@ -261,6 +217,10 @@ def _load_format_header(file_obj, ext, force_float=False):
             msg = 'extension=%r is not supported (use .dat, .txt, or .csv)' % ext
             raise NotImplementedError(msg)
         raise SyntaxError(msg)
+
+def _load_format_header(file_obj, ext, force_float=False):
+    header_line = file_obj.readline().strip()
+    _check_header_line(ext, header_line)
 
     header_line = header_line.lstrip('# \t').strip()
     if ext in ['.dat', '.txt']:
@@ -341,7 +301,7 @@ def _load_format_header(file_obj, ext, force_float=False):
     }
     return names, fmt_dict, dtype, delimiter
 
-def load_user_geom(fname, encoding='latin1'):
+def load_user_geom(fname, log=None, encoding='latin1'):
     """
     Loads a file of the form:
 
@@ -378,7 +338,22 @@ def load_user_geom(fname, encoding='latin1'):
     QUAD, 3, 1, 5, 3, 4
     QUAD, 4, 1, 2, 3, 4  # this is after a blank line
     """
-    with codec_open(_filename(fname), 'r', encoding=encoding) as user_geom:
+    if fname.lower().endswith('.stl'):
+        stl_filename = fname
+        stl = read_stl(stl_filename, log=log)
+        nnodes = stl.nodes.shape[0]
+        ntris = stl.elements.shape[0]
+        grid_ids = np.arange(1, nnodes+1, dtype='int32')
+        xyz = stl.nodes
+        eids = np.arange(1, ntris+1, dtype='int32')
+        tris = np.vstack([eids, stl.elements.T + 1]).T
+        #tris = stl.elements + 1
+        #print(tris)
+        quads = np.array([], dtype='int32')
+        bars = np.array([], dtype='int32')
+        return grid_ids, xyz, bars, tris, quads
+
+    with open(_filename(fname), 'r', encoding=encoding) as user_geom:
         lines = user_geom.readlines()
 
     grid_ids = []
@@ -405,7 +380,7 @@ def load_user_geom(fname, encoding='latin1'):
                 assert len(sline) == 6, sline
                 quads.append(sline[1:])
             else:
-                print(sline)
+                log.warning(sline)
 
     grid_ids = np.array(grid_ids, dtype='int32')
     xyz = np.array(xyz, dtype='float32')
@@ -430,7 +405,3 @@ def load_user_geom(fname, encoding='latin1'):
     #"""
     #convert = lambda text: int(text) if text.isdigit() else text.lower()
     #alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
-
-if __name__ == '__main__':  # pragma: no cover
-    check_for_newer_version()
-

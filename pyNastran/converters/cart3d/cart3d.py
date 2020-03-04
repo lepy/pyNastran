@@ -14,29 +14,18 @@ Defines:
 
   - comp2tri(in_filenames, out_filename,
              is_binary=False, float_fmt='%6.7f')
+
 """
-from __future__ import print_function, unicode_literals
 import sys
 from struct import pack, unpack
 from math import ceil
 from collections import defaultdict
-from codecs import open as codec_open
-
-from six import iteritems, PY2
-from six.moves import zip, range
+from typing import Tuple, Union
 
 import numpy as np
+from cpylog import get_logger2
 
 from pyNastran.utils import is_binary_file, _filename, b
-from pyNastran.utils.log import get_logger2
-
-if PY2:
-    string_type = unicode
-    bytes_type = str
-else:
-    string_type = str
-    bytes_type = bytes
-WRITE_ASCII = 'wb'
 
 
 def read_cart3d(cart3d_filename, log=None, debug=False, result_names=None):
@@ -47,7 +36,8 @@ def read_cart3d(cart3d_filename, log=None, debug=False, result_names=None):
 
 
 def comp2tri(in_filenames, out_filename,
-             is_binary=False, float_fmt='%6.7f'):
+             is_binary=False, float_fmt='%6.7f',
+             log=None, debug=False):
     """
     Combines multiple Cart3d files (binary or ascii) into a single file.
 
@@ -65,25 +55,23 @@ def comp2tri(in_filenames, out_filename,
     Notes
     -----
     assumes loads is None
+
     """
     points = []
     elements = []
     regions = []
 
-    #ne = 0
     npoints = 0
     nregions = 0
-    model = Cart3D()
+    model = Cart3D(log=log, debug=debug)
     for infilename in in_filenames:
         model.read_cart3d(infilename)
         npointsi = model.nodes.shape[0]
         nregionsi = len(np.unique(model.regions))
-        #element += npoints - 1
-        #region += nregions
 
         points.append(model.nodes)
-        elements.append(model.elements)
-        regions.append(model.regions)
+        elements.append(model.elements + npoints)
+        regions.append(model.regions + nregions)
         npoints += npointsi
         nregions += nregionsi
 
@@ -94,10 +82,11 @@ def comp2tri(in_filenames, out_filename,
     model.elements = elements
     model.regions = regions
 
-    model.write_cart3d(out_filename, is_binary=is_binary, float_fmt=float_fmt)
+    if out_filename:
+        model.write_cart3d(out_filename, is_binary=is_binary, float_fmt=float_fmt)
+    return model
 
-
-class Cart3dIO(object):
+class Cart3dIO:
     """
     Cart3d IO class
     """
@@ -107,9 +96,6 @@ class Cart3dIO(object):
         self._encoding = 'latin1'
         self.n = 0
         self.infile = None
-        # self.readHalf = False
-        # self.nPoints = None
-        # self.nelements = None
         self.infilename = None
         self.points = None
         self.elements = None
@@ -167,7 +153,7 @@ class Cart3dIO(object):
             outfile.write(floats)
             outfile.write(four)
         else:
-            if isinstance(float_fmt, bytes_type):
+            if isinstance(float_fmt, bytes):
                 fmt_ascii = float_fmt
             else:
                 fmt_ascii = float_fmt.encode('latin1')
@@ -188,7 +174,7 @@ class Cart3dIO(object):
             outfile.write(ints)
             outfile.write(four)
         else:
-            if isinstance(int_fmt, bytes_type):
+            if isinstance(int_fmt, bytes):
                 fmt_ascii = int_fmt
             else:
                 fmt_ascii = int_fmt.encode('latin1')
@@ -236,6 +222,7 @@ class Cart3dIO(object):
 
           npoints nelements          # geometry
           npoints nelements nresults # results
+
         """
         line = self.infile.readline()
         sline = line.strip().split()
@@ -285,6 +272,7 @@ class Cart3dIO(object):
     def _read_points_ascii(self, npoints):
         """
         A point is defined by x,y,z and the ID is the location in points.
+
         """
         p = 0
         data = []
@@ -298,23 +286,12 @@ class Cart3dIO(object):
                 z = data.pop(0)
                 points[p] = [x, y, z]
                 p += 1
-
-        #maxX = self.get_max(points, 0)
-        #maxY = self.get_max(points, 1)
-        #maxZ = self.get_max(points, 2)
-
-        #minX = self.get_min(points, 0)
-        #minY = self.get_min(points, 1)
-        #minZ = self.get_min(points, 2)
-
-        #self.log.debug("X  max=%g min=%g" % (maxX, minX))
-        #self.log.debug("Y  max=%g min=%g" % (maxY, minY))
-        #self.log.debug("Z  max=%g min=%g" % (maxZ, minZ))
         return points
 
     def _read_elements_ascii(self, nelements):
         """
         An element is defined by n1,n2,n3 and the ID is the location in elements.
+
         """
         assert nelements > 0, 'npoints=%s nelements=%s' % (self.npoints, nelements)
         elements = np.zeros((nelements, 3), dtype='int32')
@@ -329,7 +306,22 @@ class Cart3dIO(object):
                 n3 = int(data.pop(0))
                 elements[ieid] = [n1, n2, n3]
                 ieid += 1
-        assert elements.min() == 1, elements.min()
+
+        nid_min = elements.min()
+        if nid_min != 1:
+            nid_max = elements.max()
+            nnodes = self.nodes.shape[0]
+            if nid_max == nnodes:
+                msg = (
+                    'Possible Cart3d error due to unused nodes\n'
+                    'min(nids)=%s; expected 1; nid_max=%s nnodes=%s' % (
+                        nid_min, nid_max, nnodes))
+                self.log.warning(msg)
+            else:
+                msg = 'elements:\n%s\nmin(nids)=%s; expected 1; nid_max=%s nnodes=%s' % (
+                    elements, nid_min, nid_max, nnodes, )
+                raise RuntimeError(msg)
+            #assert elements.min() == 1, elements.min()
         return elements - 1
 
     def _read_regions_ascii(self, nelements):
@@ -350,6 +342,7 @@ class Cart3dIO(object):
 
           npoints nelements          # geometry
           npoints nelements nresults # results
+
         """
         data = self.infile.read(4)
         size_little, = unpack(b'<i', data)
@@ -442,6 +435,7 @@ class Cart3dIO(object):
     def _write_data(self, outfile, data, types='ifs', endian=None):  # pragma: no cover
         """
         Useful function for seeing what's going on locally when debugging.
+
         """
         n = len(data)
         nints = n // 4
@@ -484,6 +478,7 @@ class Cart3dIO(object):
     def _write_ndata(self, outfile, n, types='ifs'):  # pragma: no cover
         """
         Useful function for seeing what's going on locally when debugging.
+
         """
         nold = self.n
         data = self.infile.read(n)
@@ -532,6 +527,7 @@ class Cart3D(Cart3dIO):
             a string of the axis
         tol : float; default=0.000001
             the tolerance for the centerline points
+
         """
         raise NotImplementedError()
         #self.log.info('---starting make_mirror_model---')
@@ -543,7 +539,7 @@ class Cart3D(Cart3dIO):
         #nelements = elements.shape[0]
         #assert nelements > 0, 'nelements=%s' % nelements
 
-        #ax = self._get_ax(axis)
+        #ax, ax0 = self._get_ax(axis)
         #if ax in [0, 1, 2]:  # positive x, y, z values; mirror to -side
             #iy0 = np.where(nodes[:, ax] > tol)[0]
             #ax2 = ax
@@ -585,7 +581,7 @@ class Cart3D(Cart3dIO):
         #regions2 = np.hstack([regions, regions_upper])
 
         #loads2 = {}
-        #for key, data in iteritems(loads):
+        #for key, data in loads.items():
 
             ## flip the sign on the flipping axis terms
             #if((key in ['U', 'rhoU'] and ax2 == 0) or
@@ -599,9 +595,11 @@ class Cart3D(Cart3dIO):
         #self.log.info('---finished make_mirror_model---')
         #return (nodes2, elements2, regions2, loads2)
 
-    def _get_ax(self, axis):
+    def _get_ax(self, axis: Union[str, int]) -> Tuple[int, int]:
         """helper method to convert an axis_string into an integer"""
-        axis = axis.lower().strip()
+        if isinstance(axis, str):
+            axis = axis.lower().strip()
+
         if axis in ['+x', 'x', 0]:
             ax = 0
         elif axis in ['+y', 'y', 1]:
@@ -615,10 +613,13 @@ class Cart3D(Cart3dIO):
             ax = 4
         elif axis == ['-z', 5]:
             ax = 5
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError('axis=%r' % axis)
-        self.log.info("axis=%r ax=%s" % (axis, ax))
-        return ax
+        self.log.debug("axis=%r ax=%s" % (axis, ax))
+
+        # shift ax to the actual column index in the nodes array
+        ax0 = ax if ax in [0, 1, 2] else ax - 3
+        return ax, ax0
 
     def make_half_model(self, axis='y', remap_nodes=True):
         """
@@ -627,6 +628,7 @@ class Cart3D(Cart3dIO):
         Notes
         -----
         Cp is really loads['Cp'] and was meant for loads analysis only
+
         """
         nodes = self.nodes
         elements = self.elements
@@ -641,17 +643,34 @@ class Cart3D(Cart3dIO):
         nelements = elements.shape[0]
         assert nelements > 0, 'nelements=%s'  % nelements
 
-        #inodes_remove = set([])
         self.log.info('---starting make_half_model---')
-        ax = self._get_ax(axis)
+        ax, ax0 = self._get_ax(axis)
 
-        if ax in [0, 1, 2]:  # remove values > 0
-            inodes_save = np.where(nodes[:, ax] >= 0.0)[0]
-        elif ax in [3, 4, 5]:  # remove values < 0
-            inodes_save = np.where(nodes[:, ax-3] <= 0.0)[0]
+        self.log.debug('find elements to remove')
+        #print(f'axis={axis} ax={ax}')
+
+        ynode = nodes[:, ax0]
+        y1 = ynode[elements[:, 0]]
+        y2 = ynode[elements[:, 1]]
+        y3 = ynode[elements[:, 2]]
+        if ax in [0, 1, 2]:  # keep values > 0
+            ielements_save = np.where((y1 >= 0.0) & (y2 >= 0.0) & (y3 >= 0.0))[0]
+        elif ax in [3, 4, 5]:  # keep values < 0
+            ielements_save = np.where((y1 <= 0.0) & (y2 <= 0.0) & (y3 <= 0.0))[0]
         else:
             raise NotImplementedError('axis=%r ax=%s' % (axis, ax))
-        inodes_save.sort()
+
+        elements2 = elements[ielements_save, :]
+        regions2 = regions[ielements_save]
+
+        nelements2 = elements2.shape[0]
+        assert 0 < nelements2 < nelements, 'nelements=%s nelements2=%s'  % (nelements, nelements2)
+
+        # location of nodes to keep
+        inodes_save = np.unique(elements2.ravel())
+
+        #------------------------------------------
+        #checks
 
         #inodes_map = np.arange(len(inodes_save))
         is_nodes = 0 < len(inodes_save) < nnodes
@@ -662,52 +681,40 @@ class Cart3D(Cart3dIO):
 
         nodes2 = nodes[inodes_save, :]
         nnodes2 = nodes2.shape[0]
-        assert 0 < nnodes2 < nnodes, 'nnodes=%s nnodes2=%s'  % (nnodes, nnodes2)
-
-        inodes_save += 1  # +1 is so we don't have to shift inode
-        # .. todo:: still need to handle element's node id renumbering
-        ielements_save = set([])
-        for ielement in range(nelements):
-            save_element = True
-            element = elements[ielement, :]
-
-            # could be faster...
-            for inode in element:
-                if inode not in inodes_save:
-                    save_element = False
-                    break
-
-            if save_element:
-                ielements_save.add(ielement)
-
-        ielements_save_lst = list(ielements_save)
-        ielements_save_lst.sort()
-
-        elements2 = elements[ielements_save_lst]
-        regions2 = regions[ielements_save_lst]
-
+        assert 0 < nnodes2 < nnodes, 'no nodes were removed; nnodes=%s nnodes2=%s'  % (nnodes, nnodes2)
+        #------------------------------------------
         # renumbers mesh
-        nelements2 = elements2.shape[0]
-        assert 0 < nelements2 < nelements, 'nelements=%s nelements2=%s'  % (nelements, nelements2)
 
-        remap_nodes = False
-        if np.amax(elements2) > len(inodes_save):
-            # build a dictionary of old node ids to new node ids
+        # node id renumbering
+        emin0 = elements2.min()
+        emax0 = elements2.max()
+
+        # only renumber if we need to
+        if emin0 > 0 or emax0 != nelements2:
+            # we're making a 0-based node map of old -> new node_id
             nodes_map = {}
-            for i in range(1, len(inodes_save) + 1):
-                nid = inodes_save[i - 1]
+            for i, nid in enumerate(inodes_save):
                 nodes_map[nid] = i
 
             # update the node ids
             for ielement in range(nelements2):
-                element = elements2[ielement, :]
-                elements[ielement, :] = [nodes_map[nid] for nid in element]
+                element2 = elements2[ielement, :]
+                elements2[ielement, :] = [nodes_map[nid] for nid in element2]
+        assert len(elements2) > 0, elements2.shape
+
+        min_e = elements2.min()
+        assert min_e == 0, 'min(elements)=%s' % min_e
+        #------------------------------------------
 
         loads2 = {} # 'Cp', 'Mach', 'U', etc.
-        for key, load in iteritems(loads):
+        for key, load in loads.items():
             loads2[key] = load[inodes_save]
 
         self.log.info('---finished make_half_model---')
+        self.nodes = nodes2
+        self.elements = elements2
+        self.regions = regions2
+        self.loads = loads2
         return (nodes2, elements2, regions2, loads2)
 
     def get_free_edges(self, elements):
@@ -719,6 +726,7 @@ class Cart3D(Cart3dIO):
         -------
         free edges : (nedges, 2) int ndarray
             the free edge node ids
+
         """
         edge_to_eid_map = defaultdict(list)
         for i, element in enumerate(elements):
@@ -730,7 +738,7 @@ class Cart3D(Cart3dIO):
             edge_to_eid_map[edge3].append(i)
 
         free_edges = []
-        for edge, eids in sorted(iteritems(edge_to_eid_map)):
+        for edge, eids in sorted(edge_to_eid_map.items()):
             if len(eids) != 2:
                 free_edges.append(edge)
         return np.array(free_edges, dtype='int32')
@@ -755,7 +763,7 @@ class Cart3D(Cart3dIO):
                     raise
 
         else:
-            with codec_open(_filename(infilename), 'r', encoding=self._encoding) as self.infile:
+            with open(_filename(infilename), 'r', encoding=self._encoding) as self.infile:
                 try:
                     npoints, nelements, nresults = self._read_header_ascii()
                     self.points = self._read_points_ascii(npoints)
@@ -774,6 +782,7 @@ class Cart3D(Cart3dIO):
     def write_cart3d(self, outfilename, is_binary=False, float_fmt='%6.7f'):
         """
         writes a cart3d file
+
         """
         assert len(self.points) > 0, 'len(self.points)=%s' % len(self.points)
 
@@ -784,12 +793,7 @@ class Cart3D(Cart3dIO):
             is_loads = True
 
         self.log.info("---writing cart3d...%r---" % outfilename)
-        if is_binary:
-            form = 'wb'
-        else:
-            form = WRITE_ASCII
-
-        with codec_open(outfilename, form) as outfile:
+        with open(outfilename, 'wb') as outfile:
             int_fmt = self._write_header(outfile, self.points, self.elements, is_loads, is_binary)
             self._write_points(outfile, self.points, is_binary, float_fmt)
             self._write_elements(outfile, self.elements, is_binary, int_fmt)
@@ -798,13 +802,6 @@ class Cart3D(Cart3dIO):
             if is_loads:
                 assert is_binary is False, 'is_binary=%r is not supported for loads' % is_binary
                 self._write_loads(outfile, self.loads, is_binary, float_fmt)
-
-
-    def get_min(self, points, i):
-        return np.amin(points[:, i])
-
-    def get_max(self, points, i):
-        return np.amax(points[:, i])
 
     def _read_results_ascii(self, i, infile, nresults, result_names=None):
         """
@@ -830,6 +827,7 @@ class Cart3D(Cart3dIO):
         result_names : List[str]; default=None (All)
             result_names = ['Cp', 'rho', 'rhoU', 'rhoV', 'rhoW', 'rhoE',
                             'Mach', 'U', 'V', 'W', 'E']
+
         """
         if nresults == 0:
             return
@@ -890,6 +888,7 @@ class Cart3D(Cart3dIO):
         loads : dict; default=None -> {}
             key : ???
             value : ???
+
         """
         if loads is None:
             loads = {}
@@ -1014,6 +1013,7 @@ class Cart3D(Cart3dIO):
         -------
         normals : (n, 3) ndarray
             unnormalized centroidal normal vectors
+
         """
         elements = self.elements
         nodes = self.nodes
@@ -1038,6 +1038,7 @@ class Cart3D(Cart3dIO):
         area : (n, 3) ndarray
             the element areas
         """
+
         ne = self.elements.shape[0]
         n = self._get_area_vector()
         ni = np.linalg.norm(n, axis=1)
@@ -1052,6 +1053,7 @@ class Cart3D(Cart3dIO):
         -------
         cnormals : (n, 3) ndarray
             normalized centroidal normal vectors
+
         """
         ne = self.elements.shape[0]
         n = self._get_area_vector()
@@ -1075,6 +1077,7 @@ class Cart3D(Cart3dIO):
         -------
         nnormals : (n, 3) ndarray
             normalized nodal normal vectors
+
         """
         elements = self.elements
         #nodes = self.nodes

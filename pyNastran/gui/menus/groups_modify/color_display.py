@@ -1,10 +1,9 @@
 """
 defines:
  - ColorDisplay
+
 """
 # -*- coding: utf-8 -*-
-from __future__ import print_function, unicode_literals
-
 from qtpy import QtGui
 from qtpy.QtWidgets import (
     QWidget,
@@ -33,4 +32,4 @@ class ColorDisplay(QWidget):
             painter.drawRect(self.rect())
 
     def getColorName(self):
-        return unicode(self.color.name())
+        return str(self.color.name())

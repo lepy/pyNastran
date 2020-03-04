@@ -4,8 +4,6 @@ Defines:
 """
 from itertools import count
 from typing import List, Optional
-from six import iteritems
-from six.moves import zip
 import numpy as np
 from pyNastran.bdf.bdf import BDF, read_bdf
 from pyNastran.bdf.mesh_utils.bdf_equivalence import _get_tree
@@ -30,6 +28,7 @@ def quad_intersection(orig, direction, v0, v1, v2, v3):
     p : (3, ) float ndarray or None
         ndarray : the pierce point
         None : failed pierce
+
     """
     ans = triangle_intersection(orig, direction, v0, v1, v2)
     if ans is not None:
@@ -55,6 +54,7 @@ def triangle_intersection(orig, direction, v0, v1, v2):
     p : (3, ) float ndarray or None
         ndarray : the pierce point
         None : failed pierce
+
     """
     e1 = v1 - v0
     e2 = v2 - v0
@@ -107,10 +107,11 @@ def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
     node_ids : List[int ndarray, None]
         ndarray : pierced element's nodes
         None : invalid pierce
+
     """
     xyz_points = np.asarray(xyz_points)
     assert xyz_points.shape[1] == 3, xyz_points.shape
-    xy_points = xyz_points[:, :2]
+    xy_points = xyz_points[:, :2].copy()
     assert xy_points.shape[1] == 2, xy_points.shape
 
     if isinstance(bdf_filename, BDF):
@@ -127,7 +128,7 @@ def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
         'CELAS1', 'CELAS2', 'CELAS3', 'CELAS4',
         'CDAMP1', 'CDAMP2', 'CDAMP3', 'CDAMP4', 'CDAMP5',
     ]
-    for eid, elem in iteritems(model.elements):
+    for eid, elem in model.elements.items():
         if elem.type in ['CQUAD4', 'CTRIA3']:
             centroid = elem.Centroid()
         elif elem.type in etypes_to_skip:

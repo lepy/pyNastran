@@ -1,15 +1,11 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from itertools import count
-from six import integer_types
+from typing import List
+
 import numpy as np
 from numpy import zeros, searchsorted, ravel
-ints = (int, np.int32)
 
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
+from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
 
@@ -24,28 +20,37 @@ class NonlinearGapStressArray(OES_Object):
         self.nelements = 0  # result specific
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
+
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
 
     def _reset_indices(self):
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
-        raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
+        msgs = [
+            '                      S T R E S S E S   ( F O R C E S )   I N   G A P   E L E M E N T S      ( C G A P )'
+            ' '
+            '    ELEMENT   - F O R C E S   I N   E L E M   S Y S T -       - D I S P L A C E M E N T S   I N   E L E M   S Y S T -'
+            '       ID       COMP-X       SHEAR-Y       SHEAR-Z       AXIAL-U       TOTAL-V       TOTAL-W       SLIP-V        SLIP-W    STATUS'
+            #'       3801   3.71080E+05   0.0           0.0           2.37879E-01   9.51516E-01  -5.55112E-17   9.51516E-01  -5.55112E-17 SLIDE   '
+        ]
+        return msgs
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['compX', 'shearY', 'shearZ', 'axialU', 'shearV', 'shearW', 'slipV', 'slipW']
         return headers
 
     def build(self):
         """sizes the vectorized attributes of the NonlinearGapStressArray"""
-        if self.is_built:
-            return
         #print("self.ielement =", self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
 
@@ -68,30 +73,52 @@ class NonlinearGapStressArray(OES_Object):
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element,
             #self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.ntotal, dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        _times = zeros(self.ntimes, dtype=dtype)
+        element = zeros(self.ntotal, dtype=idtype)
 
         # [comp_x, shear_y, shear_z, axial_u, shear_v, shear_w, slip_v, slip_w]
-        self.data = zeros((self.ntimes, self.ntotal, 8), dtype='float32')
+        data = zeros((self.ntimes, self.ntotal, 8), dtype=fdtype)
+
+        if self.load_as_h5:
+            #for key, value in sorted(self.data_code.items()):
+                #print(key, value)
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.element = group.create_dataset('element', data=element)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.element = element
+            self.data = data
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
         headers = self.get_headers()
-        if self.nonlinear_factor is not None:
+        if self.nonlinear_factor not in (None, np.nan):
+            #Time                 0.025     0.050
+            #ElementID Item
+            #899       compX   0.537281  0.851454
+            #          shearY  0.000000  0.000000
+            #          shearZ  0.000000  0.000000
+            #          axialU  0.000005  0.000009
+            #          shearV  0.000000  0.000000
+            #          shearW  0.000000  0.000000
+            #          slipV   0.000000  0.000000
+            #          slipW   0.000000  0.000000
             column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values,
-                                       major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'Item']
+            data_frame = self._build_pandas_transient_elements(
+                column_values, column_names,
+                headers, self.element, self.data)
         else:
-            self.data_frame = pd.Panel(self.data,
-                                       major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'Item']
+            data_frame = pd.Panel(self.data,
+                                  major_axis=self.element, minor_axis=headers).to_frame()
+            data_frame.columns.names = ['Static']
+            data_frame.index.names = ['ElementID', 'Item']
+        self.data_frame = data_frame
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -140,7 +167,7 @@ class NonlinearGapStressArray(OES_Object):
     def add_sort1(self, dt, eid, comp_xi, shear_yi, shear_zi, axial_ui,
                   shear_vi, shear_wi, slip_vi, slip_wi, form1, form2):
         """unvectorized method for adding SORT1 transient data"""
-        assert isinstance(eid, ints)
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.itotal] = eid
         self.data[self.itime, self.itotal, :] = [comp_xi, shear_yi, shear_zi, axial_ui,
@@ -148,7 +175,7 @@ class NonlinearGapStressArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -162,7 +189,7 @@ class NonlinearGapStressArray(OES_Object):
         nelements = self.ntotal
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i\n'
                        % (self.__class__.__name__, ntimes, nelements))
             ntimes_word = 'ntimes'
@@ -224,6 +251,6 @@ class NonlinearGapStressArray(OES_Object):
                        shear_vi, shear_wi, slip_vi, slip_wi))
             f06_file.write(page_stamp % page_num)
             page_num += 1
-        if self.nonlinear_factor is None:
+        if self.nonlinear_factor in (None, np.nan):
             page_num -= 1
         return page_num

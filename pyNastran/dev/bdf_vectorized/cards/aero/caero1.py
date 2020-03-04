@@ -1,5 +1,4 @@
-from six.moves import zip
-
+import numpy as np
 from numpy import zeros, arange, searchsorted, cross
 
 from pyNastran.bdf.field_writer_8 import print_card_8
@@ -252,7 +251,7 @@ class CAERO1(VectorizedCard):
         If node_ids is None, the positions of all the GRID cards
         must be calculated.
         """
-        if nodes_cid0 is None:
+        if grids_cid0 is None:
             node_ids = self.model.grid.node_ids
             grids_cid0 = self.model.grid.position()
 
@@ -264,7 +263,7 @@ class CAERO1(VectorizedCard):
         v12 = p2 - p1
         v13 = p3 - p1
         v123 = cross(v12, v13)
-        normi = np.norm(v123, axis=0)
+        normi = np.linalg.norm(v123, axis=0)
 
         A = None
         normal = v123 / normi

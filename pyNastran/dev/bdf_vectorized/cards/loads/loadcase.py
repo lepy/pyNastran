@@ -1,12 +1,11 @@
-from __future__ import print_function
 from collections import defaultdict
 
-from six import iteritems
-from six.moves import zip, StringIO
+from io import StringIO
+from pyNastran.utils.numpy_utils import integer_types
 from numpy import unique, where
 
 
-class LoadCase(object):
+class LoadCase:
     def __init__(self, model):
         self.model = model
         self.loads = defaultdict(list)
@@ -33,7 +32,7 @@ class LoadCase(object):
                     raise NotImplementedError(load.type)
 
     def add_reference(self, load):
-        for load_id, loads in iteritems(load):
+        for load_id, loads in load.items():
             #self.model.log.debug("ref", loads)
             for load in loads:
                 self.loads[load_id].append(load)

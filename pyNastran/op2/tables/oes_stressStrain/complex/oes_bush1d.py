@@ -1,18 +1,14 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types
+from typing import List
 import numpy as np
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, OES_Object
-from pyNastran.f06.f06_formatting import write_imag_floats_13e
+from pyNastran.f06.f06_formatting import write_imag_floats_13e, _eigenvalue_header
 
 
 class ComplexCBush1DArray(OES_Object):
     def __init__(self, data_code, is_sort1, isubcase, dt):
+        aaa
         OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
@@ -38,9 +34,6 @@ class ComplexCBush1DArray(OES_Object):
 
     def build(self):
         """sizes the vectorized attributes of the ComplexCBush1DArray"""
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -61,13 +54,21 @@ class ComplexCBush1DArray(OES_Object):
         self.data = np.zeros((self.ntimes, self.nelements, 6), dtype='complex64')
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
         headers = self.get_headers()
         column_names, column_values = self._build_dataframe_transient_header()
-        self.data_frame = pd.Panel(self.data, items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
+        #self.data_frame = self._build_pandas_transient_elements(
+            #column_values, column_names,
+            #headers, self.element, self.data)
+        #print(self.data_frame)
+        #aa
+        self.data_frame = pd.Panel(self.data, items=column_values,
+                                   major_axis=self.element, minor_axis=headers).to_frame()
         self.data_frame.columns.names = column_names
         self.data_frame.index.names = ['ElementID', 'Item']
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -105,12 +106,13 @@ class ComplexCBush1DArray(OES_Object):
 
     def add_sort1(self, dt, eid, tx, ty, tz, rx, ry, rz):
         """unvectorized method for adding SORT1 transient data"""
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [tx, ty, tz, rx, ry, rz]
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -123,13 +125,13 @@ class ComplexCBush1DArray(OES_Object):
         assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
-            msg.append('  type=%s ntimes=%i nelements=%i\n'
-                       % (self.__class__.__name__, ntimes, nelements))
+        if self.nonlinear_factor not in (None, np.nan):  # transient
+            msg.append('  type=%s ntimes=%i nelements=%i; table_name=%r\n' % (
+                self.__class__.__name__, ntimes, nelements, self.table_name))
             ntimes_word = 'ntimes'
         else:
-            msg.append('  type=%s nelements=%i\n'
-                       % (self.__class__.__name__, nelements))
+            msg.append('  type=%s nelements=%i; table_name=%r\n' % (
+                self.__class__.__name__, nelements, self.table_name))
             ntimes_word = '1'
         msg.append('  eType\n')
         headers = self.get_headers()
@@ -193,10 +195,11 @@ class ComplexCBush1DArray(OES_Object):
 
 class ComplexCBush1DStressArray(ComplexCBush1DArray, StressObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
+        aaa
         ComplexCBush1DArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
         return headers
 

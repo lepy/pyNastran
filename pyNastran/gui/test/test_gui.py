@@ -1,19 +1,15 @@
 # coding: latin1
-"""
-defines the command line tool test_gui
-"""
-from __future__ import print_function
+"""defines the command line tool test_gui"""
 import os
 import sys
 import time
 import itertools
 import traceback
 
-from six import PY2
 from docopt import docopt
 
 import pyNastran
-from pyNastran.utils.log import get_logger
+from cpylog import get_logger
 
 from pyNastran.gui.errors import NoGeometry
 from pyNastran.bdf.errors import (CrossReferenceError, CardParseSyntaxError,
@@ -21,18 +17,10 @@ from pyNastran.bdf.errors import (CrossReferenceError, CardParseSyntaxError,
 
 from pyNastran.gui.testing_methods import FakeGUIMethods
 from pyNastran.gui.formats import CLASS_MAP
-from pyNastran.converters.nastran.nastran_io import NastranIO
-from pyNastran.converters.fast.fast_io import FastIO
-from pyNastran.converters.abaqus.abaqus_io import AbaqusIO
-
-from pyNastran.converters.aflr.aflr2.bedge_io import BEdge_IO
-from pyNastran.converters.aflr.surf.surf_io import SurfIO
-from pyNastran.converters.aflr.ugrid.ugrid_io import UGRID_IO
-from pyNastran.converters.dev.openvsp.degen_geom_io import DegenGeomIO
-from pyNastran.converters.dev.openvsp.adb_io import ADB_IO
+from pyNastran.converters.nastran.gui.nastran_io import NastranIO
 
 from pyNastran.gui.arg_handling import determine_format
-from pyNastran.utils import print_bad_path
+from pyNastran.utils import print_bad_path, check_path
 from pyNastran.utils.dev import get_files_of_type
 from pyNastran.op2.test.op2_test import get_failed_files
 
@@ -53,6 +41,8 @@ FORMAT_TO_EXTENSION = {
     'su2' : ['.su2'],
     'tetgen' : ['.smesh', '.ele'],
     'avus' : ['.grd'],
+    'avl' : ['.avl'],
+    'vrml' : ['.wrl'],
 
     # no duplicates are allowed
     #'panair' : ['.inp'],
@@ -69,11 +59,7 @@ EXTENSION_TO_OUPUT_FORMATS = {
 #pkg_path = pyNastran.__path__[0]
 #model_path = os.path.join(pkg_path, '..', 'models')
 
-class FakeGUI(FakeGUIMethods, NastranIO, AbaqusIO,
-              #ADB_IO, DegenGeomIO, #Plot3d_io,
-              # AbaqusIO,
-              FastIO, SurfIO, UGRID_IO, BEdge_IO,
-              DegenGeomIO, ADB_IO):
+class FakeGUI(FakeGUIMethods, NastranIO):
     """spoofs the gui for testing"""
 
     def __init__(self, formati, inputs=None):
@@ -87,22 +73,14 @@ class FakeGUI(FakeGUIMethods, NastranIO, AbaqusIO,
         """
         self._formati = formati
         FakeGUIMethods.__init__(self, inputs=inputs)
-        #ADB_IO.__init__(self)
-        AbaqusIO.__init__(self)
-        BEdge_IO.__init__(self)
         NastranIO.__init__(self)
-        #DegenGeomIO.__init__(self)
-        FastIO.__init__(self)
-        #Plot3d_io.__init__(self)
-        SurfIO.__init__(self)
-        UGRID_IO.__init__(self)
-        #AbaqusIO.__init__(self)
+        self.format_class_map = CLASS_MAP
 
     def load_geometry(self, input_filename):
         """loads a model"""
         load_geometry_name = 'load_%s_geometry' % self._formati
-        if self._formati in CLASS_MAP:
-            cls = CLASS_MAP[self._formati](self)
+        if self._formati in self.format_class_map:
+            cls = self.format_class_map[self._formati](self)
             getattr(cls, load_geometry_name)(input_filename)
         elif hasattr(self, load_geometry_name):
             # self.load_nastran_geometry(bdf_filename, None)
@@ -114,8 +92,8 @@ class FakeGUI(FakeGUIMethods, NastranIO, AbaqusIO,
     def load_results(self, output_filename):
         """loads a model"""
         load_results_name = 'load_%s_results' % self._formati
-        if self._formati in CLASS_MAP:
-            cls = CLASS_MAP[self._formati](self)
+        if self._formati in self.format_class_map:
+            cls = self.format_class_map[self._formati](self)
             getattr(cls, load_results_name)(output_filename)
         elif hasattr(self, load_results_name):
             # self.load_nastran_ressults(op2_filename, None)
@@ -166,7 +144,7 @@ def run_docopt(argv=None):
     if len(sys.argv) == 1:
         sys.exit(msg)
     ver = str(pyNastran.__version__)
-    data = docopt(msg, argv=argv, help=True, version=ver, options_first=False)
+    data = docopt(msg, argv=argv, version=ver, options_first=False) # help=True,
 
     isdir = data['INPUT_DIRECTORY'] or not data['INPUT_FILENAME'] or data['--dir']
     if isdir or data['--dir']:
@@ -200,10 +178,7 @@ def run_docopt(argv=None):
         failed_cases_filename = None
         input_filename = data['INPUT_FILENAME']
         output_filename = data['OUTPUT_FILENAME']
-        if not os.path.exists(input_filename):
-            msg = 'input_filename=%r does not exist\n%s' % (
-                input_filename, print_bad_path(input_filename))
-            raise RuntimeError(msg)
+        check_path(input_filename, 'input_filename')
         if not os.path.isfile(input_filename):
             msg = 'input_filename=%r is not a file' % input_filename
             raise RuntimeError(msg)
@@ -223,6 +198,7 @@ def run_docopt(argv=None):
     else:
         log_method = 'debug'
     return formati, input_filenames, output_filenames, failed_cases_filename, log_method, data['--test']
+
 
 def main():
     """runs the gui"""
@@ -298,13 +274,8 @@ def main():
     sys.stderr.write('%i/%i passed\n' % (npassed, ntotal))
     sys.stderr.write(time_msg)
 
-    if PY2:
-        write = 'wb'
-    else:
-        write = 'w'
-
     if ntotal > 1:
-        with open(failed_cases_filename, write) as failed_cases_file:
+        with open(failed_cases_filename, 'w') as failed_cases_file:
             for fname in failed_files:
                 failed_cases_file.write('%s\n' % fname)
         print(time_msg)
@@ -312,6 +283,7 @@ def main():
 
     #test_gui.load_nastran_geometry(bdf_filename, None)
     #test_gui.load_nastran_results(op2_filename, None)
+
 
 if __name__ == '__main__':
     main()

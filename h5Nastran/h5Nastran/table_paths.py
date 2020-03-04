@@ -2,22 +2,36 @@ from __future__ import print_function, absolute_import
 
 
 class TablePaths(object):
-    bdf_lines_path = r'/H5NASTRAN/NASTRAN/INPUT'
-    bdf_lines_table = 'BDF_LINES'
+    def __init__(self):
+        # TODO: this should be saved to h5 file, and read back in when reading
+        self.bdf_lines_path = r'/H5NASTRAN/NASTRAN/INPUT'
+        self.bdf_lines_table = 'BDF_LINES'
 
-    unsupported_cards_path = r'/H5NASTRAN/NASTRAN/INPUT'
-    unsupported_cards_table = 'UNSUPPORTED_CARDS'
+        self.bdf_file_path = r'/H5NASTRAN/NASTRAN/INPUT'
+        self.bdf_file_table = 'BDF_FILE'
 
-    info_path = r'/H5NASTRAN'
-    info_table = 'INFO'
+        self.unsupported_cards_path = r'/H5NASTRAN/NASTRAN/INPUT'
+        self.unsupported_cards_table = 'UNSUPPORTED_CARDS'
 
-    unsupported_result_tables_path = r'/H5NASTRAN/NASTRAN/RESULT'
-    unsupported_result_tables_table = 'UNSUPPORTED_RESULT_TABLES'
+        self.about_path = r'/H5NASTRAN/INFO'
+        self.about_table = 'ABOUT'
 
-    shell_element_info_path = r'/H5NASTRAN/NASTRAN/INPUT'
-    shell_element_info_table = 'SHELL_ELEMENT_INFO'
+        self.versioning_path = r'/H5NASTRAN/INFO'
+        self.versioning_table = 'VERSIONING'
 
-    private_index_path = r'/H5NASTRAN/INDEX'
+        self.defaults_path = r'/H5NASTRAN/INFO'
+        self.defaults_table = 'DEFAULTS'
+
+        self.unsupported_result_tables_path = r'/H5NASTRAN/NASTRAN/RESULT'
+        self.unsupported_result_tables_table = 'UNSUPPORTED_RESULT_TABLES'
+
+        self.shell_element_info_path = r'/H5NASTRAN/NASTRAN/INPUT'
+        self.shell_element_info_table = 'SHELL_ELEMENT_INFO'
+
+        self.subcase_path = r'/H5NASTRAN/NASTRAN/RESULT'
+        self.subcase_table = 'SUBCASES'
+
+        self.private_index_path = r'/H5NASTRAN/INDEX'
 
     def __getattr__(self, attr):
         dict = self.__dict__

@@ -4,12 +4,12 @@ from pyNastran.bdf.cards.collpase_card import collapse_thru
 
 from pyNastran.bdf.bdf_interface.assign_type import integer_or_string
 
-class SPOINT(object):
+class SPOINT:
     type = 'SPOINT'
     def __init__(self, model):
         self.model = model
         self._comments = []
-        self.spoint = set([])
+        self.spoint = set()
         self.n = 0
 
     def __len__(self):
@@ -80,10 +80,3 @@ class SPOINT(object):
         ##self.model.log.debug('mids = %s' % mids)
         #for mid in mids:
             #yield mid, self.__getitem__(mid)
-
-    #def iteritems(self):
-        #return self.items()
-
-    #def iterkeys(self):
-        #return self.keys()
-

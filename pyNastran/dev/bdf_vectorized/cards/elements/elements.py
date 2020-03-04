@@ -1,9 +1,5 @@
-from __future__ import print_function
-from six import iteritems, integer_types
-from six.moves import zip
-
 import numpy as np
-from pyNastran.utils.mathematics import unique2d
+from pyNastran.femutils.utils import unique2d
 from pyNastran.dev.bdf_vectorized.utils import slice_to_iter
 from pyNastran.dev.bdf_vectorized.cards.elements.solid.ctetra4 import volume4
 from pyNastran.dev.bdf_vectorized.cards.elements.solid.chexa8 import quad_area_centroid
@@ -231,7 +227,7 @@ class Elements(BaseMethods):
         out = []
         for eid in element_id:
             obj = None
-            for etype, eids in iteritems(self.element_groups):
+            for etype, eids in self.element_groups.items():
                 if eid in eids:
                     i = np.where(eid == eids)[0]
                     obj = type_map[etype][i]
@@ -413,7 +409,7 @@ class Elements(BaseMethods):
 
         ni = 0
         self.model.log.debug('data2 = %s' % data2)
-        for (pid, etype), element_ids in iteritems(data2):
+        for (pid, etype), element_ids in data2.items():
             #self.model.log.debug('pid=%s eType=%s element_ids=%s' % (pid, eType, element_ids))
             elements = type_map[etype]
             i = np.searchsorted(elements.element_id, element_ids)
@@ -572,8 +568,8 @@ class Elements(BaseMethods):
         out = []
         #self.model.log.debug('property_id = %s' % property_id)
         for pid in property_id:
-            for Type, pids in iteritems(self.property_groups):
-                if not isinstance(pid, integer_types):
+            for Type, pids in self.property_groups.items():
+                if not isinstance(pid, int):
                     self.model.log.debug('pids = %s' % pids)
                     self.model.log.debug('pid  = %s' % pid)
 
@@ -750,7 +746,7 @@ class Elements(BaseMethods):
     def get_element(self, element_id=None):
         #if element_id is None:
             #out = []
-            #for Type, eids in iteritems(self.element_groups):
+            #for Type, eids in self.element_groups.items():
             #    for i in range(len(eids)):
             #        obj = type_map[Type].slice_by_index(i)
             #        out.append(obj)
@@ -885,7 +881,7 @@ class Elements(BaseMethods):
         element_ids = np.ones((neids, 2)) * -1
 
         i = 0
-        for key, element_obj in sorted(iteritems(element_objs)):
+        for key, element_obj in sorted(element_objs.items()):
             if element_obj.n == 0:
                 i += 1
                 continue
@@ -971,7 +967,7 @@ class Elements(BaseMethods):
         self.model.log.debug('element_ids_getitem = %s' % element_ids2)
         for eid in element_ids2:
             #obj = None
-            for Type, eids in iteritems(self.element_groups):
+            for Type, eids in self.element_groups.items():
                 if eid in eids:
                     #self.model.log.debug('  found Type=%s' % Type)
                     i = np.where(eid == eids)[0]
@@ -1027,7 +1023,7 @@ class Elements(BaseMethods):
 
 
 def check_duplicate(name, objs, log):
-    unique_vals = set([])
+    unique_vals = set()
     #print("nobjs = %s" % len(objs))
     for obj in objs:
         #print('working on %s' % obj.__class__.__name__)

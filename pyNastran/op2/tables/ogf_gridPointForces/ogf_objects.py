@@ -1,19 +1,132 @@
-from __future__ import print_function
-#from six import integer_types
+from typing import List
 import numpy as np
 from numpy import zeros, unique, array_equal, empty
-from pyNastran.op2.result_objects.op2_objects import ScalarObject
-from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header, write_imag_floats_13e
-from pyNastran.op2.vector_utils import transform_force_moment, transform_force_moment_sum, sortedsum1d
-from pyNastran.utils import integer_types
-
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
+from pyNastran.op2.result_objects.op2_objects import BaseElement, get_times_dtype
+from pyNastran.f06.f06_formatting import (
+    write_floats_13e, _eigenvalue_header, write_imag_floats_13e)
+from pyNastran.op2.vector_utils import (
+    transform_force_moment, transform_force_moment_sum, sortedsum1d)
+from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.op2_interface.write_utils import set_table3_field
 
 
-class RealGridPointForcesArray(ScalarObject):
+class GridPointForces(BaseElement):
+    def __init__(self, data_code, is_sort1, isubcase):
+        BaseElement.__init__(self, data_code, isubcase, apply_data_code=True)
+        #self.code = [self.format_code, self.sort_code, self.s_code]
+
+        #self.ntimes = 0  # or frequency/mode
+        self.ntotal = 0
+        self.itotal = 0
+
+    def _write_table_3(self, op2, op2_ascii, new_result, itable, itime): #, itable=-3, itime=0):
+        import inspect
+        from struct import pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_table_3: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if new_result and itable != -3:
+            header = [
+                4, 146, 4,
+            ]
+        else:
+            header = [
+                4, itable, 4,
+                4, 1, 4,
+                4, 0, 4,
+                4, 146, 4,
+            ]
+        op2.write(pack(b'%ii' % len(header), *header))
+        op2_ascii.write('table_3_header = %s\n' % header)
+
+        approach_code = self.approach_code
+        table_code = self.table_code
+        isubcase = self.isubcase
+        element_type = 0 #self.element_type
+        #[
+            #'aCode', 'tCode', 'element_type', 'isubcase',
+            #'???', '???', '???', 'load_set'
+            #'format_code', 'num_wide', 's_code', '???',
+            #'???', '???', '???', '???',
+            #'???', '???', '???', '???',
+            #'???', '???', '???', '???',
+            #'???', 'Title', 'subtitle', 'label']
+        #random_code = self.random_code
+        format_code = self.format_code
+        s_code = 0 # self.s_code
+        num_wide = self.num_wide
+        acoustic_flag = 0
+        thermal = 0
+        title = b'%-128s' % self.title.encode('ascii')
+        subtitle = b'%-128s' % self.subtitle.encode('ascii')
+        label = b'%-128s' % self.label.encode('ascii')
+        #oCode = 0
+        load_set = 0
+        #print(self.code_information())
+
+        ftable3 = b'i' * 50 + b'128s 128s 128s'
+        field6 = 0
+        field7 = 0
+        if self.analysis_code == 1:
+            field5 = self.lsdvmns[itime]
+        elif self.analysis_code == 2:
+            ## mode number
+            ## mode or cycle .. todo:: confused on the type - F1???
+            #self.mode2 = self.add_data_parameter(data, 'mode2', b'i', 7, False)
+            #self.cycle = self.add_data_parameter(data, 'cycle', b'f', 7, False)
+
+            field5 = self.modes[itime]
+            field6 = self.eigns[itime]
+            field7 = self.cycles[itime]
+            assert isinstance(field6, float), type(field6)
+            assert isinstance(field7, float), type(field7)
+            ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+            ftable3 = set_table3_field(ftable3, 7, b'f') # field 7
+        elif self.analysis_code == 5:
+            field5 = self.freqs[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+        elif self.analysis_code == 6:
+            field5 = self.times[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+        elif self.analysis_code == 10:  # nonlinear statics
+            field5 = self.lftsfqs[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5; load step
+        else:
+            raise NotImplementedError(self.analysis_code)
+
+        table3 = [
+            approach_code, table_code, element_type, isubcase, field5,
+            field6, field7, load_set, format_code, num_wide,
+            s_code, acoustic_flag, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, thermal, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+            title, subtitle, label,
+        ]
+        assert table3[22] == thermal
+
+        n = 0
+        for v in table3:
+            if isinstance(v, (int, float)):
+                n += 4
+            elif isinstance(v, str):
+                n += len(v)
+            else:
+                #print('write_table_3', v)
+                n += len(v)
+        assert n == 584, n
+        data = [584] + table3 + [584]
+        fmt = b'i' + ftable3 + b'i'
+        #print(fmt)
+        #print(data)
+        #f.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
+        op2_ascii.write('%s header 3c = %s\n' % (self.table_name, data))
+        op2.write(pack(fmt, *data))
+
+
+class RealGridPointForcesArray(GridPointForces):
     """
                                        G R I D   P O I N T   F O R C E   B A L A N C E
        POINT-ID  ELEMENT-ID   SOURCE        T1       T2    T3            R1   R2   R3
@@ -23,7 +136,7 @@ class RealGridPointForcesArray(ScalarObject):
 
     """
     def __init__(self, data_code, is_sort1, isubcase, dt):
-        ScalarObject.__init__(self, data_code, isubcase, apply_data_code=True)
+        GridPointForces.__init__(self, data_code, is_sort1, isubcase)
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
         #self.ntimes = 0  # or frequency/mode
@@ -37,6 +150,10 @@ class RealGridPointForcesArray(ScalarObject):
         #self.ielement = 0
         #self.nelements = 0  # result specific
         #self.nnodes = None
+
+    def finalize(self):
+        """required so the OP2 writer works..."""
+        self.format_code = 1
 
     @property
     def is_real(self):
@@ -60,14 +177,12 @@ class RealGridPointForcesArray(ScalarObject):
         """sizes the vectorized attributes of the RealGridPointForcesArray"""
         #print("self.ielement = %s" % self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         #assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
         #if self.ntotal != max(self._ntotals) or self.ntotal != min(self._ntotals):
-            #raise ValueError('RealGridPointForcesArray: ntotal=%s _ntotals=%s' % (self.ntotal, self._ntotals))
+            #raise ValueError('RealGridPointForcesArray: ntotal=%s _ntotals=%s' % (
+                #self.ntotal, self._ntotals))
 
         self.is_unique = False
         if self.ntotal != min(self._ntotals) or 1:
@@ -86,23 +201,20 @@ class RealGridPointForcesArray(ScalarObject):
 
         #print("***name=%s ntimes=%s ntotal=%s" % (
             #self.element_names, self.ntimes, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
         self._times = zeros(self.ntimes, dtype=dtype)
 
         assert self.ntotal < 2147483647, self.ntotal # max int
         if self.is_unique:
             assert isinstance(self.ntotal, integer_types), 'ntotal=%r type=%s' % (self.ntotal, type(self.ntotal))
-            self.node_element = zeros((self.ntimes, self.ntotal, 2), dtype='int32')
+            self.node_element = zeros((self.ntimes, self.ntotal, 2), dtype=idtype)
             self.element_names = empty((self.ntimes, self.ntotal), dtype='U8')
         else:
-            self.node_element = zeros((self.ntotal, 2), dtype='int32')
+            self.node_element = zeros((self.ntotal, 2), dtype=idtype)
             self.element_names = empty(self.ntotal, dtype='U8')
 
         #[t1, t2, t3, r1, r2, r3]
-        self.data = zeros((self.ntimes, self.ntotal, 6), dtype='float32')
+        self.data = zeros((self.ntimes, self.ntotal, 6), dtype=fdtype)
 
     def build_dataframe(self):
         """
@@ -122,14 +234,15 @@ class RealGridPointForcesArray(ScalarObject):
         minor_axis / headers = [T1, T2, T3, R1, R2, R3]
         name = mode
         """
+        import pandas as pd
         headers = self.get_headers()
         #name = self.name
         if self.is_unique:
             ntimes = self.data.shape[0]
             nnodes = self.data.shape[1]
-            nvalues = ntimes * nnodes
+            #nvalues = ntimes * nnodes
             node_element = self.node_element.reshape((ntimes * nnodes, 2))
-            if self.nonlinear_factor is not None:
+            if self.nonlinear_factor not in (None, np.nan):
                 column_names, column_values = self._build_dataframe_transient_header()
                 #column_names = column_names[0]
                 #column_values = column_values[0]
@@ -170,18 +283,22 @@ class RealGridPointForcesArray(ScalarObject):
                 #print(self.data_frame)
         else:
             node_element = [self.node_element[:, 0], self.node_element[:, 1]]
-            if self.nonlinear_factor is not None:
+            if self.nonlinear_factor not in (None, np.nan):
                 column_names, column_values = self._build_dataframe_transient_header()
-                self.data_frame = pd.Panel(self.data, items=column_values, major_axis=node_element, minor_axis=headers).to_frame()
+                self.data_frame = pd.Panel(
+                    self.data, items=column_values,
+                    major_axis=node_element, minor_axis=headers).to_frame()
                 self.data_frame.columns.names = column_names
                 self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
             else:
-                self.data_frame = pd.Panel(self.data, major_axis=node_element, minor_axis=headers).to_frame()
+                self.data_frame = pd.Panel(
+                    self.data,
+                    major_axis=node_element, minor_axis=headers).to_frame()
                 self.data_frame.columns.names = ['Static']
                 self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
             #print(self.data_frame)
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         is_valid = False
         try:
             self.assert_equal(table)
@@ -293,13 +410,14 @@ class RealGridPointForcesArray(ScalarObject):
 
     def extract_freebody_loads(self, eids,
                                coord_out, coords, nid_cd, icd_transform,
-                               itime=0, debug=True, logger=None):
+                               itime=0, debug=True, log=None):
         """
-        Extracts Patran-style freebody loads
+        Extracts Patran-style freebody loads.  Freebody loads are the
+        external loads.
 
         Parameters
         ----------
-        panel_eids : (Ne, ) int ndarray
+        eids : (Nelements, ) int ndarray
             all the elements to consider
         coord_out : CORD2R()
             the output coordinate system
@@ -307,9 +425,9 @@ class RealGridPointForcesArray(ScalarObject):
             all the coordinate systems
             key : int
             value : CORDx
-        nid_cd : (M, 2) int ndarray
+        nid_cd : (Nnodes, 2) int ndarray
             the (BDF.point_ids, cd) array
-        icd_transform : dict[cd] = (Mi, ) int ndarray
+        icd_transform : dict[cd] = (Nondesi, ) int ndarray
             the mapping for nid_cd
         summation_point : (3, ) float ndarray
             the summation point in output??? coordinate system
@@ -317,15 +435,16 @@ class RealGridPointForcesArray(ScalarObject):
             the time to extract loads for
         debug : bool; default=False
             debugging flag
-        logger : logger; default=None
-            a logger object that gets used when debug=True
+        log : log; default=None
+            a log object that gets used when debug=True
 
         Returns
         -------
-        force_out : (n, 3) float ndarray
+        force_out : (Nnodes, 3) float ndarray
             the ith float components in the coord_out coordinate frame
-        moment_out : (n, 3) float ndarray
-            the ith moment components about the summation point in the coord_out coordinate frame
+        moment_out : (Nnodes, 3) float ndarray
+            the ith moment components about the summation point in the
+            coord_out coordinate frame
 
         .. todo:: doesn't seem to handle cylindrical/spherical systems
         .. warning:: not done
@@ -346,9 +465,9 @@ class RealGridPointForcesArray(ScalarObject):
         nids = gpforce_nids[irange]
 
         if debug:
-            logger.debug('gpforce_eids =' % gpforce_eids[is_in])
-            logger.debug('nids = %s' % gpforce_nids[irange])
-            logger.debug('eids = %s' % gpforce_eids[irange])
+            log.debug('gpforce_eids =' % gpforce_eids[is_in])
+            log.debug('nids = %s' % gpforce_nids[irange])
+            log.debug('eids = %s' % gpforce_eids[irange])
 
         try:
             is_in3 = np.in1d(nid_cd[:, 0], nids, assume_unique=False)
@@ -375,22 +494,23 @@ class RealGridPointForcesArray(ScalarObject):
             icd_transform,
             xyz_cid0=None, summation_point_cid0=None,
             consider_rxf=False,
-            debug=debug, logger=logger)
+            debug=debug, log=log)
         return force, moment
 
     def extract_interface_loads(self, nids, eids,
                                 coord_out, coords, nid_cd, icd_transform,
                                 xyz_cid0, summation_point=None,
                                 consider_rxf=True,
-                                itime=0, debug=True, logger=None):
+                                itime=0, debug=True, log=None):
         """
-        Extracts Patran-style interface loads
+        Extracts Patran-style interface loads.  Interface loads are the
+        internal loads at a cut.
 
         Parameters
         ----------
-        nids : (Nn, ) int ndarray
+        nids : (Nnodes, ) int ndarray
             all the nodes to consider; must be sorted
-        eids : (Ne, ) int ndarray
+        eids : (Nelements, ) int ndarray
             all the elements to consider; must be sorted
         coord_out : CORD2R()
             the output coordinate system
@@ -398,9 +518,9 @@ class RealGridPointForcesArray(ScalarObject):
             all the coordinate systems
             key : int
             value : CORDx
-        nid_cd : (M, 2) int ndarray
+        nid_cd : (Nnodes, 2) int ndarray
             the (BDF.point_ids, cd) array
-        icd_transform : dict[cd] = (Mi, ) int ndarray
+        icd_transform : dict[cd] = (Nnodesi, ) int ndarray
             the mapping for nid_cd
         xyz_cid0 : (nnodes + nspoints + nepoints, 3) ndarray
             the grid locations in coordinate system 0
@@ -418,20 +538,22 @@ class RealGridPointForcesArray(ScalarObject):
 
         Returns
         -------
-        force_out : (n, 3) float ndarray
+        force_out : (Nnodes, 3) float ndarray
             the ith float components in the coord_out coordinate frame
-        moment_out : (n, 3) float ndarray
-            the ith moment components about the summation point in the coord_out coordinate frame
+        moment_out : (Nnodes, 3) float ndarray
+            the ith moment components about the summation point in the
+            coord_out coordinate frame
         force_out_sum : (3, ) float ndarray
             the sum of forces in the coord_out coordinate frame
         moment_out_sum : (3, ) float ndarray
-            the sum of moments about the summation point in the coord_out coordinate frame
+            the sum of moments about the summation point in the
+            coord_out coordinate frame
 
         .. todo:: doesn't seem to handle cylindrical/spherical systems
         .. todo:: Add support for:
                   2D output style:
-                    - This would allow for shell problems to have loads applied
-                      in the plane of the shells
+                    - This would allow for shell problems to have loads
+                      applied in the plane of the shells
                     - This would require normals
                   1D output style:
                     - Make loads in the direction of the element
@@ -441,6 +563,8 @@ class RealGridPointForcesArray(ScalarObject):
             summation_point = np.asarray(summation_point)
         #assert coord_in.Type == 'R', 'Only rectangular coordinate systems are supported; coord_in=\n%s' % str(coord_in)
         #assert coord_out.Type == 'R', 'Only rectangular coordinate systems are supported; coord_out=\n%s' % str(coord_out)
+        assert eids is not None, eids
+        assert nids is not None, nids
         eids = np.asarray(eids)
         nids = np.asarray(nids)
         eids.sort()
@@ -470,9 +594,9 @@ class RealGridPointForcesArray(ScalarObject):
             with open(f06_filename, 'w') as f06_file:
                 self.write_f06_time(f06_file, itime=0, i=irange)
 
-            logger.debug('gpforce_eids =' % gpforce_eids[is_in])
-            logger.debug('nids = %s' % gpforce_nids[irange])
-            logger.debug('eids = %s' % gpforce_eids[irange])
+            log.debug('gpforce_eids =' % gpforce_eids[is_in])
+            log.debug('nids = %s' % gpforce_nids[irange])
+            log.debug('eids = %s' % gpforce_eids[irange])
 
         try:
             is_in3 = np.in1d(nid_cd[:, 0], nids, assume_unique=False)
@@ -493,7 +617,7 @@ class RealGridPointForcesArray(ScalarObject):
             icd_transform,
             xyz_cid0[is_in3, :][isort], summation_point_cid0=summation_point,
             consider_rxf=consider_rxf,
-            debug=debug, logger=logger)
+            debug=debug, log=log)
         return force_out, moment_out, force_out_sum, moment_out_sum
 
     def find_centroid_of_load(self, f, m):
@@ -510,7 +634,7 @@ class RealGridPointForcesArray(ScalarObject):
         ]
         {r} = [F]^-1 {M}
 
-        When the determinant of [F] is nonzero:
+        When the determinant of [F] is nonzero (2D):
            Life is easy
 
         When the determinant of [F] is zero:
@@ -523,53 +647,57 @@ class RealGridPointForcesArray(ScalarObject):
         where one of the eigenvalues is 0? (the trivial case)
         and
 
-
         However, [F] is singular, so let rx=0:
         Mx = ry*Fz - rz*Fy
         My = rz*Fx
         Mz = -ry*Fx
+        let Fx=0, so ry, rz != 0, but My=Mz=0
+        -> ry = rz*Fy/Fz
+        let rz = 1
+        -> ry = Fy/Fz
+        <0, Fy/Fz, 1>
         """
         raise NotImplementedError()
 
     def shear_moment_diagram(self, xyz_cid0, eids, nids, icd_transform,
                              element_centroids_cid0,
-                             coord, coords, nid_cd, stations, coord_out,
-                             idir=0, itime=0, debug=False, logger=None):
+                             coords, nid_cd, stations, coord_out,
+                             idir=0, itime=0, debug=False, log=None):
         """
-        Computes a series of forces/moments at various stations along a structure.
+        Computes a series of forces/moments at various stations along a
+        structure.
 
         Parameters
         ----------
-        eids : (nelements, ) int ndarray
-            an array of element ids to consider
-        nids_eids : (nnodes, ) int ndarray
-            an array of node ids corresponding to eids
-        #nids_xyz : (nnodes, ) int ndarray
-        #    an array of node ids corresponding to xyz_cid0
-        xyz_cid0 : (nnodes, 3) float ndarray
+        xyz_cid0 : (Nnodes, 3) float ndarray
             all the nodes in the model xyz position in the global frame
-        element_centroids_cid0 : (nelements, 3) float ndarray
-            an array of element centroids
-        coord_out : CORD2R()
-            the output coordinate system
+        eids : (Nelements, ) int ndarray
+            an array of element ids to consider
+        nids : (Nnodes, ) int ndarray
+            an array of node ids corresponding to xyz_cid0
+        icd_transform : dict[cd] = (Nnodesi, ) int ndarray
+            the mapping for nid_cd
+        element_centroids_cid0 : (Nelements, 3) float ndarray
+            an array of element centroids corresponding to eids
         coords : dict[int] = CORDx
             all the coordinate systems
             key : int
             value : CORDx
-        nid_cd : (M, 2) int ndarray
+        nid_cd : (Nnodes, 2) int ndarray
             the (BDF.point_ids, cd) array
-        icd_transform : dict[cd] = (Mi, ) int ndarray
-            the mapping for nid_cd
         stations : (nstations, ) float ndarray
             the station to sum forces/moments about
             be careful of picking exactly on symmetry planes/boundaries
             of elements or nodes
             this list should be sorted (negative to positive)
+        coord_out : CORD2R()
+            the output coordinate system
         idir : int; default=0
             the axis of the coordinate system to consider
+            as the axial direction
 
-        Procedure
-        ---------
+        Notes
+        -----
         1.  Clip elements based on centroid.
             Elements that are less than the ith station are kept.
         2.  Get the nodes for those elements.
@@ -578,25 +706,26 @@ class RealGridPointForcesArray(ScalarObject):
         3b. Extract the interface loads and sum them about the
             summation point.
 
-        Example
-        -------
+        Examples
+        --------
         Imagine a swept aircraft wing.  Define a coordinate system
         in the primary direction of the sweep.  Note that station 0
         doesn't have to be perfectly at the root of the wing.
 
         Create stations from this point.
 
-        TODO
-        ----
-        Not Tested...Does 3b work?  Can 3a give the right answer?
+        .. todo:: Not Tested...Does 3b work?  Can 3a give the right answer?
+
         """
         nstations = len(stations)
         assert coord_out.type in ['CORD2R', 'CORD1R'], coord_out.type
         beta = coord_out.beta()
-        element_centroids_coord = np.dot(beta, element_centroids_cid0)  # TODO: verify
-        xyz_coord = np.dot(beta, xyz_cid0)  # TODO: verify
+        element_centroids_coord = element_centroids_cid0.dot(beta)
+        xyz_coord = xyz_cid0.dot(beta)
         x_centroid = element_centroids_coord[:, idir]
         x_coord = xyz_coord[:, idir]
+        #print(f'xmin={x_centroid.min()} xmax={x_centroid.max()} (centroids)')
+        #print(f'xmin={x_coord.min()} xmax={x_coord.max()}')
 
         eids = np.unique(eids)
         force_sum = zeros((nstations, 3), dtype='float32')
@@ -611,9 +740,15 @@ class RealGridPointForcesArray(ScalarObject):
             # one side of the cutting plane, we can take all the
             # nodes within some tolerance of the station direction and
             # find the free nodes
-            i = np.where(x_centroid <= station)
-            j = np.where(x_coord >= station)
+            i = np.where(x_centroid <= station)[0]
+            j = np.where(x_coord >= station)[0]
 
+            # we'd break if we knew the user was traveling in the
+            # "correct" direction, but we don't
+            if len(i) == 0:
+                continue
+            if len(j) == 0:
+                continue
             # summation point creation
             offset = np.zeros(3, dtype='float64')
             offset[idir] = station
@@ -625,7 +760,7 @@ class RealGridPointForcesArray(ScalarObject):
                     eids[i],
                     coord_out, coords, nid_cd, icd_transform,
                     # xyz_cid0, summation_point,
-                    itime=itime, debug=debug, logger=logger)
+                    itime=itime, debug=debug, log=log)
 
                 force_sum[istation, :] = forcei.sum(axis=0)
                 # TODO: extract_freebody_loads doesn't sum forces/moments
@@ -635,8 +770,11 @@ class RealGridPointForcesArray(ScalarObject):
                 forcei, momenti, force_sumi, moment_sumi = self.extract_interface_loads(
                     eids[i], nids[j],
                     coord_out, coords, nid_cd, icd_transform,
-                    xyz_cid0, summation_point, itime=itime, debug=debug, logger=logger)
-
+                    xyz_cid0, summation_point, itime=itime, debug=debug,
+                    log=log)
+                log.info('neids=%s nnodes=%s force=%s moment=%s' % (
+                    len(i), len(j), force_sumi, moment_sumi
+                ))
                 force_sum[istation, :] = force_sumi
                 moment_sum[istation, :] = moment_sumi
         return force_sum, moment_sum
@@ -644,6 +782,8 @@ class RealGridPointForcesArray(ScalarObject):
     def add_sort1(self, dt, node_id, eid, ename, t1, t2, t3, r1, r2, r3):
         """unvectorized method for adding SORT1 transient data"""
         assert eid is not None, eid
+        #print(self.code_information())
+        #assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         assert isinstance(node_id, int), node_id
         self._times[self.itime] = dt
 
@@ -659,7 +799,7 @@ class RealGridPointForcesArray(ScalarObject):
         self.data[self.itime, self.itotal, :] = [t1, t2, t3, r1, r2, r3]
         self.itotal += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -675,7 +815,7 @@ class RealGridPointForcesArray(ScalarObject):
         nelements = unique(self.node_element[:, 1]).size
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msgi = '  type=%s ntimes=%i nelements=%i ntotal=%i\n' % (
                 self.__class__.__name__, ntimes, nelements, ntotal)
             if self.ntotal != min(self._ntotals):
@@ -692,8 +832,8 @@ class RealGridPointForcesArray(ScalarObject):
         n = len(headers)
 
         #element_names = [name.strip() for name in unique(self.element_names)]
-        msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n,
-                                                                 ', '.join(headers)))
+        msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (
+            ntimes_word, n, n, ', '.join(headers)))
         msg.append('  data.shape=%s\n' % str(self.data.shape))
         msg.append('  element type: %s\n' % self.element_name)
         msg += self.get_data_code()
@@ -715,7 +855,7 @@ class RealGridPointForcesArray(ScalarObject):
         #node = self.node_gridtype[:, 0]
         #gridtype = self.node_gridtype[:, 1]
         itime = 0
-        times = self._times
+        #times = self._times
 
         assert self.is_unique, self.is_unique
         # sort1 as sort1
@@ -740,7 +880,8 @@ class RealGridPointForcesArray(ScalarObject):
                     itime, nid, eid, ename.strip(), t1i, t2i, t3i, r1i, r2i, r3i))
         return
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s', page_num=1, is_mag_phase=False, is_sort1=True):
+    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
+                  page_num=1, is_mag_phase=False, is_sort1=True):
         if header is None:
             header = []
         msg = self._get_f06_msg()
@@ -752,7 +893,8 @@ class RealGridPointForcesArray(ScalarObject):
                 header = _eigenvalue_header(self, header, itime, ntimes, dt)
                 f06_file.write(''.join(header + msg))
 
-                #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+                #print("self.data.shape=%s itime=%s ieids=%s" % (
+                    #str(self.data.shape), itime, str(ieids)))
                 #[t1, t2, t3, r1, r2, r3]
                 t1 = self.data[itime, :, 0]
                 t2 = self.data[itime, :, 1]
@@ -804,7 +946,8 @@ class RealGridPointForcesArray(ScalarObject):
                 header = _eigenvalue_header(self, header, itime, ntimes, dt)
                 f06_file.write(''.join(header + msg))
 
-                #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+                #print("self.data.shape=%s itime=%s ieids=%s" % (
+                    #str(self.data.shape), itime, str(ieids)))
 
                 #[t1, t2, t3, r1, r2, r3]
                 t1 = self.data[itime, :, 0]
@@ -843,7 +986,8 @@ class RealGridPointForcesArray(ScalarObject):
         header = _eigenvalue_header(self, header, itime, ntimes, dt)
         f06_file.write(''.join(header + msg))
 
-        #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+        #print("self.data.shape=%s itime=%s ieids=%s" % (
+            #str(self.data.shape), itime, str(ieids)))
         #[t1, t2, t3, r1, r2, r3]
         t1 = self.data[itime, i, 0]
         t2 = self.data[itime, i, 1]
@@ -897,19 +1041,120 @@ class RealGridPointForcesArray(ScalarObject):
         ]
         return msg
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['f1', 'f2', 'f3', 'm1', 'm2', 'm3']
         return headers
 
+    def write_op2(self, op2, op2_ascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
 
-class ComplexGridPointForcesArray(ScalarObject):
+        if itable == -1:
+            self._write_table_header(op2, op2_ascii, date)
+            itable = -3
+
+        #if isinstance(self.nonlinear_factor, float):
+            #op2_format = '%sif' % (7 * self.ntimes)
+            #raise NotImplementedError()
+        #else:
+            #op2_format = 'i21f'
+        #s = Struct(op2_format)
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert self.ntimes == 1, self.ntimes
+
+        #device_code = self.device_code
+        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+        #assert ntotal == 193, ntotal
+
+        if self.is_sort1:
+            struct1 = Struct(endian + b'2i 8s 6f')
+        else:
+            raise NotImplementedError('SORT2')
+
+        for itime in range(self.ntimes):
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            #print('stress itable = %s' % itable)
+            itable -= 1
+
+            t1 = self.data[itime, :, 0]
+            t2 = self.data[itime, :, 1]
+            t3 = self.data[itime, :, 2]
+            r1 = self.data[itime, :, 3]
+            r2 = self.data[itime, :, 4]
+            r3 = self.data[itime, :, 5]
+
+            nids = self.node_element[itime, :, 0]
+            eids = self.node_element[itime, :, 1]
+            enames = self.element_names[itime, :]
+
+            nids_device = nids * 10 + self.device_code
+            assert nids.min() > 0, nids.min()
+            nnodes = len(nids)
+
+            ntotal = ntotali * nnodes
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+
+            #zero = ' '
+            ntotal = self._ntotals[itime]
+            #print(self._ntotals)
+            assert len(eids) == len(nids)
+            assert len(enames) == len(nids), 'enames=%s nnids=%s' % (len(enames), len(nids))
+            assert len(t1) == len(nids)
+            assert len(t2) == len(nids)
+            assert len(t3) == len(nids)
+            assert len(r1) == len(nids)
+            assert len(r2) == len(nids)
+            assert len(nids) <= ntotal, 'len(nids)=%s ntotal=%s' % (len(nids), ntotal)
+
+            for (i, nid, eid, ename, t1i, t2i, t3i, r1i, r2i, r3i) in zip(
+                 range(ntotal), nids_device, eids, enames, t1, t2, t3, r1, r2, r3):
+
+                #print(nid, eid, ename, t1i)
+                data = [nid, eid, ename.encode('ascii'), t1i, t2i, t3i, r1i, r2i, r3i]
+                #print('  nid=%s eid=%s data=%s' % (nid, eid, str(data[2:])))
+                op2_ascii.write('  nid=%-3s eid=%-3s data=%s\n' % (nid, eid, str(data[2:])))
+                op2.write(struct1.pack(*data))
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
+
+
+class ComplexGridPointForcesArray(GridPointForces):
     def __init__(self, data_code, is_sort1, isubcase, dt):
-        ScalarObject.__init__(self, data_code, isubcase, apply_data_code=True)
+        GridPointForces.__init__(self, data_code, is_sort1, isubcase)
         #self.code = [self.format_code, self.sort_code, self.s_code]
-
-        #self.ntimes = 0  # or frequency/mode
-        self.ntotal = 0
-        self.itotal = 0
 
         # do the element_names/node_element vectors change with the time step
         self.is_unique = False
@@ -938,9 +1183,8 @@ class ComplexGridPointForcesArray(ScalarObject):
 
     def build(self):
         """sizes the vectorized attributes of the ComplexGridPointForcesArray"""
-        #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
+        #print('ntimes=%s nelements=%s ntotal=%s' % (
+            #self.ntimes, self.nelements, self.ntotal))
         #self.ntotal += 5  # TODO: remove
         #print("self.ntotal = %s" % self.ntotal)
         #print("self.itotal = %s" % self.itotal)
@@ -966,18 +1210,17 @@ class ComplexGridPointForcesArray(ScalarObject):
         self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
-            #self.element_names, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
+            #self.element_names, self.element_type, nnodes_per_element,
+            #self.ntimes, self.nelements, self.ntotal))
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
 
         self._times = zeros(self.ntimes, dtype=dtype)
 
         if self.is_unique:
-            self.node_element = zeros((self.ntimes, self.ntotal, 2), dtype='int32')
+            self.node_element = zeros((self.ntimes, self.ntotal, 2), dtype=idtype)
             self.element_names = empty((self.ntimes, self.ntotal), dtype='U8')
         else:
-            self.node_element = zeros((self.ntotal, 2), dtype='int32')
+            self.node_element = zeros((self.ntotal, 2), dtype=idtype)
             self.element_names = empty(self.ntotal, dtype='U8')
         #[t1, t2, t3, r1, r2, r3]
         self.data = zeros((self.ntimes, self.ntotal, 6), dtype='complex64')
@@ -1000,12 +1243,13 @@ class ComplexGridPointForcesArray(ScalarObject):
         minor_axis / headers = [T1, T2, T3, R1, R2, R3]
         name = mode
         """
+        import pandas as pd
         headers = self.get_headers()
         #name = self.name
         if self.is_unique:
             ntimes = self.data.shape[0]
             nnodes = self.data.shape[1]
-            nvalues = ntimes * nnodes
+            #nvalues = ntimes * nnodes
             node_element = self.node_element.reshape((ntimes * nnodes, 2))
             df1 = pd.DataFrame(node_element)
             df1.columns = ['NodeID', 'ElementID']
@@ -1017,19 +1261,23 @@ class ComplexGridPointForcesArray(ScalarObject):
             #print(self.data_frame)
         else:
             node_element = [self.node_element[:, 0], self.node_element[:, 1]]
-            if self.nonlinear_factor is not None:
+            if self.nonlinear_factor not in (None, np.nan):
                 column_names, column_values = self._build_dataframe_transient_header()
-                self.data_frame = pd.Panel(self.data, items=column_values, major_axis=node_element, minor_axis=headers).to_frame()
+                self.data_frame = pd.Panel(
+                    self.data, items=column_values,
+                    major_axis=node_element, minor_axis=headers).to_frame()
                 self.data_frame.columns.names = column_names
                 self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
             else:
-                self.data_frame = pd.Panel(self.data, major_axis=node_element, minor_axis=headers).to_frame()
+                self.data_frame = pd.Panel(
+                    self.data,
+                    major_axis=node_element, minor_axis=headers).to_frame()
                 self.data_frame.columns.names = ['Static']
                 self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
             #print(self.data_frame)
 
     def _build_dataframe(self):
-        """
+        """::
         major-axis - the axis
 
         mode              1     2   3
@@ -1047,6 +1295,7 @@ class ComplexGridPointForcesArray(ScalarObject):
         name = mode
         """
         headers = self.get_headers()
+        import pandas as pd
         column_names, column_values = self._build_dataframe_transient_header()
         if self.is_unique:
             #node_element = [self.node_element[:, 0], self.node_element[:, 1]]
@@ -1054,7 +1303,9 @@ class ComplexGridPointForcesArray(ScalarObject):
             nnodes = self.data.shape[1]
             node_element_temp = self.node_element.reshape((ntimes * nnodes, 2))
             node_element = [node_element_temp[:, 0], node_element_temp[:, 1]]
-            self.data_frame = pd.Panel(self.data, items=column_values, major_axis=node_element, minor_axis=headers).to_frame()
+            self.data_frame = pd.Panel(
+                self.data, items=column_values,
+                major_axis=node_element, minor_axis=headers).to_frame()
             self.data_frame.columns.names = column_names
             self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
         else:
@@ -1062,11 +1313,13 @@ class ComplexGridPointForcesArray(ScalarObject):
             #print('column_names =', column_names)
             #for name, values in zip(column_names, column_values):
                 #print('  %s = %s' % (name, values))
-            self.data_frame = pd.Panel(self.data, items=column_values, major_axis=node_element, minor_axis=headers).to_frame()
+            self.data_frame = pd.Panel(
+                self.data, items=column_values,
+                major_axis=node_element, minor_axis=headers).to_frame()
             self.data_frame.columns.names = column_names
             self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         self._eq_header(table)
         assert self.is_sort1 == table.is_sort1
         if not np.array_equal(self.node_element, table.node_element) and array_equal(self.element_names, table.element_names):
@@ -1087,7 +1340,11 @@ class ComplexGridPointForcesArray(ScalarObject):
                 msg += '%s\n' % str(self.code_information())
                 i = 0
                 for itime in range(self.ntimes):
-                    for ie, e in enumerate(self.node_element):
+                    print('is_unique =', self.is_unique)
+                    import sys
+                    sys.stdout.flush()
+                    for ie, e in enumerate(self.node_element[itime, :, :]):
+                        print(e)
                         (eid, nid) = e
                         ename1 = self.element_names[itime, ie]
                         ename2 = self.element_names[itime, ie]
@@ -1099,7 +1356,7 @@ class ComplexGridPointForcesArray(ScalarObject):
                         if not np.array_equal(t1, t2):
                             msg += '(%s, %s, %s)    (%s, %s, %s, %s, %s, %s)  (%s, %s, %s, %s, %s, %s)\n' % (
                                 eid, nid, ename1,
-                                t12, t22, t32, r12, r22, r32,
+                                t11, t21, t31, r11, r21, r31,
                                 t12, t22, t32, r12, r22, r32)
                             i += 1
                             if i > 10:
@@ -1140,6 +1397,7 @@ class ComplexGridPointForcesArray(ScalarObject):
     def add_sort1(self, dt, node_id, eid, ename, t1, t2, t3, r1, r2, r3):
         """unvectorized method for adding SORT1 transient data"""
         assert eid is not None, eid
+        #assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         assert isinstance(node_id, int), node_id
 
         self._times[self.itime] = dt
@@ -1152,7 +1410,7 @@ class ComplexGridPointForcesArray(ScalarObject):
         self.data[self.itime, self.itotal, :] = [t1, t2, t3, r1, r2, r3]
         self.itotal += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -1167,7 +1425,7 @@ class ComplexGridPointForcesArray(ScalarObject):
         nelements = unique(self.node_element[:, 1]).size
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msgi = '  type=%s ntimes=%i nelements=%i ntotal=%i\n' % (
                 self.__class__.__name__, ntimes, nelements, ntotal)
             ntimes_word = 'ntimes'
@@ -1180,8 +1438,8 @@ class ComplexGridPointForcesArray(ScalarObject):
         n = len(headers)
 
         #element_names = [name.strip() for name in unique(self.element_names)]
-        msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n,
-                                                                 ', '.join(headers)))
+        msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (
+            ntimes_word, n, n, ', '.join(headers)))
         msg.append('  node_element.shape=%s\n' % str(self.node_element.shape).replace('L', ''))
         msg.append('  element_names.shape=%s\n' % str(self.element_names.shape).replace('L', ''))
         msg.append('  data.shape=%s\n' % str(self.data.shape).replace('L', ''))
@@ -1210,7 +1468,8 @@ class ComplexGridPointForcesArray(ScalarObject):
                 header = _eigenvalue_header(self, header, itime, ntimes, dt)
                 f06_file.write(''.join(header + msg))
 
-                #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+                #print("self.data.shape=%s itime=%s ieids=%s" % (
+                    #str(self.data.shape), itime, str(ieids)))
 
                 #[t1, t2, t3, r1, r2, r3]
                 t1 = self.data[itime, :, 0]
@@ -1226,8 +1485,8 @@ class ComplexGridPointForcesArray(ScalarObject):
 
                 zero = ' '
                 ntotal = self._ntotals[itime]
-                for (i, nid, eid, ename, t1i, t2i, t3i, r1i, r2i, r3i) in zip(
-                     range(ntotal), nids, eids, enames, t1, t2, t3, r1, r2, r3):
+                for (unused_i, nid, eid, ename, t1i, t2i, t3i, r1i, r2i, r3i) in zip(
+                         range(ntotal), nids, eids, enames, t1, t2, t3, r1, r2, r3):
 
                     vals = [t1i, t2i, t3i, r1i, r2i, r3i]
                     vals2 = write_imag_floats_13e(vals, is_mag_phase)
@@ -1258,7 +1517,8 @@ class ComplexGridPointForcesArray(ScalarObject):
                 header = _eigenvalue_header(self, header, itime, ntimes, dt)
                 f06_file.write(''.join(header + msg))
 
-                #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+                #print("self.data.shape=%s itime=%s ieids=%s" % (
+                    #str(self.data.shape), itime, str(ieids)))
 
                 #[t1, t2, t3, r1, r2, r3]
                 t1 = self.data[itime, :, 0]
@@ -1301,7 +1561,8 @@ class ComplexGridPointForcesArray(ScalarObject):
                     header = _eigenvalue_header(self, header, itime, ntimes, dt)
                     f06_file.write(''.join(header + msg))
 
-                    #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+                    #print("self.data.shape=%s itime=%s ieids=%s" % (
+                        #str(self.data.shape), itime, str(ieids)))
 
                     #[t1, t2, t3, r1, r2, r3]
                     t1 = self.data[itime, :, 0]
@@ -1361,6 +1622,106 @@ class ComplexGridPointForcesArray(ScalarObject):
 
         return msg
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['f1', 'f2', 'f3', 'm1', 'm2', 'm3']
         return headers
+
+    def write_op2(self, op2, op2_ascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if itable == -1:
+            self._write_table_header(op2, op2_ascii, date)
+            itable = -3
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+
+        #print('shape = %s' % str(self.data.shape))
+
+        #device_code = self.device_code
+        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+
+        if self.is_sort1:
+            struct1 = Struct(endian + b'2i 8s 12f')
+        else:
+            raise NotImplementedError('SORT2')
+
+        for itime in range(self.ntimes):
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            itable -= 1
+
+            nids_all = self.node_element[itime, :, 0]
+            inids = np.where(nids_all > 0)[0]
+            nids = nids_all[inids]
+            eids = self.node_element[itime, inids, 1]
+            enames = self.element_names[itime, inids]
+
+            t1 = self.data[itime, inids, 0]
+            t2 = self.data[itime, inids, 1]
+            t3 = self.data[itime, inids, 2]
+            r1 = self.data[itime, inids, 3]
+            r2 = self.data[itime, inids, 4]
+            r3 = self.data[itime, inids, 5]
+
+            nids_device = nids * 10 + self.device_code
+            assert nids.min() > 0, nids.min()
+            nnodes = len(nids)
+
+            ntotal = ntotali * nnodes
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+
+            #zero = ' '
+            ntotal = self._ntotals[itime]
+            #print(self._ntotals)
+            assert len(eids) == len(nids)
+            assert len(enames) == len(nids), 'enames=%s nnids=%s' % (len(enames), len(nids))
+            assert len(t1) == len(nids)
+            assert len(t2) == len(nids)
+            assert len(t3) == len(nids)
+            assert len(r1) == len(nids)
+            assert len(r2) == len(nids)
+            assert len(nids) <= ntotal, 'len(nids)=%s ntotal=%s' % (len(nids), ntotal)
+
+            for (i, nid, eid, ename, t1i, t2i, t3i, r1i, r2i, r3i) in zip(
+                 range(ntotal), nids_device, eids, enames, t1, t2, t3, r1, r2, r3):
+
+                #print(nid, eid, ename, t1i)
+                data = [nid, eid, ename.encode('ascii'),
+                        t1i.real, t2i.real, t3i.real, r1i.real, r2i.real, r3i.real,
+                        t1i.imag, t2i.imag, t3i.imag, r1i.imag, r2i.imag, r3i.imag]
+                #print('  nid=%s eid=%s data=%s' % (nid, eid, str(data[2:])))
+                op2_ascii.write('  nid=%-3s eid=%-3s data=%s\n' % (nid, eid, str(data[2:])))
+                op2.write(struct1.pack(*data))
+                assert len(data) + 1 == self.num_wide
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable

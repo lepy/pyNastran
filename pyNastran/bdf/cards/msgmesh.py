@@ -1,9 +1,13 @@
-from __future__ import print_function
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.field_writer_8 import print_card_8
 
 from pyNastran.bdf.bdf_interface.assign_type import (
     string, string_or_blank, integer, integer_or_blank, double_or_blank)
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
+
 # EQUIV
 # DELETE
 # ACTIVE
@@ -53,11 +57,21 @@ from pyNastran.bdf.bdf_interface.assign_type import (
 # PLOADG
 class CGEN(BaseCard):
     """
-    +------+------+-----------+-----+----------+-----+-------------+------+------+
-    |   1  |   2  |     3     | 4   |     5    |  6  |      7      |  8   |  9   |
-    +======+======+===========+=====+==========+=====+=============+======+======+
-    | CGEN | TYPE | FIELD_EID | PID | FIELD_ID | DIR | TH_GEOM_OPT | EIDL | EIDH |
-    +------+------+-----------+-----+----------+-----+-------------+------+------+
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
+    |   1  |    2   |     3     | 4   |     5    |  6  |      7      |  8   |  9   |
+    +======+========+===========+=====+==========+=====+=============+======+======+
+    | CGEN |  TYPE  | FIELD_EID | PID | FIELD_ID | DIR | TH_GEOM_OPT | EIDL | EIDH |
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
+    | CGEN | TRIA3  |    550    | 78  |    25    |     |             |      |      |
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
+    | CGEN | TRIA6  |    520    | 78  |    26    |     |             |      |      |
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
+    | CGEN | QUAD4  |    450    | 145 |    33    |     |             |      |      |
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
+    | CGEN | HEXA8  |    610    | 57  |    41    |     |             |      |      |
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
+    | CGEN | HEXA20 |    620    | 57  |    42    |     |             |      |      |
+    +------+--------+-----------+-----+----------+-----+-------------+------+------+
     """
     type = 'CGEN'
 
@@ -146,7 +160,7 @@ class CGEN(BaseCard):
     def _verify(self, xref):
         pass
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
     def safe_cross_reference(self, model):
         pass
@@ -201,14 +215,14 @@ class CGEN(BaseCard):
             #if not self.seid:
                 #self.seid = grdset.seid
                 #self.seid_ref = self.seid
-        #msg = ' which is required by CGEN nid=%s' % (self.nid)
+        #msg = ', which is required by CGEN nid=%s' % (self.nid)
         #self.cp = model.Coord(self.cp, msg=msg)
         #self.cp_ref = self.cp
         #if self.cd != -1:
             #self.cd = model.Coord(self.cd, msg=msg)
             #self.cd_ref = self.cd
 
-    #def uncross_reference(self):
+    #def uncross_reference(self) -> None:
         #self.cp = self.Cp()
         #self.cd = self.Cd()
         #del self.cp_ref, self.cd_ref
@@ -243,6 +257,6 @@ class CGEN(BaseCard):
             self.direction, self.th_geom_opt, self.eid, self.eidh] + self.t_abcd
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)

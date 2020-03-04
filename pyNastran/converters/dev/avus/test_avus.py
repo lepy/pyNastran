@@ -1,21 +1,19 @@
 """tests non-gui related Avus class/interface"""
-from __future__ import print_function
 import os
 import unittest
+from cpylog import get_logger
 
 import pyNastran
-from pyNastran.converters.dev.avus.avus_grid import AvusGrid, read_avus
-from pyNastran.utils.log import get_logger
+from pyNastran.converters.dev.avus.avus_grid import read_avus
 
-pkg_path = pyNastran.__path__[0]
-test_path = os.path.join(pkg_path, 'converters', 'dev', 'avus')
+PKG_PATH = pyNastran.__path__[0]
+test_path = os.path.join(PKG_PATH, 'converters', 'dev', 'avus')
 
 class TestAvus(unittest.TestCase):
 
     def test_avus_io_01(self):
         """geometry"""
         ndim = 3
-        zones = 1
         npatches = -1
         nzones = 1
         npoints = 7

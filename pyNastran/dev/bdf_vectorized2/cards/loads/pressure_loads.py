@@ -4,8 +4,8 @@ defines:
  - PLOAD1v
  - PLOAD2v
  - PLOAD4v
+
 """
-from __future__ import print_function
 from collections import defaultdict
 from itertools import count
 import numpy as np
@@ -390,8 +390,8 @@ class PLOAD2v(BaseLoad):
 
 class PLOAD4v(BaseLoad):
     """
-    Solid Format
-    ============
+    ``Solid Format``
+
     Defines a pressure load on a face of a CHEXA, CPENTA, or CTETRA element.
 
     +--------+-----+-----+----+----+------+------+------+-------+
@@ -402,8 +402,8 @@ class PLOAD4v(BaseLoad):
     |        | CID | N1  | N2 | N3 | SORL | LDIR |      |       |
     +--------+-----+-----+----+----+------+------+------+-------+
 
-    Shell Format
-    ============
+    ``Shell Format``
+
     Defines a pressure load on a face of a CTRIA3, CTRIA6, CTRIAR,
     CQUAD4, CQUAD8, or CQUADR element.
 

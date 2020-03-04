@@ -1,15 +1,15 @@
 """
 Defines:
  - data_in_material_coord(bdf, op2, in_place=False)
+
 """
-from __future__ import print_function
 import copy
 
 import numpy as np
 from numpy import cos, sin, cross
 from numpy.linalg import norm  # type: ignore
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 
 force_vectors = ['cquad4_force', 'cquad8_force', 'cquadr_force',
                  'ctria3_force', 'ctria6_force', 'ctriar_force']
@@ -104,20 +104,21 @@ def is_mcid(elem):
     -------
     is_mcid : bool
         the projected material coordinate system is used
+
     """
     theta_mcid = getattr(elem, 'theta_mcid', None)
     return isinstance(theta_mcid, integer_types)
 
 
-def check_theta(elem):
+def check_theta(elem) -> float:
     theta = getattr(elem, 'theta_mcid', None)
     if theta is None:
-        return 0.
+        theta = 0.
     elif isinstance(theta, float):
-        return theta
+        pass
     elif isinstance(theta, integer_types):
         raise ValueError('MCID is accepted by this function')
-
+    return theta
 
 def angle2vec(v1, v2):
     """
@@ -125,6 +126,7 @@ def angle2vec(v1, v2):
 
     v1 o v2 = |v1| * |v2| * cos(theta)
     theta = np.arccos( (v1 o v2) / (|v1|*|v2|))
+
     """
     denom = norm(v1, axis=1) * norm(v2, axis=1)
     return np.arccos((v1 * v2).sum(axis=1) / denom)
@@ -179,6 +181,7 @@ def data_in_material_coord(bdf, op2, in_place=False):
     .. warning ::  doesn't handle composite stresses/strains/forces
     .. warning ::  doesn't handle solid stresses/strains/forces (e.g. MAT11)
     .. warning ::  zeros out data for CQUAD8s
+
     """
     if in_place:
         op2_new = op2

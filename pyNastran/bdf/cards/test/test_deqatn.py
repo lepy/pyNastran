@@ -1,11 +1,10 @@
-from __future__ import print_function
 import os
 import unittest
-from six.moves import StringIO
+from io import StringIO
 
 import numpy as np
 
-import pyNastran
+#import pyNastran
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.cards.test.utils import save_load_deck
 
@@ -184,7 +183,7 @@ class TestDEQATN(unittest.TestCase):
             'c = 3'
             'd = x + y + z + c'
         ]
-        deqatn = model.add_deqatn(equation_id, eqs, comment='')
+        unused_deqatn = model.add_deqatn(equation_id, eqs, comment='')
         with self.assertRaises(SyntaxError):
             model.cross_reference()
         #print(deqatn.func_str)
@@ -206,7 +205,7 @@ class TestDEQATN(unittest.TestCase):
             'c = 3',
             'd = x + y + z + c',
         ]
-        deqatn = model.add_deqatn(equation_id, eqs, comment='')
+        unused_deqatn = model.add_deqatn(equation_id, eqs, comment='')
         model.cross_reference()
         #print(deqatn.func_str)
 
@@ -233,7 +232,7 @@ class TestDEQATN(unittest.TestCase):
             'c = 3',
             'd = x + y + z + c',
         ]
-        deqatn = model.add_deqatn(equation_id, eqs, comment='deqatn')
+        unused_deqatn = model.add_deqatn(equation_id, eqs, comment='deqatn')
         default_values = {'w' : 10.}
         model.add_dtable(default_values, comment='dtable')
         model.cross_reference()
@@ -243,12 +242,20 @@ class TestDEQATN(unittest.TestCase):
         """
         tests comments
         """
+        model = BDF(debug=False)
         card_lines = [
             'DEQATN  100     f(x,y,z,w)=1.;',
-            '    c = 3;',
-            '    d = x + y + z + c'
+            'c = 3;',
+            'd = x + y + z + c'
         ]
-        model = BDF(debug=False)
+        with self.assertRaises(SyntaxError):
+            model.add_card(card_lines, 'DEQATN', comment='deqatn', is_list=False)
+
+        card_lines = [
+            'DEQATN  100     f(x,y,z,w)=1.;',
+            '        c = 3;',
+            '        d = x + y + z + c'
+        ]
         model.add_card(card_lines, 'DEQATN', comment='deqatn', is_list=False)
         deqatn = model.dequations[100]
         assert deqatn._comment == '$deqatn\n', '_comment=%r' % deqatn._comment
@@ -367,14 +374,13 @@ class TestDEQATN(unittest.TestCase):
         #print(model.dequations[2].func_str)
         #z = ones(10, dtype='float32')
         #out = eq.func(x, y, z)
-        out = eq.func(x, y, z)
+        #out = eq.func(x, y, z)
         assert np.array_equal(eq.func(x, y, z), z)
         assert eq.func(1.0, 2.0, 1.0) == 3.0
         #print('out9 = %r' % out)
 
 
-    @unittest.skipUnless(2 < 1, 'skipping')
-    def test_deqatn_11_skip(self):
+    def test_deqatn_11(self):
         """
         based off nast/tpl/ptdmi1.dat
 
@@ -387,25 +393,28 @@ class TestDEQATN(unittest.TestCase):
         ]
         model.add_card(deqatn_card, 'DEQATN', is_list=False)
 
-        dessub_desglb = 5
+        #dessub_desglb = 5
         dconstr_cards = [
             ['dconstr,5,10,',],
             ['dconstr,6,11,',],
         ]
         dresp_cards = [
-            [
+            [ # card1
                 'dresp2,10,respA,2',
-                'desvar,100,101,102',
+                ',desvar,100,101,102',
             ],
-            [
+            [ # card2
                 'dresp2,11,respB,2',
-                'desvar,100,101,102',
+                ',desvar,100,101,102',
             ],
+            ## TODO: support this...
             #[
             #'dresp2,11,respB,F(A,B)=A+B**2*SIN(A*B)'
             #',desvar,100,101',
             #],
         ]
+        #model.add_desvar(100, 'varA', 100.1, xlb=-1e20, xub=1e20,
+                         #delx=None, ddval=None, comment='')
         desvar_cards = [
             ['desvar,100,varA,100.1',],
             ['desvar,101,varB,100.2',],
@@ -418,8 +427,7 @@ class TestDEQATN(unittest.TestCase):
             model.add_card(dconstr, 'DCONSTR', is_list=False)
         for dresp in dresp_cards:
             model.add_card(dresp, 'DRESP2', is_list=False)
-        #for desvar in desvar_cards:
-            #model.add_card(desvar, 'DESVAR', is_list=True)
+        model._verify_bdf()
         model.cross_reference()
         model._verify_bdf()
         save_load_deck(model)
@@ -453,10 +461,9 @@ class TestDEQATN(unittest.TestCase):
         model.cross_reference()
         #print(model.dequations[41].eqs)
         #print(model.dequations[41].func_str)
-        #save_load_deck(model)
+        save_load_deck(model)
 
-    @unittest.expectedFailure
-    def test_deqatn_13_fail(self):
+    def test_deqatn_13(self):
         """
         add_deqatn doesnt support semicolons (;) in the eqs
         You're defining them; break it up
@@ -467,7 +474,7 @@ class TestDEQATN(unittest.TestCase):
             'b = a + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x; c=42'
         ]
         model = BDF(debug=None)
-        deqatn = model.add_deqatn(1001, eqs)
+        unused_deqatn = model.add_deqatn(1001, eqs)
         model.cross_reference()
 
     def test_deqatn_14(self):

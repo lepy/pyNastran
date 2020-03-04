@@ -1,4 +1,3 @@
-from __future__ import print_function
 from numpy import array, allclose, array_equal, cross
 import unittest
 
@@ -131,13 +130,13 @@ class TestCoords(unittest.TestCase):
 
     def test_cord1r_01(self):
         lines = ['cord1r,2,1,4,3']
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         card = BDFCard(card)
 
         size = 8
         card = CORD1R(card)
-        self.assertEquals(card.Cid(), 2)
-        self.assertEquals(card.Rid(), 0)
+        self.assertEqual(card.Cid(), 2)
+        self.assertEqual(card.Rid(), 0)
         card.write_bdf(size, 'dummy')
         card.raw_fields()
 
@@ -148,7 +147,7 @@ class TestCoords(unittest.TestCase):
             '*                     1.              0.              1.'
         ]
         model = BDF(debug=False)
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
         card = CORD2C(card)
         model._add_coord_object(card)
@@ -157,19 +156,19 @@ class TestCoords(unittest.TestCase):
             'CORD2R         4       3     10.      0.      5.     10.     90.      5.',
             '             10.      0.      6.'
         ]
-        card = model.process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
         card = CORD2R(card)
         model._add_coord_object(card)
         model.cross_reference()
 
         cord2r = model.Coord(3)
-        self.assertEquals(cord2r.Cid(), 3)
-        self.assertEquals(cord2r.Rid(), 0)
+        self.assertEqual(cord2r.Cid(), 3)
+        self.assertEqual(cord2r.Rid(), 0)
 
         cord2r = model.Coord(4)
-        self.assertEquals(cord2r.Cid(), 4)
-        self.assertEquals(cord2r.Rid(), 3)
+        self.assertEqual(cord2r.Cid(), 4)
+        self.assertEqual(cord2r.Rid(), 3)
 
         self.assertTrue(allclose(cord2r.i, array([0., 0., 1.])))
         delta = cord2r.j - array([1., 1., 0.]) / 2**0.5
@@ -227,16 +226,16 @@ class TestCoords(unittest.TestCase):
         for card in cards:
             model.add_card(card, card[0], comment='comment', is_list=True)
         c1 = model.Coord(1)
-        self.assertEquals(c1.G1(), 1)
-        self.assertEquals(c1.G2(), 2)
-        self.assertEquals(c1.G3(), 3)
+        self.assertEqual(c1.G1(), 1)
+        self.assertEqual(c1.G2(), 2)
+        self.assertEqual(c1.G3(), 3)
 
         model.cross_reference()
-        self.assertEquals(c1.G1(), 1)
-        self.assertEquals(c1.G2(), 2)
-        self.assertEquals(c1.G3(), 3)
+        self.assertEqual(c1.G1(), 1)
+        self.assertEqual(c1.G2(), 2)
+        self.assertEqual(c1.G3(), 3)
 
-        self.assertEquals(c1.NodeIDs(), [1, 2, 3])
+        self.assertEqual(c1.NodeIDs(), [1, 2, 3])
 
     def test_cord2_bad_01(self):
         model = BDF(debug=False)
@@ -308,7 +307,7 @@ class TestCoords(unittest.TestCase):
                 '*          75.7955331161               0',],
         ]
         for lines in cards:
-            card = model.process_card(lines)
+            card = model._process_card(lines)
             model.add_card(card, card[0])
         model.cross_reference()
         for nid in model.nodes:
@@ -352,7 +351,7 @@ class TestCoords(unittest.TestCase):
                 '*           -167.4951724               0',],
         ]
         for lines in cards:
-            card = model.process_card(lines)
+            card = model._process_card(lines)
             model.add_card(card, card[0])
         model.cross_reference()
         for nid in model.nodes:
@@ -396,7 +395,7 @@ class TestCoords(unittest.TestCase):
                 '*          159.097767463               0',],
         ]
         for lines in cards:
-            card = model.process_card(lines)
+            card = model._process_card(lines)
             model.add_card(card, card[0])
         model.cross_reference()
         for nid in model.nodes:
@@ -406,25 +405,25 @@ class TestCoords(unittest.TestCase):
 
     def test_cord1c_01(self):
         lines = ['cord1c,2,1,4,3']
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         card = BDFCard(card)
 
         size = 8
         card = CORD1C(card)
-        self.assertEquals(card.Cid(), 2)
-        self.assertEquals(card.Rid(), 0)
+        self.assertEqual(card.Cid(), 2)
+        self.assertEqual(card.Rid(), 0)
         card.write_bdf(size, 'dummy')
         card.raw_fields()
 
     def test_cord1s_01(self):
         lines = ['cord1s,2,1,4,3']
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         card = BDFCard(card)
 
         size = 8
         card = CORD1S(card)
-        self.assertEquals(card.Cid(), 2)
-        self.assertEquals(card.Rid(), 0)
+        self.assertEqual(card.Cid(), 2)
+        self.assertEqual(card.Rid(), 0)
         card.write_bdf(size, 'dummy')
         card.raw_fields()
 
@@ -435,10 +434,10 @@ class TestCoords(unittest.TestCase):
             '           1.135 .089237   .9324']
 
         model = BDF(debug=False)
-        card = model.process_card(grid)
+        card = model._process_card(grid)
         model.add_card(card, card[0])
 
-        card = model.process_card(coord)
+        card = model._process_card(coord)
         model.add_card(card, card[0])
         model.cross_reference()
 
@@ -502,7 +501,7 @@ class TestCoords(unittest.TestCase):
         model = None
 
         Fxyz_local, Mxyz_local = TransformLoadWRT(Fxyz, Mxyz, cid0, cid_new,
-                                                  model, is_cid_int=False)
+                                                  model)
 
         r = array([Lx, Ly, Lz])
         F = array([0., -Fy, 0.])
@@ -528,7 +527,7 @@ class TestCoords(unittest.TestCase):
         model = None
 
         Fxyz_local, Mxyz_local = TransformLoadWRT(Fxyz, Mxyz, cid0, cid_new,
-                                                  model, is_cid_int=False)
+                                                  model)
         r = array([Lx, Ly, Lz])
         F = array([0., -Fy, 0.])
         M = cross(r, F)

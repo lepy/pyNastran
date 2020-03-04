@@ -1,4 +1,3 @@
-from __future__ import print_function
 from collections import Counter
 import unittest
 
@@ -17,7 +16,7 @@ class TestSets(unittest.TestCase):
     def test_set1_01(self):
         bdf = BDF(debug=False)
         lines = ['SET1,    1100,    100,     101']
-        card = bdf.process_card(lines)
+        card = bdf._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -104,7 +103,6 @@ class TestSets(unittest.TestCase):
         assert thru_count in [0, 1], fields
         str(set3a)
 
-
     def test_aset(self):
         """checks the ASET/ASET1 cards"""
         model = BDF(debug=False)
@@ -140,6 +138,10 @@ class TestSets(unittest.TestCase):
                                 comment='omit1')
         model._add_omit_object(omit1a)
         model._add_omit_object(omit1b)
+
+        nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for nid in nids:
+            model.add_grid(nid, [float(nid), 0., 0.])
 
         omit1a.validate()
         omit1b.validate()
@@ -383,6 +385,7 @@ class TestSets(unittest.TestCase):
         #model.validate()
         #seuseta.write_card()
         #save_load_deck(model)
+
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

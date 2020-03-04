@@ -1,15 +1,18 @@
 #pylint: disable=C0103,C0111,R0902
 """
-All ungrouped properties are defined in this file.  This includes:
- * PCOMPS (SolidProperty)
- * PLSOLID (SolidProperty)
- * PSOLID (SolidProperty)
+All solid properties are defined in this file.  This includes:
+ * PCOMPS
+ * PLSOLID
+ * PSOLID
+
+ All solid properties are Property objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+from __future__ import annotations
+from typing import Dict, Any, TYPE_CHECKING
 import numpy as np
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -17,17 +20,11 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     integer_string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
-
-class SolidProperty(Property):
-    def __init__(self):
-        Property.__init__(self)
-        self.mid_ref = None
-
-    def Rho(self):
-        return self.mid_ref.rho
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class PLSOLID(SolidProperty):
+class PLSOLID(Property):
     """
     Defines a fully nonlinear (i.e., large strain and large rotation)
     hyperelastic solid element.
@@ -44,6 +41,12 @@ class PLSOLID(SolidProperty):
     _field_map = {
         1: 'pid', 2:'mid', 3:'str',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid = 1
+        return PLSOLID(pid, mid, stress_strain='GRID', ge=0., comment='')
 
     def __init__(self, pid, mid, stress_strain='GRID', ge=0., comment=''):
         """
@@ -63,7 +66,7 @@ class PLSOLID(SolidProperty):
         comment : str; default=''
             a comment for the card
         """
-        SolidProperty.__init__(self)
+        Property.__init__(self)
         if stress_strain == 'GAUS':
             stress_strain = 'GAUSS'
 
@@ -123,7 +126,7 @@ class PLSOLID(SolidProperty):
         stress_strain = data[3]
         return PLSOLID(pid, mid, stress_strain, ge, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -132,17 +135,16 @@ class PLSOLID(SolidProperty):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by PLSOLID pid=%s' % self.pid
+        msg = ', which is required by PLSOLID pid=%s' % self.pid
         self.mid_ref = model.HyperelasticMaterial(self.mid, msg) # MATHP, MATHE
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 
     def Rho(self):
-        """
-        Returns the density
-        """
+        """Returns the density"""
         return self.mid_ref.rho
 
     def _verify(self, xref):
@@ -153,19 +155,31 @@ class PLSOLID(SolidProperty):
         fields = ['PLSOLID', self.pid, self.Mid(), stress_strain]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
 
-class PCOMPS(SolidProperty):
+class PCOMPS(Property):
     type = 'PCOMPS'
     _field_map = {
         #1: 'pid', 2:'mid', 3:'cordm', 4:'integ', 5:'stress',
         #6:'isop', 7:'fctn',
-    }
+    }  # type: Dict[int,str]
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        global_ply_ids = [1, 2]
+        mids = [10, 20]
+        thicknesses = [0.1, 0.2]
+        thetas = [30., 60.]
+        return PCOMPS(pid, global_ply_ids, mids, thicknesses, thetas,
+                      cordm=0, psdir=13, sb=None, nb=None, tref=0.0,
+                      ge=0.0, failure_theories=None,
+                      interlaminar_failure_theories=None, souts=None, comment='')
 
     def __init__(self, pid, global_ply_ids, mids, thicknesses, thetas,
                  cordm=0, psdir=13, sb=None, nb=None, tref=0.0, ge=0.0,
@@ -180,7 +194,7 @@ class PCOMPS(SolidProperty):
             interlaminar_failure_theories = [None] * nplies
         if souts is None:
             souts = ['NO'] * nplies
-        SolidProperty.__init__(self)
+        Property.__init__(self)
         self.pid = pid
         self.cordm = cordm
         self.psdir = psdir
@@ -279,21 +293,33 @@ class PCOMPS(SolidProperty):
     def Mids(self):
         return self.mids
 
-    def cross_reference(self, model):
-        msg = ' which is required by PSOLID pid=%s' % self.pid
+    def cross_reference(self, model: BDF) -> None:
+        msg = ', which is required by PSOLID pid=%s' % self.pid
         self.mids_ref = []
         for mid in self.mids:
             mid_ref = model.Material(mid, msg=msg)
             self.mids_ref.append(mid_ref)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        self.mids = self.material_ids
         self.mids_ref = None
+
+    @property
+    def material_ids(self):
+        if self.mids_ref is None:
+            return self.mids
+        mids = []
+        for mid_ref in self.mids_ref:
+            mids.append(mid_ref.mid)
+        return mids
 
     def raw_fields(self):
         fields = ['PCOMPS', self.pid, self.cordm, self.psdir, self.sb,
                   self.nb, self.tref, self.ge, None]
+        mids = self.material_ids
         for glply, mid, t, theta, ft, ift, sout in zip(self.global_ply_ids,
-                                                       self.mids, self.thicknesses, self.thetas,
+                                                       mids, self.thicknesses, self.thetas,
                                                        self.failure_theories,
                                                        self.interlaminar_failure_theories,
                                                        self.souts):
@@ -305,20 +331,22 @@ class PCOMPS(SolidProperty):
         #fctn = set_blank_if_default(self.fctn, 'SMECH')
         fields = ['PCOMPS', self.pid, self.cordm, self.psdir, self.sb,
                   self.nb, self.tref, self.ge, None]
+        mids = self.material_ids
         for glply, mid, t, theta, ft, ift, sout in zip(self.global_ply_ids,
-                                                       self.mids, self.thicknesses, self.thetas,
+                                                       mids, self.thicknesses, self.thetas,
                                                        self.failure_theories,
                                                        self.interlaminar_failure_theories,
                                                        self.souts):
             fields += [glply, mid, t, theta, ft, ift, sout, None]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         # this card has integers & strings, so it uses...
         return self.comment + print_card_8(card)
 
-class PSOLID(SolidProperty):
+
+class PSOLID(Property):
     """
     +--------+-----+-----+-------+-----+--------+---------+------+
     |    1   |  2  |  3  |   4   |  5  |    6   |    7    |   8  |
@@ -335,6 +363,13 @@ class PSOLID(SolidProperty):
         1: 'pid', 2:'mid', 3:'cordm', 4:'integ', 5:'stress',
         6:'isop', 7:'fctn',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid = 1
+        return PSOLID(pid, mid, cordm=0, integ=None, stress=None,
+                      isop=None, fctn='SMECH', comment='')
 
     def __init__(self, pid, mid, cordm=0, integ=None, stress=None, isop=None,
                  fctn='SMECH', comment=''):
@@ -367,7 +402,7 @@ class PSOLID(SolidProperty):
         comment : str; default=''
             a comment for the card
         """
-        SolidProperty.__init__(self)
+        Property.__init__(self)
         if comment:
             self.comment = comment
         #: Property ID
@@ -383,21 +418,111 @@ class PSOLID(SolidProperty):
         # 1-GAUSS
         # 2-TWO
         # 3-THREE
+        if integ == 0:
+            integ = 'BUBBLE'
+        elif integ == 1:
+            integ = 'GAUSS'
+        elif integ == 2:
+            integ = 'TWO'
+        elif integ == 3:
+            integ = 'THREE'
+
         self.integ = integ
 
         # blank/GRID
         # 1-GAUSS
+        if stress == 0:
+            stress = 'GRID'
+        elif stress == 1:
+            stress = 'GAUSS'
         self.stress = stress
 
         # note that None is supposed to vary depending on element type
         # 0-REDUCED
         # 1-FULL
+        if isop == 0:
+            isop = 'REDUCED'
+        elif isop == 1:
+            isop = 'FULL'
+        elif isop == 2:
+            pass
         self.isop = isop
 
         # PFLUID
         # SMECH
+        if fctn == 'SMEC':
+            fctn = 'SMECH'
+        elif fctn == 'PFLU':
+            fctn = 'PFLUID'
         self.fctn = fctn
         self.mid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, pids):
+        """exports the properties in a vectorized way"""
+        encoding = model._encoding
+        #comments = []
+        mid = []
+        cordm = []
+        integ = []
+        stress = []
+        isop = []
+        fctn = []
+        assert len(pids) > 0, pids
+        for pid in pids:
+            prop = model.properties[pid]
+            #comments.append(prop.comment)
+            mid.append(prop.mid)
+            cordm.append(prop.cordm)
+            if prop.integ is None:
+                integ.append(b'')
+            elif prop.integ == 0:
+                integ.append(b'BUBBLE')
+            elif prop.integ == 1:
+                integ.append(b'GAUSS')
+            elif prop.integ == 2:
+                integ.append(b'TWO')
+            elif prop.integ == 3:
+                integ.append(b'THREE')
+            else:
+                #0, 'BUBBLE'
+                #1, 'GAUSS'
+                #2, 'TWO'
+                #3, 'THREE'
+                #REDUCED
+                #FULL
+                integ.append(prop.integ.encode(encoding))
+
+            if prop.stress is None:
+                stress.append(b'')
+            elif prop.stress == 1:
+                stress.append(b'GAUSS')
+            else:
+                # None/GRID, 1-GAUSS
+                stress.append(prop.stress.encode(encoding))
+
+            if prop.isop is None:
+                isop.append(b'')
+            elif prop.isop == 0:
+                isop.append(b'REDUCED')
+            elif prop.isop == 1:
+                isop.append(b'FULL')
+            elif prop.isop == 2:
+                isop.append('2')
+            else:
+                isop.append(prop.isop.encode(encoding))
+
+            # 'SMECH'
+            fctn.append(prop.fctn.encode(encoding))
+        #fctn = np.array(fctn, dtype='<8U')
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('mid', data=mid)
+        h5_file.create_dataset('cordm', data=cordm)
+        h5_file.create_dataset('integ', data=integ)
+        h5_file.create_dataset('stress', data=stress)
+        h5_file.create_dataset('isop', data=isop)
+        h5_file.create_dataset('fctn', data=fctn)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -442,23 +567,50 @@ class PSOLID(SolidProperty):
         isop = data[5]
         fctn = data[6].decode('latin1')
 
+        #integ : int; default=None
+        #None-varies depending on element type
+        #0, 'BUBBLE'
+        #1, 'GAUSS'
+        #2, 'TWO'
+        #3, 'THREE'
+        #REDUCED
+        #FULL
+
+        # stress : int, string, or blank
+        #    blank/GRID
+        #    1-GAUSS
+        if stress == 0:
+            stress = 'GRID'
+        elif stress == 1:
+            stress = 'GAUSS'
+        else:  # pragma: no cover
+            raise NotImplementedError('stress=%s and must be [0, 1]' % stress)
+
+        if isop == 0:
+            isop = 'REDUCED'
+        elif isop == 1:
+            isop = 'FULL'
+        elif isop == 2:
+            pass
+        else:  # pragma: no cover
+            raise NotImplementedError('isop=%s and must be [0, 1, 2]' % isop)
+
         if fctn == 'SMEC':
             fctn = 'SMECH'
         elif fctn == 'PFLU':
             fctn = 'PFLUID'
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError('PSOLID; fctn=%r' % fctn)
         return PSOLID(pid, mid, cordm, integ, stress, isop,
                       fctn, comment=comment)
 
-    def cross_reference(self, model):
-        # type: (Any) -> None
+    def cross_reference(self, model: BDF) -> None:
         """cross reference method for a PSOLID"""
-        msg = ' which is required by PSOLID pid=%s' % (self.pid)
+        msg = ', which is required by PSOLID pid=%s' % (self.pid)
         self.mid_ref = model.Material(self.mid, msg)
 
-    def uncross_reference(self):
-        # type: () -> None
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 
@@ -503,7 +655,7 @@ class PSOLID(SolidProperty):
                   self.stress, self.isop, fctn]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         # this card has integers & strings, so it uses...
         return self.comment + print_card_8(card)

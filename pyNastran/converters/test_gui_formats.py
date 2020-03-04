@@ -1,6 +1,7 @@
 import unittest
 
 from pyNastran.converters.nastran.test_nastran_gui import TestNastranGUI
+from pyNastran.converters.avl.test_avl_gui import TestAvlGUI
 from pyNastran.converters.abaqus.test_abaqus_gui import TestAbaqusGui
 from pyNastran.converters.cart3d.test_cart3d_gui import TestCart3dGUI
 from pyNastran.converters.fast.test_fast_gui import TestFastGUI
@@ -30,5 +31,10 @@ from pyNastran.converters.dev.obj.test_obj import TestObjGUI
 #except ImportError:
     #pass
 
-if __name__ == '__main__':
+try:
+    from pyNastran.converters.dev.vrml.test_vrml_gui import TestVrmlGui
+except ImportError:  # pragma: no cover
+    pass
+
+if __name__ == '__main__':  # pragma: no cover
     unittest.main()

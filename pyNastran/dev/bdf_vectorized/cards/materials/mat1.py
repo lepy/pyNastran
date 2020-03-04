@@ -1,7 +1,4 @@
-from __future__ import print_function
-from six.moves import zip
 import numpy as np
-#from numpy import zeros, where, arange, searchsorted
 
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
@@ -210,7 +207,7 @@ class MAT1(Material):
 
             for (mid, E, G, nu, rho, a, tref, ge, st, sc, ss, mcsid) in zip(
                     self.material_id[i], self.E[i], self.G[i], self.nu[i], Rho, A,
-                    TRef, ge, St, Sc, Ss, self.mcsid[i]):
+                    tref, ge, St, Sc, Ss, self.mcsid[i]):
                 if mid in self._comments:
                     bdf_file.write(self._comments[mid])
 

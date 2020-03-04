@@ -1,5 +1,3 @@
-from __future__ import print_function
-from six.moves import zip
 from numpy import arange, searchsorted, array
 from numpy.linalg import norm  # type: ignore
 
@@ -19,7 +17,8 @@ class CPYRAM13(SolidElement):
         Parameters
         ----------
         model : BDF
-           the BDF object
+            the BDF
+
         """
         SolidElement.__init__(self, model)
 

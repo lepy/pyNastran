@@ -1,11 +1,10 @@
-from __future__ import print_function
 import unittest
-from six import StringIO
+from io import StringIO
 
 from pyNastran.bdf.bdf import read_bdf, BDF, CHBDYG, CaseControlDeck
 from pyNastran.bdf.cards.test.utils import save_load_deck
 from pyNastran.bdf.mesh_utils.mirror_mesh import write_bdf_symmetric
-from pyNastran.utils.log import SimpleLogger
+from cpylog import SimpleLogger
 
 class TestThermal(unittest.TestCase):
     def test_thermal_1(self):
@@ -32,7 +31,7 @@ class TestThermal(unittest.TestCase):
         mid = 1
         nodes = [11, 12, 13, 14]
         model.add_cquad4(eid, pid, nodes, theta_mcid=0.0, zoffset=0.,
-                         tflag=0,  T1=1.0, T2=1.0, T3=1.0, T4=1.0, comment='')
+                         tflag=0, T1=1.0, T2=1.0, T3=1.0, T4=1.0, comment='')
         model.add_pshell(pid, mid1=1, t=0.1)
 
         eid = 10
@@ -49,7 +48,7 @@ class TestThermal(unittest.TestCase):
         eid = 2
         Type = 'AREA3'
         chbdyg = CHBDYG(eid, Type, nodes,
-                        iview_front=0, ivew_back=0,
+                        iview_front=0, iview_back=0,
                         rad_mid_front=0, rad_mid_back=0,
                         comment='chbdyg')
         with self.assertRaises(ValueError):
@@ -57,16 +56,16 @@ class TestThermal(unittest.TestCase):
 
         Type = 'AREA4'
         chbdyg = model.add_chbdyg(eid, Type, nodes,
-                         iview_front=0, ivew_back=0,
-                         rad_mid_front=0, rad_mid_back=0,
-                         comment='chbdyg')
+                                  iview_front=0, iview_back=0,
+                                  rad_mid_front=0, rad_mid_back=0,
+                                  comment='chbdyg')
         chbdyg.raw_fields()
 
         eid = 3
         eid2 = 4
         side = 1
         chbdye = model.add_chbdye(eid, eid2, side,
-                                  iview_front=0, ivew_back=0,
+                                  iview_front=0, iview_back=0,
                                   rad_mid_front=0, rad_mid_back=0,
                                   comment='chbdye')
         chbdye.raw_fields()
@@ -75,10 +74,12 @@ class TestThermal(unittest.TestCase):
         g1 = 11
         g2 = 12
         pid = 10
+        # fails on AREA4 because op2 doesn't support it
+        Type = 'LINE'
         chbdyp = model.add_chbdyp(
             eid, pid, Type, g1, g2,
             g0=0, gmid=None, ce=0,
-            iview_front=0, ivew_back=0,
+            iview_front=0, iview_back=0,
             rad_mid_front=0, rad_mid_back=0,
             e1=None, e2=None, e3=None,
             comment='chbdyp')
@@ -96,9 +97,9 @@ class TestThermal(unittest.TestCase):
                               comment='conv')
         conv.raw_fields()
         pconv = model.add_pconv(pconid, mid, form=0, expf=0.0, ftype=0,
-                               tid=None, chlen=None, gidin=None,
-                               ce=0, e1=None, e2=None, e3=None,
-                               comment='pconv')
+                                tid=None, chlen=None, gidin=None,
+                                ce=0, e1=None, e2=None, e3=None,
+                                comment='pconv')
         pconv.raw_fields()
 
         pconid = 12
@@ -108,7 +109,7 @@ class TestThermal(unittest.TestCase):
         coef = 0.023
         pconvm = model.add_pconvm(pconid, mid, coef, form=0, flag=0, expr=0.0,
                                   exppi=0.0, exppo=0.0, comment='pconvm')
-        pconv.raw_fields()
+        pconvm.raw_fields()
 
         radmid = 42
         absorb = 0.2
@@ -134,8 +135,8 @@ class TestThermal(unittest.TestCase):
         t_source = 19.
         eids = [2]
         qvect = model.add_qvect(sid, q0, eids, t_source, ce=0,
-                               vector_tableds=None, control_id=0,
-                               comment='qvect')
+                                vector_tableds=None, control_id=0,
+                                comment='qvect')
         qvect.raw_fields()
 
         q0 = 15.8
@@ -162,6 +163,10 @@ class TestThermal(unittest.TestCase):
 
         temperature = 13.3
         model.add_tempd(sid, temperature, comment='tempd')
+
+        fields = ['TEMPD', 101, 1., 102, 2., 103, 3., 104, 4.]
+        model.add_card(fields, 'TEMPD')
+
 
         temperatures = {
             15 : 37.,
@@ -203,7 +208,85 @@ class TestThermal(unittest.TestCase):
         bdf_filename2.seek(0)
         model2 = read_bdf(bdf_filename2, xref=False, log=log, debug=False)
         model2.safe_cross_reference()
-        save_load_deck(model, punch=False, run_convert=False)
+        save_load_deck(model, punch=False, run_renumber=False, run_test_bdf=False)
+
+    def test_thermal_2(self):
+        """tests TABLEHT, TABLEH1"""
+        model = BDF(debug=False, log=None, mode='msc')
+        tid = 101
+        x = [1., 2., 3.]
+        y = [10., 20., 30.]
+        model.add_tableh1(tid, x, y, comment='tableh1')
+
+        tid = 101
+        model.add_tableh1(tid, x, y, comment='tableh1')
+
+        tid = 110
+        tableh1 = model.add_tableh1(tid, x, y, comment='tableh1')
+        tableh1.raw_fields()
+
+        tid_tableht = 85
+        x = [10., 25., 40.]
+        y = [101, 102, 110]
+
+        #This table is referenced only by PCONV entries that define
+        #free convection boundary condition properties.
+        tableht = model.add_tableht(tid_tableht, x, y, comment='tableht')
+        tableht.raw_fields()
+
+        pconv_id = 100
+        mid = None
+        pconv = model.add_pconv(pconv_id, mid, form=0, expf=0.0, ftype=0,
+                                tid=tid_tableht, chlen=None, gidin=None,
+                                ce=0, e1=None, e2=None, e3=None, comment='pconv')
+        pconv.raw_fields()
+
+        # Every surface to which free convection is to be applied must
+        # reference a PCONV entry. PCONV is referenced on the CONV Bulk Data entry.
+        eid = 1
+        ta = 1
+        conv = model.add_conv(eid, pconv_id, ta, film_node=0, cntrlnd=0, comment='conv')
+        conv.raw_fields()
+
+        conv = model.add_conv(2, pconv_id, ta, film_node=0, cntrlnd=0, comment='conv')
+        conv = model.add_conv(3, pconv_id, ta, film_node=0, cntrlnd=0, comment='conv')
+
+        # CHBDYG, CHBDYE, or CHBDYP surface element identification number.
+        eid_fem = 1
+        eid_conv = 1
+        side = 3 # TODO: 1-6
+        chbdye = model.add_chbdye(eid_fem, eid_conv, side, iview_front=0, iview_back=0,
+                                  rad_mid_front=0, rad_mid_back=0, comment='chbdye')
+
+        eid_fem = 2
+        nodes = [1, 2, 3]
+        surface_type = 'AREA3'
+        chbdyg = model.add_chbdyg(eid_fem, surface_type, nodes,
+                                  iview_front=0, iview_back=0,
+                                  rad_mid_front=0, rad_mid_back=0, comment='chbdyg')
+
+        eid_fem = 3
+        pid_phybdy = 10
+        g1 = 1
+        g2 = None
+        surface_type = 'POINT'
+        chbdyp = model.add_chbdyp(eid_fem, pid_phybdy, surface_type, g1, g2,
+                                  g0=0, gmid=None, ce=0,
+                                  iview_front=0, iview_back=0,
+                                  rad_mid_front=0, rad_mid_back=0,
+                                  e1=None, e2=None, e3=None, comment='chbdyp')
+        phbdy = model.add_phbdy(pid_phybdy, af=None, d1=None, d2=None, comment='phbdy')
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [0., 1., 0.])
+
+        chbdye.raw_fields()
+        chbdyg.raw_fields()
+        chbdyp.raw_fields()
+
+        model.validate()
+        save_load_deck(model)
+
 
 
 if __name__ == '__main__':

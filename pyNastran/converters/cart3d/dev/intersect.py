@@ -1,4 +1,3 @@
-from __future__ import print_function
 from numpy import zeros, cross, dot, allclose, sign
 from numpy.linalg import norm
 
@@ -6,7 +5,7 @@ from pyNastran.converters.cart3d.cart3d_reader import Cart3D
 
 from scipy.spatial import KDTree
 
-class Intersect(object):
+class Intersect:
     def __init__(self, nodes, elements, regions):
         self.nodes = nodes
         self.elements = elements

@@ -1,4 +1,4 @@
-from __future__ import print_function
+"""tests remove_unused"""
 import os
 import unittest
 
@@ -10,7 +10,7 @@ from pyNastran.bdf.mesh_utils.remove_unused import remove_unused
 import pyNastran
 from pyNastran.bdf.bdf import BDF, read_bdf, CaseControlDeck, PARAM
 from pyNastran.bdf.mesh_utils.convert import convert, get_scale_factors
-from pyNastran.utils.log import SimpleLogger
+from cpylog import SimpleLogger
 
 pkg_path = pyNastran.__path__[0]
 
@@ -43,7 +43,7 @@ class TestRemoveUnused(unittest.TestCase):
         model.write_bdf(bdf_filename_out)
         os.remove(bdf_filename_out)
 
-    def _test_remove_bwb(self):
+    def test_remove_bwb(self):
         """removes unused data from the bwb model"""
         bdf_filename = os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero.bdf')
         bdf_filename_out = os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_modes.bdf')

@@ -11,14 +11,15 @@ All rigid elements are defined in this file.  This includes:
  * RSSCON
 
 All rigid elements are RigidElement and Element objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from itertools import count
-from six import string_types
-from six.moves import zip, range
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+import warnings
+from itertools import count
+from typing import TYPE_CHECKING
+import numpy as np
+
+from pyNastran.utils.numpy_utils import integer_types, float_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.cards.base_card import Element
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -27,10 +28,12 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     blank, string)
 from pyNastran.bdf.field_writer_16 import print_card_16
 # from pyNastran.bdf.cards.utils import build_table_lines
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class RigidElement(Element):
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
 class RROD(RigidElement):
@@ -47,6 +50,13 @@ class RROD(RigidElement):
     +------+-----+----+----+-----+-----+-------+
     """
     type = 'RROD'
+    _properties = ['dependent_nodes', 'independent_nodes']
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        nids = [1, 2]
+        return RROD(eid, nids, cma=None, cmb=None, alpha=0.0, comment='')
 
     def __init__(self, eid, nids, cma=None, cmb=None, alpha=0.0, comment=''):
         """
@@ -151,7 +161,7 @@ class RROD(RigidElement):
             return self.nodes[1]
         return self.nodes_ref[1].nid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -160,10 +170,22 @@ class RROD(RigidElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RROD eid=%s' % (self.eid)
+        msg = ', which is required by RROD eid=%s' % (self.eid)
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = [self.Ga(), self.Gb()]
         self.nodes_ref = None
 
@@ -192,7 +214,7 @@ class RROD(RigidElement):
                        self.cma, self.cmb, alpha]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -212,6 +234,17 @@ class RBAR(RigidElement):
     +------+-----+----+----+--------+-----+-----+-----+-------+
     """
     type = 'RBAR'
+    _properties = ['dependent_nodes', 'independent_nodes', 'nodes']
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        nids = [1, 2]
+        cna = '123'
+        cnb = '456'
+        cma = None
+        cmb = None
+        return RBAR(eid, nids, cna, cnb, cma, cmb, alpha=0., comment='')
 
     def __init__(self, eid, nids, cna, cnb, cma, cmb, alpha=0., comment=''):
         """
@@ -231,6 +264,7 @@ class RBAR(RigidElement):
             coefficient of thermal expansion
         comment : str; default=''
             a comment for the card
+
         """
         RigidElement.__init__(self)
         if comment:
@@ -238,16 +272,26 @@ class RBAR(RigidElement):
         self.eid = eid
         self.ga = nids[0]
         self.gb = nids[1]
-        if cna == '0':
-            cna = ''
-        if cnb == '0':
+
+        # If both CNA and CNB are blank, then CNA = 123456.
+        if (cna, cnb) == ('', ''):
+            cna = '123456'
+            #cnb = ''
+        elif (cna, cnb) == ('123456', '0'):
             cnb = ''
-        if cma == '0':
-            cma = ''
-        if cmb == '0':
-            cmb = ''
+
         self.cna = cna
         self.cnb = cnb
+
+        #  If both CMA and CMB are zero or blank, all of the degrees-of-freedom
+        #  not in CNA and CNB will be made dependent.
+        if (cma, cmb) == ('', ''):
+            for comp in '123456':
+                if comp not in cna:
+                    cma += comp
+                if comp not in cnb:
+                    cmb += comp
+
         self.cma = cma
         self.cmb = cmb
         self.alpha = alpha
@@ -256,20 +300,65 @@ class RBAR(RigidElement):
 
     def validate(self):
         ncna = len(self.cna)
+        ncma = len(self.cma)
+
         ncnb = len(self.cnb)
+        ncmb = len(self.cmb)
+
         nindependent = ncna + ncnb
+        ndependent = ncma + ncmb
         independent = self.cna + self.cnb
-        if nindependent != 6:
-            msg = 'nindependent=%s; cna=%s (%s) cnb=%s (%s)' % (
-                nindependent, self.cna, ncna, self.cnb, ncnb)
-            raise RuntimeError(msg)
+        dependent = self.cma + self.cmb
+
+        independent_a = set()
+        independent_b = set()
+        dependent_a = set()
+        dependent_b = set()
+        msg = ''
         for comp in '123456':
+            if comp in self.cna:
+                independent_a.add(comp)
+            if comp in self.cnb:
+                independent_b.add(comp)
+            if comp in self.cma:
+                if comp in independent_a:
+                    msg += 'dof=%s on node %s is both independent and dependent\n' % (self.ga)
+                dependent_a.add(comp)
+            if comp in self.cmb:
+                if comp in independent_b:
+                    msg += 'dof=%s on node %s is both independent and dependent\n' % (self.gb)
+                dependent_b.add(comp)
+        if msg:
+            raise RuntimeError(msg + str(self))
+
+        if 0:  # pragma: no cover
             msgi = ''
-            if comp not in independent:
-                msgi += '  comp=%s is not independent\n' % (comp)
-        if msgi:
-            msg = 'cna=%s cnb=%s\n%s' % (self.cna, self.cnb, msgi)
-            raise RuntimeError(msg)
+            msg1 = ''
+            if nindependent != 6:
+                msg1 = 'nindependent=%s; cna=%r (%s) cnb=%r (%s)\n' % (
+                    nindependent, self.cna, ncna, self.cnb, ncnb)
+                #raise RuntimeError(msg)
+            for comp in '123456':
+                if comp not in independent:
+                    msgi += '  comp=%s is not independent\n' % (comp)
+            if msgi:
+                msg1 += 'cna=%r cnb=%r\n%s' % (self.cna, self.cnb, msgi)
+
+            msgi2 = ''
+            msg2 = ''
+            if nindependent != 6:
+                msg = 'ndependent=%s; cma=%r (%s) cmb=%r (%s)\n' % (
+                    ndependent, self.cma, ncma, self.cmb, ncmb)
+                raise RuntimeError(msg)
+            for comp in '123456':
+                if comp not in dependent:
+                    msgi2 += '  comp=%s is not dependent\n' % (comp)
+            if msgi2:
+                msg2 = 'cma=%r cmb=%r\n%s' % (self.cma, self.cmb, msgi2)
+
+            msg = msg1 + msg2
+            if msg:
+                raise RuntimeError(msg + str(self))
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -337,13 +426,6 @@ class RBAR(RigidElement):
     #             card += [gm, cm, Ai]
     #     return card
 
-    #def write_code_aster(self):
-        #msg = ''
-        #msg += "BLOCAGE=AFFE_CHAR_MECA(  # RBAR\n"
-        #msg += "        MODELE=MODELE,\n"  # rigid element
-        #msg += "        \n"
-        #return msg
-
     def Ga(self):
         if self.ga_ref is not None:
             return self.ga_ref.nid
@@ -354,7 +436,11 @@ class RBAR(RigidElement):
             return self.gb_ref.nid
         return self.gb
 
-    def cross_reference(self, model):
+    @property
+    def nodes(self):
+        return [self.Ga(), self.Gb()]
+
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -363,11 +449,23 @@ class RBAR(RigidElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RBAR eid=%s' % (self.eid)
+        msg = ', which is required by RBAR eid=%s' % (self.eid)
         self.ga_ref = model.Node(self.Ga(), msg=msg)
         self.gb_ref = model.Node(self.Gb(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ga = self.Ga()
         self.gb = self.Gb()
         self.ga_ref = None
@@ -394,7 +492,7 @@ class RBAR(RigidElement):
                        self.cma, self.cmb, alpha]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -412,6 +510,15 @@ class RBAR1(RigidElement):
     +-------+-----+----+----+-----+-------+
     """
     type = 'RBAR1'
+
+    _properties = ['dependent_nodes', 'independent_nodes', 'nodes']
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        nids = [1, 2]
+        cb = '123'
+        return RBAR1(eid, nids, cb, alpha=0., comment='')
 
     def __init__(self, eid, nids, cb, alpha=0., comment=''):
         RigidElement.__init__(self)
@@ -484,7 +591,7 @@ class RBAR1(RigidElement):
         """gets the dependent node ids"""
         return [self.Gb()]
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -493,11 +600,23 @@ class RBAR1(RigidElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RBAR1 eid=%s' % (self.eid)
+        msg = ', which is required by RBAR1 eid=%s' % (self.eid)
         self.ga_ref = model.Node(self.Ga(), msg=msg)
         self.gb_ref = model.Node(self.Gb(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.ga = self.Ga()
         self.gb = self.Gb()
         self.ga_ref = None
@@ -512,7 +631,7 @@ class RBAR1(RigidElement):
         list_fields = ['RBAR1', self.eid, self.Ga(), self.Gb(), self.cb, alpha]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -540,6 +659,16 @@ class RBE1(RigidElement):  # maybe not done, needs testing
     +------+-----+-----+-----+-------+-----+-----+-----+
     """
     type = 'RBE1'
+    _properties = ['Gmi_node_ids', 'Gni_node_ids', 'dependent_nodes', 'independent_nodes']
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        Gni = [2]
+        Cni = ['2']
+        Gmi = [3]
+        Cmi = ['4']
+        return RBE1(eid, Gni, Cni, Gmi, Cmi, alpha=0., comment='')
 
     def __init__(self, eid, Gni, Cni, Gmi, Cmi, alpha=0., comment=''):
         """
@@ -593,7 +722,7 @@ class RBE1(RigidElement):  # maybe not done, needs testing
         if ium > 0:
             assert string(card, ium, 'UM') == 'UM', 'RBE1=%s must contain UM' % str(card)
 
-        #assert isinstance(card[-1], string_types), 'card[-1]=%r type=%s' %(card[-1], type(card[-1]))
+        #assert isinstance(card[-1], str), 'card[-1]=%r type=%s' %(card[-1], type(card[-1]))
         alpha_last = integer_double_or_string(card, -1, 'alpha_last')
         if isinstance(alpha_last, float):
             alpha = alpha_last
@@ -641,7 +770,7 @@ class RBE1(RigidElement):  # maybe not done, needs testing
             i += 2
         return RBE1(eid, Gni, Cni, Gmi, Cmi, alpha=alpha, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -650,11 +779,23 @@ class RBE1(RigidElement):  # maybe not done, needs testing
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RBE1 eid=%s' % (self.eid)
+        msg = ', which is required by RBE1 eid=%s' % (self.eid)
         self.Gni_ref = model.EmptyNodes(self.Gni, msg=msg)
         self.Gmi_ref = model.EmptyNodes(self.Gmi, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.Gni = self.Gni_node_ids
         self.Gmi = self.Gmi_node_ids
         self.Gni_ref = None
@@ -720,7 +861,7 @@ class RBE1(RigidElement):  # maybe not done, needs testing
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -739,6 +880,15 @@ class RBE2(RigidElement):
     """
     type = 'RBE2'
     _field_map = {1: 'eid', 2:'gn', 3:'cm'}
+    _properties = ['Gmi_node_ids', 'dependent_nodes', 'independent_nodes']
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        gn = 1
+        cm = '123'
+        Gmi = [2, 3]
+        return RBE2(eid, gn, cm, Gmi, alpha=0.0, comment='')
 
     def _update_field_helper(self, n, value):
         """
@@ -760,6 +910,24 @@ class RBE2(RigidElement):
         return value
 
     def __init__(self, eid, gn, cm, Gmi, alpha=0.0, comment=''):
+        """
+        Creates an RBE2 element
+
+        Parameters
+        ----------
+        eid : int
+            element id
+        gn : int
+           Identification number of grid point to which all six independent
+           degrees-of-freedom for the element are assigned.
+        cm : str
+            Component numbers of the dependent degrees-of-freedom in the
+            global coordinate system at grid points GMi.
+        Gmi : List[int]
+            dependent nodes
+        alpha : float; default=0.0
+            ???
+        """
         RigidElement.__init__(self)
         if comment:
             self.comment = comment
@@ -781,6 +949,8 @@ class RBE2(RigidElement):
         #: degrees-of-freedom are assigned. (Integer > 0)
         if isinstance(Gmi, integer_types):
             Gmi = [Gmi]
+        elif isinstance(Gmi, np.ndarray):
+            Gmi = Gmi.tolist()
         self.Gmi = Gmi
         #self.nodes_ref = None
         self.Gmi_ref = None
@@ -839,6 +1009,7 @@ class RBE2(RigidElement):
         #print("eid=%s gn=%s cm=%s Gmi=%s alpha=%s"
               #% (self.eid, self.gn, self.cm, self.Gmi, self.alpha))
         #raise NotImplementedError('RBE2 data...')
+        assert len(Gmi) > 0, Gmi
         return RBE2(eid, gn, cm, Gmi, alpha, comment=comment)
 
     def update(self, maps):
@@ -859,7 +1030,7 @@ class RBE2(RigidElement):
         assert self.cm is not None, 'cm=%s' % self.cm
         self.gn = self.gn
         self.cm = str(self.cm)
-        assert isinstance(self.alpha, float), 'alpha=%r type=%s' % (self.alpha, type(self.alpha))
+        assert isinstance(self.alpha, float_types), 'alpha=%r type=%s' % (self.alpha, type(self.alpha))
 
     def convert_to_mpc(self, mpc_id):
         """
@@ -904,32 +1075,7 @@ class RBE2(RigidElement):
         #rbe3 = ['RBE3', eid, ref_node, dof, wf, sDof] + rbe3_nodes
         #return rbe3
 
-    def write_code_aster(self):
-        """
-        Converts to a LIAISON SOLIDE for dofs 123456.
-        For other dof combinations, general MPC equations are written
-        """
-        msg = ''
-        msg += "BLOCAGE=AFFE_CHAR_MECA(  # RBE2 ID=%s\n" % (self.eid)
-        msg += "        MODELE=MODELE,\n"  # rigid element
-        if self.cm == 123456:
-            msg += "        LIASON_SOLIDE=(\n"
-            msg += "        _F(NOEUD=\n"
-            msg += "           "
-            for nid in self.Gmi:
-                msg += "'N%i'," % (nid)
-            msg = msg[:-1]
-            msg += '\n'
-        else:
-            msg += "        _F(NOEUD=  # doesnt handle coordinate systems\n"
-            msg += "           "
-            for nid in self.Gmi:
-                msg += "'N%i'," % (nid)
-            msg = msg[:-1]
-            msg += '\n'
-        return msg
-
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -938,11 +1084,11 @@ class RBE2(RigidElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RBE2 eid=%s' % (self.eid)
+        msg = ', which is required by RBE2 eid=%s' % (self.eid)
         self.Gmi_ref = model.EmptyNodes(self.Gmi, msg=msg)
         self.gn_ref = model.Node(self.Gn(), msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -951,11 +1097,12 @@ class RBE2(RigidElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RBE2 eid=%s' % (self.eid)
+        msg = ', which is required by RBE2 eid=%s' % (self.eid)
         self.Gmi_ref, unused_missing_nodes = model.safe_empty_nodes(self.Gmi, msg=msg)
         self.gn_ref = model.Node(self.Gn(), msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.Gmi = self.Gmi_node_ids
         self.gn = self.Gn()
         self.Gmi_ref = None
@@ -971,7 +1118,10 @@ class RBE2(RigidElement):
         if self.Gmi_ref is None or len(self.Gmi) == 0:
             return self.Gmi
         assert self.Gmi_ref is not None, self.Gmi
-        return self._node_ids(nodes=self.Gmi_ref, allow_empty_nodes=True)
+
+        # this lets us remove duplicate nodes when we xref
+        non_unique_gmi_node_ids = self._node_ids(nodes=self.Gmi_ref, allow_empty_nodes=True)
+        return np.unique(non_unique_gmi_node_ids).tolist()
 
     @property
     def independent_nodes(self):
@@ -993,7 +1143,7 @@ class RBE2(RigidElement):
         list_fields = ['RBE2', self.eid, self.Gn(), self.cm] + self.Gmi_node_ids + [alpha]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
@@ -1011,18 +1161,31 @@ class RBE3(RigidElement):
     +======+=========+=========+=========+======+========+========+======+========+
     | RBE3 |   EID   |         | REFGRID | REFC |  WT1   |   C1   | G1,1 |  G1,2  |
     +------+---------+---------+---------+------+--------+--------+------+--------+
-    |      |   G1,3  |   WT2   |   C2    | G2,1 |  G2,2  | -etc.- | WT3  |   C3   |
+    |      |   G1,3  |   WT2   |   C2    | G2,1 |  G2,2  |  etc.  | WT3  |   C3   |
     +------+---------+---------+---------+------+--------+--------+------+--------+
-    |      |   G3,1  |   G3,2  | -etc.-  | WT4  |  C4    |  G4,1  | G4,2 | -etc.- |
+    |      |   G3,1  |   G3,2  |  etc.   | WT4  |  C4    |  G4,1  | G4,2 |  etc.  |
     +------+---------+---------+---------+------+--------+--------+------+--------+
     |      |   'UM'  |   GM1   |   CM1   | GM2  |  CM2   |  GM3   | CM3  |        |
     +------+---------+---------+---------+------+--------+--------+------+--------+
-    |      |   GM4   |   CM4   |   GM5   | CM5  | -etc.- |        |      |        |
+    |      |   GM4   |   CM4   |   GM5   | CM5  |  etc.  |        |      |        |
     +------+---------+---------+---------+------+--------+--------+------+--------+
     |      | 'ALPHA' |   ALPHA |         |      |        |        |      |        |
     +------+---------+---------+---------+------+--------+--------+------+--------+
     """
     type = 'RBE3'
+    _properties = ['wt_cg_groups', 'ref_grid_id', 'Gijs_node_ids',
+                   'dependent_nodes', 'independent_nodes']
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        refgrid = 1
+        refc = '123'
+        weights = [1.]
+        comps = ['1']
+        Gijs = [2]
+        return RBE3(eid, refgrid, refc, weights, comps, Gijs,
+                    Gmi=None, Cmi=None, alpha=0.0, comment='')
 
     def __init__(self, eid, refgrid, refc, weights, comps, Gijs,
                  Gmi=None, Cmi=None, alpha=0.0, comment=''):
@@ -1035,29 +1198,23 @@ class RBE3(RigidElement):
             element id
         refgrid : int
             dependent node
-        refc - str
+        refc : str
             dependent components for refgrid???
-
-        Independent Set
-        ---------------
-          GiJs : List[int, ..., int]
-              independent nodes
-          comps : List[str, ..., str]
-              independent components
-          weights : List[float, ..., float]
-              weights for the importance of the DOF
-
-        Dependent / UM Set
-        ------------------
-          Gmi : List[int, ..., int]; default=None -> []
-              dependent nodes
-          Cmi : List[str, ..., str]; default=None -> []
-              dependent components
-
+        GiJs : List[int, ..., int]
+            independent nodes
+        comps : List[str, ..., str]
+            independent components
+        weights : List[float, ..., float]
+            weights for the importance of the DOF
+        Gmi : List[int, ..., int]; default=None -> []
+            dependent nodes / UM Set
+        Cmi : List[str, ..., str]; default=None -> []
+            dependent components / UM Set
         alpha : float; default=0.0
             thermal expansion coefficient
         comment : str; default=''
             a comment for the card
+
         """
         RigidElement.__init__(self)
         if comment:
@@ -1119,7 +1276,7 @@ class RBE3(RigidElement):
         refgrid = integer(card, 3, 'refgrid')
         refc = components_or_blank(card, 4, 'refc')
 
-        fields = [field.upper() if isinstance(field, string_types) else field for field in card[5:]]
+        fields = [field.upper() if isinstance(field, str) else field for field in card[5:]]
         ioffset = 5
         iwt_max = len(fields) + ioffset
         try:
@@ -1268,7 +1425,7 @@ class RBE3(RigidElement):
             Gijs.append(gijs)
         return Gijs
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1277,7 +1434,7 @@ class RBE3(RigidElement):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by RBE3 eid=%s' % (self.eid)
+        msg = ', which is required by RBE3 eid=%s' % (self.eid)
         assert self.Gmi is not None
         self.Gmi_ref = model.EmptyNodes(self.Gmi, msg=msg)
 
@@ -1289,7 +1446,7 @@ class RBE3(RigidElement):
             self.Gijs_ref.append(model.EmptyNodes(Gij, msg=msg))
 
     def safe_cross_reference(self, model, debug=True):
-        msg = ' which is required by RBE3 eid=%s' % (self.eid)
+        msg = ', which is required by RBE3 eid=%s' % (self.eid)
         assert self.Gmi is not None
         self.Gmi_ref, unused_missing_nodes = model.safe_empty_nodes(self.Gmi, msg=msg)
 
@@ -1303,7 +1460,8 @@ class RBE3(RigidElement):
                 model.log.warning(msgi)
             self.Gijs_ref.append(nodes)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.Gijs = self.Gijs_node_ids
         self.Gmi = self.Gmi_node_ids
         self.refgrid = self.ref_grid_id
@@ -1364,24 +1522,35 @@ class RBE3(RigidElement):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
 
 class RSPLINE(RigidElement):
     type = 'RSPLINE'
+    _properties = ['dependent_nodes', 'independent_nodes']
     """
-    Defines multipoint constraints for the interpolation of displacements at grid points.
+    Defines multipoint constraints for the interpolation of displacements
+    at grid points.
 
     +---------+-----+-----+----+----+--------+----+----+----+
     |    1    |  2  |  3  |  4 |  5 |    6   |  7 |  8 |  9 |
     +=========+=====+=====+====+====+========+====+====+====+
     | RSPLINE | EID | D/L | G1 | G2 |   C2   | G3 | C3 | G4 |
     +---------+-----+-----+----+----+--------+----+----+----+
-    |         |  C4 |  G5 | C5 | G6 | -etc.- |    |    |    |
+    |         |  C4 |  G5 | C5 | G6 |  etc.  |    |    |    |
     +---------+-----+-----+----+----+--------+----+----+----+
     """
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        independent_nid = 2
+        dependent_nids = [3, 4]
+        dependent_components = ['4', '5']
+        return RSPLINE(eid, independent_nid, dependent_nids, dependent_components,
+                       diameter_ratio=0.1, comment='')
+
     def __init__(self, eid, independent_nid, dependent_nids, dependent_components,
                  diameter_ratio=0.1, comment=''):
         """
@@ -1435,7 +1604,12 @@ class RSPLINE(RigidElement):
         eid = integer(card, 1, 'eid')
         diameter_ratio = double_or_blank(card, 2, 'diameter_ratio', 0.1)
         nfields = len(card)
-        assert nfields % 2 == 1, 'nfields=%s card=%s'  % (nfields, card)
+        #assert (nfields) % 2 == 1, 'nfields=%s card=%s'  % (nfields, card)
+        #assert (nfields - 4) % 2 == 0, 'nfields=%s card=%s'  % (nfields, card)
+
+        # blanks are allowed
+        if (nfields - 4) % 2 != 0:
+            nfields += 1
 
         dependent_nids = []
         dependent_components = []
@@ -1443,14 +1617,14 @@ class RSPLINE(RigidElement):
         j = 2
         for i in range(4, nfields, 2):
             nid = integer(card, i, 'nid_%s' % j)
-            comp = components_or_blank(card, i+1, 'components_%i' % j)
+            comp = components_or_blank(card, i+1, 'components_%i' % j, default='')
             dependent_nids.append(nid)
             dependent_components.append(comp)
             j += 1
         return RSPLINE(eid, independent_nid, dependent_nids, dependent_components,
                        diameter_ratio=diameter_ratio, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1460,41 +1634,40 @@ class RSPLINE(RigidElement):
             the BDF object
         """
         return
-        #msg = ' which is required by RSPLINE eid=%s' % (self.eid)
+        #msg = ', which is required by RSPLINE eid=%s' % (self.eid)
         #self.Gni = model.EmptyNodes(self.Gni, msg=msg)
         #self.Gmi = model.EmptyNodes(self.Gmi, msg=msg)
         #self.Gni_ref = self.Gni
         #self.Gmi_ref = self.Gmi
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
         #self.Gni = self.Gni_node_ids
         #self.Gmi = self.Gmi_node_ids
         #del self.Gni_ref, self.Gmi_ref
 
-    #@property
-    #def Gni_node_ids(self):
-        #if len(self.Gni) == 0:
-            #return []
-        #return self._node_ids(nodes=self.Gni, allow_empty_nodes=True)
-
-    #@property
-    #def Gmi_node_ids(self):
-        #if len(self.Gmi) == 0:
-            #return []
-        #return self._node_ids(nodes=self.Gmi, allow_empty_nodes=True)
-
     @property
     def independent_nodes(self):
         """gets the independent node ids"""
+        # TODO: not quite right as it doesn't support blank entries
         return [self.independent_nid]
-        #return self.Gni_node_ids
 
     @property
     def dependent_nodes(self):
         """gets the dependent node ids"""
-        #nodes = self.Gmi_node_ids
-        #return nodes
+        # TODO: not quite right as it doesn't support blank entries
         return self.dependent_nids
 
     def raw_fields(self):
@@ -1506,7 +1679,7 @@ class RSPLINE(RigidElement):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1530,7 +1703,18 @@ class RSSCON(RigidElement):
     +--------+------+------+-----+-----+-----+-----+-----+-----+
     | RSSCON |  115 | ELEM | 311 | 741 |     |     |     |     |
     +--------+------+------+-----+-----+-----+-----+-----+-----+
+    | RSSCON |  116 | INTC |  2  |  1  |  3  |     |     |     |
+    +--------+------+------+-----+-----+-----+-----+-----+-----+
     """
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        rigid_type = 'GRID'
+        return RSSCON(eid, rigid_type,
+                      shell_eid=None, solid_eid=None, a_solid_grids=None,
+                      b_solid_grids=None, shell_grids=None, comment='')
+
     def __init__(self, eid, rigid_type,
                  shell_eid=None, solid_eid=None,
                  a_solid_grids=None, b_solid_grids=None, shell_grids=None,
@@ -1571,7 +1755,14 @@ class RSSCON(RigidElement):
             self.a_solid_grids = a_solid_grids
             self.b_solid_grids = b_solid_grids
             self.shell_grids = shell_grids
+        elif rigid_type == 'INTC':
+            self.shell_eid = None
+            self.solid_eid = None
+            self.shell_grids = shell_grids
+            self.a_solid_grids = None
+            self.b_solid_grids = None
         else:
+            #| RSSCON |  116 | INTC |  2  |  1  |  3  |     |     |     |
             raise RuntimeError('rigid_type=%s and must be [ELEM, GRID]' % rigid_type)
         self.shell_eid_ref = None
         self.solid_eid_ref = None
@@ -1598,6 +1789,7 @@ class RSSCON(RigidElement):
             # ES1, EA1
             shell_eid = integer(card, 3, 'shell_eid')  # ES1
             solid_eid = integer(card, 4, 'solid_eid')  # EA1
+            assert len(card) == 5, card
         elif rigid_type == 'GRID':
             shell_eid = None
             solid_eid = None
@@ -1609,8 +1801,20 @@ class RSSCON(RigidElement):
             shell_grids.append(integer_or_blank(card, 6, 'shell_nid_2'))  # ES2
             a_solid_grids.append(integer_or_blank(card, 7, 'a_solid_grid_2'))  # EA2
             b_solid_grids.append(integer_or_blank(card, 8, 'b_solid_grid_2'))  # EA2
+            assert len(card) <= 9, card
+        elif  rigid_type == 'INTC':
+            shell_eid = None
+            solid_eid = None
+            shell_grids = [
+                integer(card, 3, 'RSSCON INTC field 3'),
+                integer(card, 4, 'RSSCON INTC field 4'),
+                integer(card, 5, 'RSSCON INTC field 5'),
+            ]
+            a_solid_grids = None
+            b_solid_grids = None
+            assert len(card) == 6, card
         else:
-            msg = 'RSSCON; eid=%s rigid_type=%s and must be [ELEM, GRID]' % (eid, rigid_type)
+            msg = 'RSSCON; eid=%s rigid_type=%s and must be [ELEM, GRID, INTC]' % (eid, rigid_type)
             raise RuntimeError(msg)
         return RSSCON(eid, rigid_type,
                       shell_eid=shell_eid, solid_eid=solid_eid,
@@ -1618,7 +1822,7 @@ class RSSCON(RigidElement):
                       shell_grids=shell_grids,
                       comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1627,10 +1831,21 @@ class RSSCON(RigidElement):
         model : BDF()
             the BDF object
         """
-        unused_msg = ' which is required by RSSCON eid=%s' % (self.eid)
+        unused_msg = ', which is required by RSSCON eid=%s' % (self.eid)
         #if self.rigid_type == 'ELEM':
             #self.shell_eid_ref = model.Element(self.shell_eid, msg=msg)
             #self.solid_eid_ref = model.Element(self.shell_eid, msg=msg)
+
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
 
     def EidShell(self):
         if self.shell_eid_ref is not None:
@@ -1642,7 +1857,8 @@ class RSSCON(RigidElement):
             return self.solid_eid_ref.eid
         return self.solid_eid
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.shell_eid = self.EidShell()
         self.solid_eid = self.EidSolid()
         self.shell_eid_ref = None
@@ -1673,7 +1889,7 @@ class RSSCON(RigidElement):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

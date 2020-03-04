@@ -8,26 +8,30 @@ All damper properties are defined in this file.  This includes:
  *   PVISC
 
 All damper properties are DamperProperty and Property objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class DamperProperty(Property):
     def __init__(self):
         Property.__init__(self)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
 
@@ -50,6 +54,13 @@ class PDAMP(DamperProperty):
         3 : 'b',
         'B1' : 'b',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        b = 1.
+        return PDAMP(pid, b, comment='')
+
     def __init__(self, pid, b, comment=''):
         DamperProperty.__init__(self)
         if comment:
@@ -113,7 +124,7 @@ class PDAMP(DamperProperty):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -126,10 +137,18 @@ class PDAMP5(DamperProperty):
         1: 'pid', 2:'mid', 3:'b',
     }
 
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid = 2
+        b = 1.
+        return PDAMP5(pid, mid, b, comment='')
+
     def __init__(self, pid, mid, b, comment=''):
         """
         Defines the damping multiplier and references the material properties
         for damping. CDAMP5 is intended for heat transfer analysis only.
+
         """
         DamperProperty.__init__(self)
         if comment:
@@ -155,6 +174,7 @@ class PDAMP5(DamperProperty):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         pid = integer(card, 1, 'pid')
         mid = integer(card, 2, 'mid')
@@ -173,6 +193,7 @@ class PDAMP5(DamperProperty):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         pid = data[0]
         mid = data[1]
@@ -185,7 +206,7 @@ class PDAMP5(DamperProperty):
         assert isinstance(pid, integer_types), 'pid=%r\n%s' % (pid, str(self))
         #assert isinstance(b, float), 'b=%r\n%s' % (b, str(self))
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -193,10 +214,12 @@ class PDAMP5(DamperProperty):
         ----------
         model : BDF()
             the BDF object
+
         """
         self.mid_ref = model.Material(self.mid)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.mid = self.Mid()
         self.mid_ref = None
 
@@ -212,7 +235,7 @@ class PDAMP5(DamperProperty):
         list_fields = ['PDAMP5', self.pid, self.Mid(), self.b]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -229,6 +252,12 @@ class PDAMPT(DamperProperty):
         #3 : 'b',
         #'B1' : 'b',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        tbid = 2
+        return PDAMPT(pid, tbid, comment='')
 
     def __init__(self, pid, tbid, comment=''):
         DamperProperty.__init__(self)
@@ -252,6 +281,7 @@ class PDAMPT(DamperProperty):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         pid = integer(card, 1, 'pid')
         tbid = integer_or_blank(card, 2, 'tbid', 0)
@@ -269,6 +299,7 @@ class PDAMPT(DamperProperty):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         pid = data[0]
         tbid = data[1]
@@ -278,7 +309,7 @@ class PDAMPT(DamperProperty):
         pid = self.Pid()
         assert isinstance(pid, integer_types), 'pid=%r' % pid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -286,10 +317,12 @@ class PDAMPT(DamperProperty):
         ----------
         model : BDF()
             the BDF object
+
         """
         self.tbid_ref = model.TableD(self.tbid)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.tbid = self.Tbid()
         self.tbid_ref = None
 
@@ -307,7 +340,7 @@ class PDAMPT(DamperProperty):
         list_fields = ['PDAMPT', self.pid, self.Tbid()]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -334,6 +367,13 @@ class PVISC(DamperProperty):
     pname_fid_map = {
         'CE1' : 'ce',
     }
+
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        ce = 1.
+        cr = 1.
+        return PVISC(pid, ce, cr, comment='')
 
     def __init__(self, pid, ce, cr, comment=''):
         """
@@ -393,10 +433,11 @@ class PVISC(DamperProperty):
         cr = data[2]
         return PVISC(pid, ce, cr, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def _verify(self, xref):
@@ -412,7 +453,7 @@ class PVISC(DamperProperty):
         list_fields = ['PVISC', self.pid, self.ce, cr]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)

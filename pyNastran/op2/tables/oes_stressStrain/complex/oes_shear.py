@@ -1,16 +1,11 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+from typing import List
 import numpy as np
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
+from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_imag_floats_13e
-
-ints = (int, np.int32)
 
 
 class ComplexShearArray(OES_Object):
@@ -35,12 +30,16 @@ class ComplexShearArray(OES_Object):
             raise NotImplementedError('SORT2')
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
+
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
 
     def _reset_indices(self):
         self.itotal = 0
@@ -51,13 +50,10 @@ class ComplexShearArray(OES_Object):
 
     def build(self):
         """sizes the vectorized attributes of the ComplexShearArray"""
-        #print('data_code = %s' % self.data_code)
         if not hasattr(self, 'subtitle'):
             self.subtitle = self.data_code['subtitle']
         #print('ntimes=%s nelements=%s ntotal=%s subtitle=%s' % (
             #self.ntimes, self.nelements, self.ntotal, self.subtitle))
-        if self.is_built:
-            return
         nnodes = 1
 
         #self.names = []
@@ -72,10 +68,11 @@ class ComplexShearArray(OES_Object):
         #print('ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        self._times = np.zeros(self.ntimes, 'float32')
+        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
+        self._times = np.zeros(self.ntimes, dtype=dtype)
         #self.ntotal = self.nelements * nnodes
 
-        self.element = np.zeros(self.nelements, 'int32')
+        self.element = np.zeros(self.nelements, dtype=idtype)
 
         # the number is messed up because of the offset for the element's properties
         if self.nelements != self.ntotal:
@@ -85,17 +82,24 @@ class ComplexShearArray(OES_Object):
             raise RuntimeError(msg)
 
         # [max_shear, avg_shear]
-        self.data = np.zeros((self.ntimes, self.ntotal, 2), 'complex64')
+        self.data = np.zeros((self.ntimes, self.ntotal, 2), dtype=cfdtype)
 
     def build_dataframe(self):
-        headers = self.headers
+        """creates a pandas dataframe"""
+        #Mode                                          1                   2
+        #EigenvalueReal                             -0.0                -0.0
+        #EigenvalueImag                             -0.0                -0.0
+        #Damping                                     0.0                 0.0
+        #ElementID Item
+        #22        max_shear  5.855954e-09+0.000000e+00j  0.000000+0.000000j
+        #          avg_shear  5.855954e-09+0.000000e+00j  0.000000+0.000000j
+        #import pandas as pd
         column_names, column_values = self._build_dataframe_transient_header()
-        self.data_frame = pd.Panel(self.data, items=column_values,
-                                   major_axis=self.element, minor_axis=self.headers).to_frame()
-        self.data_frame.columns.names = column_names
-        self.data_frame.index.names = ['ElementID', 'Item']
+        self.data_frame = self._build_pandas_transient_elements(
+            column_values, column_names,
+            self.headers, self.element, self.data)
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -109,8 +113,8 @@ class ComplexShearArray(OES_Object):
                     for ieid, eid in enumerate(self.element):
                         t1 = self.data[itime, ieid, :]
                         t2 = table.data[itime, ieid, :]
-                        (tx1, ty1, tz1, rx1, ry1, rz1) = t1
-                        (tx2, ty2, tz2, rx2, ry2, rz2) = t2
+                        (tx1, ty1, unused_tz1, unused_rx1, unused_ry1, unused_rz1) = t1
+                        (tx2, ty2, unused_tz2, unused_rx2, unused_ry2, unused_rz2) = t2
                         d = t1 - t2
                         if not np.allclose([tx1.real, tx1.imag, ty1.real, ty1.imag],
                                            [tx2.real, tx2.imag, ty2.real, ty2.imag], atol=0.0001):
@@ -133,13 +137,14 @@ class ComplexShearArray(OES_Object):
 
     def add_sort1(self, dt, eid, max_shear, avg_shear):
         """unvectorized method for adding SORT1 transient data"""
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.data[self.itime, self.itotal] = [max_shear, avg_shear]
         self.element[self.itotal] = eid
         #self.ielement += 1
         self.itotal += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -152,11 +157,12 @@ class ComplexShearArray(OES_Object):
         nnodes = self.element.shape[0]
         #ntotal = self.ntotal
         msg = []
-        if self.nonlinear_factor is not None:  # transient
-            msg.append('  type=%s ntimes=%i nelements=%i nnodes=%i\n'
-                       % (self.__class__.__name__, ntimes, nelements, nnodes))
+        if self.nonlinear_factor not in (None, np.nan):  # transient
+            msg.append('  type=%s ntimes=%i nelements=%i nnodes=%i; table_name=%r\n' % (
+                self.__class__.__name__, ntimes, nelements, nnodes, self.table_name))
         else:
-            msg.append('  type=%s nelements=%i nnodes=%i\n' % (self.__class__.__name__, nelements, nnodes))
+            msg.append('  type=%s nelements=%i nnodes=%i; table_name=%r\n' % (
+                self.__class__.__name__, nelements, nnodes, self.table_name))
         msg.append('  data: [ntimes, nnodes, 2] where 2=[%s]\n' % str(', '.join(self._get_headers())))
         msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
         msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
@@ -201,7 +207,7 @@ class ComplexShearArray(OES_Object):
                     assert len(eids) == len(max_shear)
                     assert len(max_shear) > 0, max_shear
                     for eid, max_sheari, avg_sheari in zip(eids, max_shear, avg_shear):
-                        assert isinstance(eid, ints), 'eid=%s type=%s' % (eid, type(eid))
+                        assert isinstance(eid, integer_types), 'eid=%s type=%s' % (eid, type(eid))
                         [rmax_shear, imax_shear, ravg_shear, iavg_shear
                          ,] = write_imag_floats_13e([max_sheari, avg_sheari], is_mag_phase)
 
@@ -234,10 +240,10 @@ class ComplexShearArray(OES_Object):
         return page_num - 1
 
     @property
-    def headers(self):
+    def headers(self) -> List[str]:
         return self._get_headers()
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         return self.headers
 
 class ComplexShearStressArray(ComplexShearArray, StressObject):
@@ -245,7 +251,7 @@ class ComplexShearStressArray(ComplexShearArray, StressObject):
         ComplexShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def _get_headers(self):
+    def _get_headers(self) -> List[str]:
         return ['max_shear', 'avg_shear']
 
 class ComplexShearStrainArray(ComplexShearArray, StrainObject):
@@ -278,7 +284,6 @@ def _get_cshear_msg(is_mag_phase, is_sort1):
             #' ELEMENT          F-FROM-4      F-FROM-2      F-FROM-1      F-FROM-3      F-FROM-2      F-FROM-4      F-FROM-3      F-FROM-1\n',
             #'         ID               KICK-1       SHEAR-12       KICK-2       SHEAR-23       KICK-3       SHEAR-34       KICK-4       SHEAR-41\n',
         #]
-        #asdf
     #else:
         #out = [
             #'                C O M P L E X   F O R C E S   A C T I N G   O N   S H E A R   P A N E L   E L E M E N T S   (CSHEAR)\n',

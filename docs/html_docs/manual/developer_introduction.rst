@@ -44,7 +44,7 @@ Additional Guidelines
    Again, it's a work in progress.
 
 #. When writing classes, group similar classes in the same file to reduce having
-   to search for a class across multiple files (very common in Java).
+   to search for a class across multiple files.
 
 #. When deprecating functions, throw a warning using the Python warnings module.
    It's easier to make sure the rest of the code isn't using it this way.  This 
@@ -53,8 +53,7 @@ Additional Guidelines
 Documentation
 --------------
 
-
-:mod:`pyNastran` uses `Sphinx <http://www.doxygen.org/>`_ for docstrings with 
+:mod:`pyNastran` uses `Sphinx <http://www.sphinx-doc.org/en/master/>`_ for docstrings with 
 Numpy's `style guide <https://github.com/numpy/numpy/blob/master/doc/HOWTO_DOCUMENT.rst.txt>`_
 for documenting variables.  This style is nice because:
 

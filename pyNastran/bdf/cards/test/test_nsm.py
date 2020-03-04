@@ -1,17 +1,11 @@
 """defines various shell element tests"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 import os
 import unittest
-from six import iteritems
-from six.moves import StringIO
-import numpy as np
-from numpy import array
+from cpylog import SimpleLogger
 
-from pyNastran.bdf.bdf import BDF, read_bdf
-from pyNastran.utils.log import SimpleLogger
+from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.cards.test.utils import save_load_deck
-from pyNastran.bdf.mesh_utils.mass_properties import _mass_properties_new
+from pyNastran.bdf.mesh_utils.mass_properties import mass_properties_nsm
 import pyNastran
 
 PKG_PATH = pyNastran.__path__[0]
@@ -181,22 +175,22 @@ class TestNsm(unittest.TestCase):
             mass1_expected = expected_dict[nsm_id]
             if mass1_expected == -1.0:
                 with self.assertRaises(RuntimeError):
-                    mass1, cg, I = _mass_properties_new(model, nsm_id=nsm_id, debug=False)
+                    mass1, unused_cg, unused_I = mass_properties_nsm(model, nsm_id=nsm_id, debug=False)
             else:
-                mass1, cg, I = _mass_properties_new(model, nsm_id=nsm_id, debug=False)
+                mass1, unused_cg, unused_I = mass_properties_nsm(model, nsm_id=nsm_id, debug=False)
                 if mass1 != mass1_expected:
-                    mass2 = _mass_properties_new(model, nsm_id=nsm_id, debug=True)[0]
+                    unused_mass2 = mass_properties_nsm(model, nsm_id=nsm_id, debug=True)[0]
                     raise RuntimeError('nsm_id=%s mass != %s; mass1=%s' % (nsm_id, mass1_expected, mass1))
             #print('mass[%s] = %s' % (nsm_id, mass))
             #print('----------------------------------------------')
 
-        model2 = save_load_deck(model)
+        model2 = save_load_deck(model, run_test_bdf=False)
         model2.reset_rslot_map()
         #print(model2._type_to_slot_map)
         model2.elements = {}
 
         type_to_id_map = {}
-        for card_type, ids in iteritems(model2._type_to_id_map):
+        for card_type, ids in model2._type_to_id_map.items():
             if card_type in ['CQUAD4', 'CTRIA3', 'CBEAM', 'CONROD', 'CBAR', 'CROD']:
                 pass
             elif card_type in ['NSM', 'NSM1', 'NSML', 'NSML1', 'MAT1',
@@ -210,7 +204,7 @@ class TestNsm(unittest.TestCase):
 
         # don't crash on the null case
         for nsm_id in sorted(model2.nsms):
-            mass, cg, I = _mass_properties_new(model2, nsm_id=nsm_id, debug=False)
+            mass, unused_cg, unused_I = mass_properties_nsm(model2, nsm_id=nsm_id, debug=False)
             self.assertEqual(mass, 0.0)
             #print('mass[%s] = %s' % (nsm_id, mass))
         #print('done with null')
@@ -225,7 +219,7 @@ class TestNsm(unittest.TestCase):
                   3, 3.0,
                   4, 2.0]
         model.add_card(fields, 'NSM', comment='', is_list=True,
-                      has_none=True)
+                       has_none=True)
         model.add_card(fields, 'NSML', comment='', is_list=True,
                        has_none=True)
 
@@ -239,16 +233,16 @@ class TestNsm(unittest.TestCase):
     def test_nsmadd(self):
         """tests the NSMADD and all NSM cards"""
         eid_quad = 1
-        eid_tri = 2
-        eid_conrod = 3
-        eid_crod = 4
-        eid_pbeaml = 5
-        eid_pbarl = 6
-        pid_pbeaml = 40
+        unused_eid_tri = 2
+        unused_eid_conrod = 3
+        unused_eid_crod = 4
+        unused_eid_pbeaml = 5
+        unused_eid_pbarl = 6
+        unused_pid_pbeaml = 40
         pid_pshell = 10
-        pid_pbeaml = 21
-        pid_pbarl = 31
-        pid_prod = 41
+        unused_pid_pbeaml = 21
+        unused_pid_pbarl = 31
+        unused_pid_prod = 41
         mid = 100
         E = 3.0e7
         G = None
@@ -273,26 +267,26 @@ class TestNsm(unittest.TestCase):
         model.cross_reference()
         model.pop_xref_errors()
 
-        mass, cg, I = model._mass_properties_new(nsm_id=5000)
+        mass, unused_cg, unused_I = mass_properties_nsm(model, nsm_id=5000)
         self.assertAlmostEqual(mass, 8.0)
         model2 = save_load_deck(model)
-        mass, cg, I = model2._mass_properties_new(nsm_id=5000)
+        mass, unused_cg, unused_I = mass_properties_nsm(model2, nsm_id=5000)
 
     #def test_nsm(self):
         #"""tests a complete nsm example"""
         #bdf_filename = os.path.join(MODEL_PATH, 'nsm', 'nsm.bdf')
         #bdf_filename = os.path.join(MODEL_PATH, 'nsm', 'TEST_NSM_SOL101.bdf')
         #model = read_bdf(bdf_filename)
-        #from itertools import chain
         #print('    %6s %-9s %s' % ('nsm_id', 'mass', 'nsm'))
-        #mass0 = model._mass_properties_new(debug=False)[0]
+        #mass0 = .mass_properties_nsm(model, debug=False)[0]
         #for nsm_id in sorted(chain(model.nsms, model.nsmadds)):
-            #mass, cg, I = model._mass_properties_new(nsm_id=nsm_id, debug=False)
+            #mass, cg, I = .mass_properties_nsm(model, nsm_id=nsm_id, debug=False)
             #print('    %-6s %-9.4g %.4g' % (nsm_id, mass, mass-mass0))
 
         #area_breakdown = model.get_area_breakdown()
         #for pid in [20000, 20010]:
             #print('pid=%s area=%.3f' % (pid, area_breakdown[pid]))
+
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

@@ -1,5 +1,4 @@
-from __future__ import print_function
-from six.moves import zip, StringIO
+from io import StringIO
 
 from numpy import zeros, unique
 

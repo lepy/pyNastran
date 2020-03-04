@@ -1,5 +1,3 @@
-from six.moves import zip
-
 from numpy import zeros, unique
 
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
@@ -9,7 +7,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (integer, integer_or_blank,
     double_or_blank)
 
 
-class RFORCE(object):
+class RFORCE:
     type = 'RFORCE'
     def __init__(self, model):
         """

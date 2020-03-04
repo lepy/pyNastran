@@ -1,9 +1,8 @@
+# pylint: disable=C0103
 """
 defines readers for BDF objects in the OP2 DIT/DITS table
 """
-from __future__ import print_function
-from struct import Struct
-from six.moves import range
+from struct import Struct, error as struct_error
 import numpy as np
 
 from pyNastran.bdf.cards.aero.dynamic_loads import GUST
@@ -57,7 +56,6 @@ class DIT(GeomCommon):
         10 G    RS Damping
         Words 9 through 10 repeat until (-1,-1) occurs
         """
-        ndata = len(data)
         #nfields = (ndata - n) // 4
 
         datan = data[n:]
@@ -83,9 +81,38 @@ class DIT(GeomCommon):
         return n
 
     def _read_tabrndg(self, data, n):
-        """TABRNDG(56, 26, 303)"""
-        self.log.info('skipping TABRNDG in DIT\n')
-        return len(data)
+        """
+        TABRNDG(56, 26, 303)
+        Power spectral density for gust loads in aeroelastic analysis.
+
+        1 ID        I   Table identification number
+        2 TYPE      I   Power spectral density type
+        3 LU        RS  Scale of turbulence divided by velocity
+        4 WG        RS  Root-mean-square gust velocity
+        5 UNDEF(4) none Not used
+        Words 1 through 8 repeat until (-1,-1) occurs
+
+        """
+        #self.log.info('skipping TABRNDG in DIT\n')
+        #return len(data)
+        #nentries = 0
+        ndata = len(data)# - n
+        assert ndata == 52, ndata
+        struct_2i2f4i = Struct('2i2f4i')
+        #struct_ff = Struct('ff')
+        #struct_2i = self.struct_2i
+        while ndata - n >= 32:
+            edata = data[n:n + 32]
+            out = struct_2i2f4i.unpack(edata)
+            (tid, table_type, lu, wg, unused_dunno_a,
+             unused_dunno_b, unused_dunno_c, unused_dunno_d) = out
+            if tid > 100000000:
+                tid = -(tid - 100000000)
+            n += 32
+            self.add_tabrndg(tid, table_type, lu, wg, comment='')
+            #nentries += 1
+        #self.increase_card_count('TABRNDG', nentries)
+        return n
 
     def _read_tables1(self, data, n):
         """TABLES1(3105, 31, 97)"""
@@ -99,7 +126,7 @@ class DIT(GeomCommon):
         """
         nentries = (len(data) - n) // 20  # 5*4
         struct_2i3f = Struct('ii3f')
-        for i in range(nentries):
+        for unused_i in range(nentries):
             edata = data[n:n + 20]
             out = struct_2i3f.unpack(edata)
             # (sid, dload, wg, x0, V) = out
@@ -127,7 +154,8 @@ class DIT(GeomCommon):
         while ndata - n >= 40:
             edata = data[n:n + 40]
             out = struct_8i2f.unpack(edata)
-            (tid, code_x, code_y, a, a, a, a, a, x, y) = out
+            (tid, code_x, code_y, unused_a, unused_b, unused_c, unused_d, unused_e,
+             x, y) = out
             if tid > 100000000:
                 tid = -(tid - 100000000)
             if add_codes:
@@ -178,7 +206,8 @@ class DIT(GeomCommon):
         while n < ndata:
             edata = data[n:n + 40]
             out = struct1.unpack(edata)
-            (tid, x1, a, a, a, a, a, a, x, y) = out
+            (tid, x1, unused_a, unused_b, unused_c, unused_d, unused_e, unused_f,
+             x, y) = out
             data_in = [tid, x1, x, y]
             n += 40
             while 1:
@@ -249,7 +278,8 @@ class DIT(GeomCommon):
         while ndata - n >= 40:
             edata = data[n:n + 40]
             out = struct1.unpack(edata)
-            (tid, x1, x2, a, a, a, a, a, x, y) = out
+            (tid, x1, x2, unused_a, unused_b, unused_c, unused_d, unused_e,
+             x, y) = out
             data_in = [tid, x1, x2, x, y]
             n += 40
             while 1:
@@ -278,29 +308,40 @@ class DIT(GeomCommon):
         9 A RS
         Word 9 repeats until End of Record (-1)
         """
+        n0 = n
         nentries = 0
         ndata = len(data)
-        struct1 = Struct('i 4f 3i f')
+        struct1 = Struct('i 4f 3i f i')
         struct_i = self.struct_i
         struct_f = Struct('f')
-        while ndata - n >= 36:
-            edata = data[n:n + 36]
-            out = struct1.unpack(edata)
-            (tid, x1, x2, x3, x4, a, b, c, x) = out
-            data_in = [tid, x1, x2, x3, x4, x]
-            n += 40
-            while 1:
-                xint, = struct_i.unpack(data[n:n + 4])
-                x, = struct_f.unpack(data[n:n + 4])
-
-                n += 4
-                if xint == -1:
-                    break
+        try:
+            while ndata - n >= 40:
+                edata = data[n:n + 40]
+                out = struct1.unpack(edata)
+                (tid, x1, x2, x3, x4, unused_a, unused_b, unused_c, x, test_minus1) = out
+                data_in = [tid, x1, x2, x3, x4, x]
+                n += 36
+                if test_minus1 == -1:
+                    n += 4
                 else:
-                    data_in.append(x)
-            table = cls.add_op2_data(data_in)
-            add_method(table)
-            nentries += 1
+                    while 1:
+                        xint, = struct_i.unpack(data[n:n + 4])
+                        x, = struct_f.unpack(data[n:n + 4])
+
+                        n += 4
+                        if xint == -1:
+                            break
+                        else:
+                            data_in.append(x)
+                table = cls.add_op2_data(data_in)
+                add_method(table)
+                nentries += 1
+        except struct_error:
+            self.log.error('failed parsing %s' % table_name)
+            self.show_data(data[n0:], 'if')
+            self.show_data(edata, 'if')
+            #n = n0 + ndata
+            raise
         self.increase_card_count(table_name, nentries)
         return n
 
@@ -317,7 +358,6 @@ class DIT(GeomCommon):
         10 G   RS Power spectral density
         Words 9 through 10 repeat until (-1,-1) occurs
         """
-        ndata = len(data)
         #nfields = (ndata - n) // 4
 
         datan = data[n:]
@@ -327,7 +367,7 @@ class DIT(GeomCommon):
         istart = 0
         nentries = 0
         for iend in iminus1_delta:
-            datai = data[n+istart*4 : n+iend*4]
+            #datai = data[n+istart*4 : n+iend*4]
             tid = ints[istart]
             codex = ints[istart + 1]
             codey = ints[istart + 2]

@@ -1,5 +1,4 @@
-from __future__ import print_function
-from six.moves import range
+from collections import OrderedDict
 
 from numpy import arange, mean, amax, amin, array
 
@@ -9,9 +8,9 @@ from pyNastran.converters.dev.avus.avus_grid import AvusGrid
 from pyNastran.gui.gui_objects.gui_result import GuiResult
 from pyNastran.gui.utils.vtk.vtk_utils import numpy_to_vtk_points
 
-class AvusIO(object):
-    def __init__(self, parent):
-        self.parent = parent
+class AvusIO:
+    def __init__(self, gui):
+        self.gui = gui
 
     def get_avus_wildcard_geometry_results_functions(self):
         data = ('Avus',
@@ -25,32 +24,33 @@ class AvusIO(object):
     def _remove_old_cart3d_geometry(self, filename):
         #return self._remove_old_geometry(filename)
 
-        self.parent.eid_map = {}
-        self.parent.nid_map = {}
+        self.gui.eid_map = {}
+        self.gui.nid_map = {}
         if filename is None:
-            self.parent.scalarBar.VisibilityOff()
+            self.gui.scalar_bar_actor.VisibilityOff()
             skip_reading = True
         else:
-            self.parent.turn_text_off()
-            self.parent.grid.Reset()
+            self.gui.turn_text_off()
+            self.gui.grid.Reset()
 
-            self.parent.result_cases = {}
-            self.parent.ncases = 0
+            self.gui.result_cases = OrderedDict()
+            self.gui.ncases = 0
             try:
-                del self.parent.case_keys
-                del self.parent.icase
-                del self.parent.isubcase_name_map
+                del self.gui.case_keys
+                del self.gui.icase
+                del self.gui.isubcase_name_map
             except:
                 # print("cant delete geo")
                 pass
 
             #print(dir(self))
             skip_reading = False
-        #self.scalarBar.VisibilityOff()
-        self.parent.scalarBar.Modified()
+        #self.scalar_bar_actor.VisibilityOff()
+        self.gui.scalar_bar_actor.Modified()
         return skip_reading
 
     def load_avus_geometry(self, avus_filename, name='main', plot=True):
+        model_name = name
         #key = self.case_keys[self.icase]
         #case = self.result_cases[key]
 
@@ -58,7 +58,7 @@ class AvusIO(object):
         if skip_reading:
             return
 
-        model = AvusGrid(log=self.parent.log, debug=False)
+        model = AvusGrid(log=self.gui.log, debug=False)
         model.read_avus_grid(avus_filename)
 
         self.model_type = 'avus'
@@ -72,8 +72,8 @@ class AvusIO(object):
 
 
         # loadAvusResults - regions/loads
-        self.parent.scalarBar.VisibilityOn()
-        self.parent.scalarBar.Modified()
+        self.gui.scalar_bar_actor.VisibilityOn()
+        self.gui.scalar_bar_actor.Modified()
 
         loads = []
         assert loads is not None
@@ -82,12 +82,14 @@ class AvusIO(object):
             note = ':  avg(Mach)=%g' % avg_mach
         else:
             note = ''
-        self.parent.isubcase_name_map = {1: ['Avus%s' % note, '']}
-        cases = {}
+        self.gui.isubcase_name_map = {1: ['Avus%s' % note, '']}
+        cases = OrderedDict()
         ID = 1
 
-        form, cases = self._fill_avus_case(cases, ID, model, is_surface)
-        self.parent._finish_results_io2(form, cases)
+        form, cases, node_ids, element_ids = self._fill_avus_case(cases, ID, model, is_surface)
+        self.gui.node_ids = node_ids
+        self.gui.element_ids = element_ids
+        self.gui._finish_results_io2(model_name, form, cases)
 
         #if 0:
             # http://www.vtk.org/Wiki/VTK/Examples/Cxx/Filtering/AppendFilter
@@ -105,12 +107,12 @@ class AvusIO(object):
         nodes = model.nodes
         #nnodes = self.nnodes
 
-        grid = self.parent.grid
+        grid = self.gui.grid
 
         mmax = amax(nodes, axis=0)
         mmin = amin(nodes, axis=0)
         dim_max = (mmax - mmin).max()
-        self.parent.create_global_axes(dim_max)
+        self.gui.create_global_axes(dim_max)
         points = numpy_to_vtk_points(nodes)
 
         #elements = model.elements
@@ -216,8 +218,6 @@ class AvusIO(object):
 
         grid.SetPoints(points)
         grid.Modified()
-        if hasattr(grid, 'Update'):
-            grid.Update()
         return is_surface
 
     def clear_avus(self):
@@ -270,7 +270,7 @@ class AvusIO(object):
 
         #cases[(ID, 2, 'Region', 1, 'centroid', '%i')] = regions
 
-        return geometry_form, cases
+        return geometry_form, cases, nids, eids
 
         #results = model.results
         #if is_results and len(results):

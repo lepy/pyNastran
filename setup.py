@@ -1,177 +1,20 @@
 #!/usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 from setuptools import setup, find_packages
 
-PY2 = False
-if sys.version_info < (3, 0):
-    PY2 = True
-if sys.version_info < (2, 7, 7):  # 2.7.13 used
-    imajor, minor1, minor2 = sys.version_info[:3]
-    # makes sure we don't get the following bug:
-    #   Issue #19099: The struct module now supports Unicode format strings.
-    sys.exit('Upgrade your Python to >= 2.7.7; version=(%s.%s.%s)' % (imajor, minor1, minor2))
-
 import pyNastran
-packages = find_packages()+['gui/icons/*.*']
-#print "packages = ",packages
-#sys.exit()
+from packages import check_python_version, get_package_requirements
 
-py2_gui_scripts = []
-py2_packages = []
-py3_gui_scripts = []
-py3_packages = []
+add_vtk_qt = True
+if 'bdist_wheel' in sys.argv:
+    add_vtk_qt = False
 
-
-is_dev = (
-    'TRAVIS' in os.environ or
-    'APPVEYOR' in os.environ or
-    'READTHEDOCS' in os.environ
-)
-is_travis = 'TRAVIS' in os.environ
-is_rtd = 'READTHEDOCS' in os.environ
-
-if sys.version_info <= (3,) or not is_dev:
-    try:
-        import vtk
-        vtk_version = '.'.join(vtk.VTK_VERSION.split('.'))
-        if vtk_version < '5.10.1':
-            print("vtk.VTK_VERSION = %r < '5.10.1'" % vtk.VTK_VERSION)
-            py2_packages.append('vtk >= 5.10.1')
-    except ImportError:
-        py2_packages.append('vtk >= 5.10.1')  # 8.x used
-
-    py2_packages += [
-        ##'dill'
-    ]
-
-    py3_packages += [
-        #'pillow >= 2.7.0',
-        ##'dill'
-    ]
-
-py_packages = []
-
-if is_rtd:
-    py_packages.append('numpy')
-else:
-    try:
-        #import numpy as np
-        #ver = np.lib.NumpyVersion(np.__version__)
-        #if ver < '1.11.0':
-            #print("np.__version__ = %r < '1.11.0'" % np.__version__)
-            #py_packages.append('numpy >= 1.11.0')
-        py_packages.append('numpy >= 1.11.0') # ,<1.13.0
-    except ImportError:
-        py_packages.append('numpy >= 1.11.0') # ,<1.13.0
-
-if is_rtd:
-    py_packages.append('scipy')
-else:
-    try:
-        import scipy
-        ver = scipy.version.short_version
-        if ver < '0.18.1':
-            print("scipy.version.short_version = %r < '0.18.1'" % scipy.version.short_version)
-            py_packages.append('scipy >= 0.18.1')
-    except ImportError:
-        py_packages.append('scipy >= 0.18.1')  # 0.18.1 used
-
-try:
-    import six
-    sver = [int(val) for val in six.__version__.split('-')[0].split('.')]
-    if sver < [1, 10, 0]:
-        print("six.__version__ = %r < '1.10.0'" % six.__version__)
-        py_packages.append('six >= 1.10.0')
-except ImportError:
-    py_packages.append('six >= 1.10.0')  # 1.10.0 used
-
-
-try:
-    import matplotlib
-    sver = [int(val) for val in matplotlib.__version__.split('-')[0].split('.')]
-    if sver < [1, 5, 1]:
-        print("matplotlib.__version__ = %r < '1.5.1'" % matplotlib.__version__)
-        py_packages.append('matplotlib >= 1.5.1')
-except ImportError:
-    py_packages.append('matplotlib >= 1.5.1')  # 2.0.2 used
-
-
-try:
-    import docopt
-    sver = [int(val) for val in docopt.__version__.split('-')[0].split('.')]
-    if sver != [0, 6, 2]:
-    #if docopt.__version__ != '0.6.2':
-        print("docopt.__version__ = %r != '0.6.2'" % docopt.__version__)
-        py_packages.append('docopt == 0.6.2')
-except ImportError:
-    py_packages.append('docopt == 0.6.2')  # 0.6.2 used
-
-
-if is_rtd:
-    pass
-else:
-    try:
-        import qtpy
-        sver = [int(val) for val in qtpy.__version__.split('-')[0].split('.')]
-        if sver < [1, 3, 1]:
-            print("qtpy.__version__ = %r < '1.3.1'" % qtpy.__version__)
-            py_packages.append('qtpy >= 1.3.1')
-    except ImportError:
-        py_packages.append('qtpy >= 1.3.1')  # 1.3.1 used
-
-
-try:
-    import typing
-except ImportError:
-    py_packages.append('typing >= 3.6.1')  # 3.6.1 used
-
-
-if PY2:
-    try:
-        import pathlib2
-    except ImportError:
-        py_packages.append('pathlib2 >= 2.2.0')  # 2.2.0 used
-
-    try:
-        import scandir
-        sver = [int(val) for val in scandir.__version__.split('-')[0].split('.')]
-        if sver < [1, 4, 0]:
-            print("scandir.__version__ = %r < '1.4.0'" % scandir.__version__)
-            py_packages.append('scandir >= 1.4.0')
-    except ImportError:
-        py_packages.append('scandir >= 1.4.0')  # 1.4.0 used
-
-
-if is_rtd:
-    pass
-else:
-    try:
-        import imageio
-        if imageio.__version__ < '2.2.0':
-            #print("imageio.version = %r < '2.2.0'" % imageio.__version__)
-            py_packages.append('imageio >= 2.2.0')
-    except ImportError:
-        py_packages.append('imageio >= 2.2.0')
-
-#py_packages = [
-#    'numpy >= 1.9.2',
-#    'scipy >= 0.16.0, scipy < 0.18.0',
-#]
-
-is_windows = 'nt' in os.name
-if is_travis and not is_windows:
-    py_packages.append('python-coveralls')
-    #py_packages.append('codecov')
-    #py_packages.append('coverage')
-
-install_requires = py_packages + [
-    # -*- Extra requirements: -*-
-    #'docopt == 0.6.2',
-    ##'matplotlib >= 1.3.0',
-    #'six >= 1.9.0',
-    ##'cython',
-] + py2_packages + py3_packages,
+check_python_version()
+install_requires = get_package_requirements(is_gui=True, add_vtk_qt=add_vtk_qt)
+packages = find_packages() + ['gui/icons/*.*']
+#print("packages = %s" % packages)
 
 # set up all icons
 icon_path = os.path.join('pyNastran', 'gui', 'icons')
@@ -195,18 +38,16 @@ setup(
     name='pyNastran',
     version=pyNastran.__version__,
     description=pyNastran.__desc__,
-    long_description="""\
-""",
+    long_description=pyNastran.__longdesc__,
     classifiers=[
         'Natural Language :: English',
         'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: BSD License (BSD-3)',
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.4',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
+        'License :: OSI Approved :: BSD License',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
         ], # Get strings from http://pypi.python.org/pypi?%3Aaction=list_classifiers
     keywords='',
+    python_requires='>=3.7',
     author=pyNastran.__author__,
     author_email=pyNastran.__email__,
     url=pyNastran.__website__,
@@ -226,15 +67,14 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'run_nastran_double_precision = pyNastran.bdf.test.run_nastran_double_precision:cmd_line',
+            #'run_nastran_double_precision = pyNastran.bdf.test.run_nastran_double_precision:cmd_line',
             'test_bdf  = pyNastran.bdf.test.test_bdf:main',
             'test_op2  = pyNastran.op2.test.test_op2:main',
             'test_op4  = pyNastran.op4.test.test_op4:main',
-            'test_abaqus = pyNastran.converters.abaqus.test_abaqus:main',
+            #'test_abaqus = pyNastran.converters.abaqus.test_abaqus:main',
             'test_pynastrangui = pyNastran.gui.test.test_gui:main',
-            #'test_f06  = pyNastran.f06.test.test_f06:main',
 
-            'format_converter = pyNastran.converters.type_converter:main',
+            'format_converter = pyNastran.converters.format_converter:cmd_line_format_converter',
             'pyNastranGUI = pyNastran.gui.gui:cmd_line',
             'bdf = pyNastran.bdf.mesh_utils.utils:cmd_line',
             'f06 = pyNastran.f06.utils:cmd_line',
@@ -246,4 +86,3 @@ setup(
     },
     test_suite='pyNastran.all_tests',
 )
-

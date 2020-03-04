@@ -1,5 +1,4 @@
 """defines the BDF attributes"""
-from __future__ import print_function
 from collections import defaultdict
 
 from pyNastran.utils import object_attributes, object_methods
@@ -154,7 +153,7 @@ from pyNastran.dev.bdf_vectorized.cards.loads.rforce import RFORCE
 #-------------------------------------------------------------------------------
 
 
-class BDFAttributes(object):
+class BDFAttributes:
     """defines attributes of the BDF"""
 
     def __init__(self):
@@ -367,11 +366,11 @@ class BDFAttributes(object):
 
         # ----------------------------------------------------------------
         #: direct matrix input - DMIG
-        self.dmis = {}
-        self.dmigs = {}
-        self.dmijs = {}
-        self.dmijis = {}
-        self.dmiks = {}
+        self.dmi = {}
+        self.dmig = {}
+        self.dmij = {}
+        self.dmiji = {}
+        self.dmik = {}
         self._dmig_temp = defaultdict(list)
 
         # ----------------------------------------------------------------
@@ -381,6 +380,7 @@ class BDFAttributes(object):
         self.bsets = []
         self.csets = []
         self.qsets = []
+        self.omits = []
         self.usets = {}
 
         #: SExSETy
@@ -600,7 +600,8 @@ class BDFAttributes(object):
         self.is_msc = False
 
 
-    def object_attributes(self, mode='public', keys_to_skip=None):
+    def object_attributes(self, mode='public', keys_to_skip=None,
+                          filter_properties=False):
         """
         List the names of attributes of a class as strings. Returns public
         attributes as default.
@@ -637,7 +638,8 @@ class BDFAttributes(object):
             '_card_parser', '_card_parser_b',
             'object_methods', 'object_attributes',
         ]
-        return object_attributes(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip)
+        return object_attributes(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip,
+                                 filter_properties=filter_properties)
 
     def object_methods(self, mode='public', keys_to_skip=None):
         """

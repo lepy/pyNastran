@@ -3,25 +3,18 @@
 """
 http://slideplayer.com/slide/3330177/
 """
-from __future__ import print_function
 import os
-#import sys
 from datetime import date
 from struct import pack
-from codecs import open
 
-from six import iteritems
-from six.moves import range
-from six.moves import zip
-
-# 3rd party
 import numpy as np
 from numpy import (array, zeros, ones, arange,
-                   eye, searchsorted, array_equal, diag, fill_diagonal,
-                   nan, nan_to_num)
-from numpy.linalg import solve, eigh, eig  # type: ignore
+                   searchsorted, diag)
+from numpy.linalg import solve  # type: ignore
 
+import scipy
 from scipy.sparse import dok_matrix  # type: ignore
+from cpylog import get_logger2
 
 # pyNastran
 from pyNastran.bdf.bdf_interface.dev.matrices import make_gpwg
@@ -33,7 +26,6 @@ from pyNastran.utils.mathematics import print_matrix, print_annotated_matrix
 from pyNastran.dev.bdf_vectorized.bdf import BDF #, SPC, SPC1
 #from pyNastran.f06.f06_writer import F06Writer
 from pyNastran.op2.op2 import OP2
-from pyNastran.utils.log import get_logger2
 
 # Tables
 #from pyNastran.op2.tables.opg_appliedLoads.opg_objects import (
@@ -42,7 +34,7 @@ from pyNastran.utils.log import get_logger2
 from pyNastran.op2.tables.oug.oug_displacements import RealDisplacementArray
 #from pyNastran.op2.tables.oqg_constraintForces.oqg_spcForces import SPCForcesObject
 #from pyNastran.op2.tables.oqg_constraintForces.oqg_mpcForces import MPCForcesObject
-from pyNastran.f06.dev.tables.oload_resultant import Resultant
+#from pyNastran.f06.dev.tables.oload_resultant import Resultant
 
 # springs
 from pyNastran.op2.tables.oes_stressStrain.real.oes_springs import (
@@ -72,6 +64,11 @@ from pyNastran.op2.tables.opg_appliedLoads.opg_load_vector import (
 def partition_dense_matrix(a, b, c=None):
     raise NotImplementedError('partition_dense_matrix a=%s b=%s c=%s' % (str(a), str(b), str(c)))
 
+
+class Resultant:
+    def __init__(table_name, total_load, subcase_id):
+        pass
+        #Resultant('OLOAD', total_load, self.subcase_id)
 
 class Solver(OP2):
     """
@@ -200,7 +197,7 @@ class Solver(OP2):
         # normalization of mass matrix
         self.mnorm = fargs['--m']
 
-        self.iSubcases = []
+        self.isubcases = []
         self.nU = 0
         self.nUs = 0
         self.nUm = 0
@@ -520,7 +517,7 @@ class Solver(OP2):
         cc = self.model.case_control_deck
         #print(cc.subcases)
         analysis_cases = []
-        for (isub, subcase) in sorted(iteritems(cc.subcases)):
+        for (isub, subcase) in sorted(cc.subcases.items()):
             self.subcase_key[isub] = [isub]
             self.log.info(subcase)
             if 'LOAD' in subcase:
@@ -882,7 +879,7 @@ class Solver(OP2):
 
         if case.has_parameter('OLOAD'):
             try:
-                val, options = case.get_parameter('OLOAD')
+                unused_val, options = case.get_parameter('OLOAD')
             except KeyError:
                 self.log.warning('No OLOAD...')
                 #self.log.warning(case)
@@ -1129,7 +1126,7 @@ class Solver(OP2):
         #self._op2_header(op2_file, packing=packing)
 
         #for result in results:
-            #for subcase, case in sorted(iteritems(result)):
+            #for subcase, case in sorted(result.items()):
                 #case.write_op2(header, page_stamp, op2_file, is_mag_phase=False, packing=packing)
                 #if not packing:
                     #op2_file.write('\n')
@@ -1174,8 +1171,6 @@ class Solver(OP2):
             raise NotImplementedError(Type)
 
         data = []
-        i = 0
-
         for (eid, axiali) in zip(eids, axial):
             element = model.Element(eid)
             n1, n2 = element.node_ids
@@ -1207,7 +1202,7 @@ class Solver(OP2):
         is_sort1 = False
         dt = None
         format_code = 1  # ???
-        s_code = None
+        #s_code = None
 
         data_code = {
             'log': self.log, 'analysis_code': analysis_code,
@@ -1223,7 +1218,6 @@ class Solver(OP2):
             raise NotImplementedError(element_type)
 
         data = []
-        i = 0
         for (eid, fxi) in zip(eids, fx):
             element = model.Element(eid)
             n1, n2 = element.node_ids
@@ -1249,7 +1243,7 @@ class Solver(OP2):
     def _OEF_f06_header(self, case, element_name):
         analysis_code = 1
         #transient = False
-        is_sort1 = False
+        #is_sort1 = False
         #dt = None
         format_code = 1  # ???
         s_code = None
@@ -1293,7 +1287,6 @@ class Solver(OP2):
             raise NotImplementedError(element_name)
 
         data = []
-        i = 0
         #(elementID,
         #   f12, f14, tau1,
         #   ...) = line
@@ -1388,7 +1381,7 @@ class Solver(OP2):
         #transient = False
         isubcase = case.id
         is_sort1 = True
-        dt = None
+        #dt = None
         format_code = 1  # ???
         s_code = None
 
@@ -1471,7 +1464,7 @@ class Solver(OP2):
 
         is_sort1 = True
         isubcase = case.id
-        dt = None
+        #dt = None
         forces = RealSpringForceArray(data_code, is_sort1, isubcase, dt=None)
 
         ntimes = 1
@@ -1535,7 +1528,7 @@ class Solver(OP2):
         #transient = False
         isubcase = case.id
         is_sort1 = True
-        dt = None
+        #dt = None
         format_code = 1  # ???
         s_code = None
 
@@ -1597,12 +1590,12 @@ class Solver(OP2):
         """
         fills the displacement object
         """
-        self.iSubcases = []
+        self.isubcases = []
         analysis_code = 1
         #transient = False
         isubcase = case.id
         is_sort1 = True
-        dt = None
+        #dt = None
         data_code = {
             'log': self.log, 'analysis_code': analysis_code,
             'device_code': 1, 'sort_code': 0,
@@ -1619,7 +1612,7 @@ class Solver(OP2):
                         ntimes, nnodes, float_fmt='float32')
         #data = []
 
-        i = 0
+        #i = 0
         #(nodeID, gridType, t1, t2, t3, r1, r2, r3) = line
 
         #grid_type = 0  # SECTOR/HARMONIC/RING POINT; H
@@ -1630,7 +1623,7 @@ class Solver(OP2):
         disp.node_gridtype[:, 1] = 1 # GRID (TODO: no SPOINTs)
         disp.data[0, :, :] = U.reshape(1, nnodes, 6)
         self.displacements[isubcase] = disp
-        self.iSubcases.append(isubcase)
+        self.isubcases.append(isubcase)
 
     def setup_sol_101(self, model, case):
         # the (GridID,componentID) -> internalID
@@ -1684,7 +1677,7 @@ class Solver(OP2):
             self.log.info('cg = %s' % cg)
         else:
             xyz_cid0 = zeros((self.model.grid.n, 3), dtype='float32')
-            for i, (key, xyz) in enumerate(sorted(iteritems(self.positions))):
+            for i, (key, xyz) in enumerate(sorted(self.positions.items())):
                 xyz_cid0[i, :] = xyz
 
             #xyz_cid0 = self.model.grid.get_xyz(cid=0)
@@ -1783,8 +1776,8 @@ class Solver(OP2):
         #self.Us = array(self.Us, 'float64')  # SPC
         #self.Um = array(self.Um, 'float64')  # MPC
 
-        is_spc = False
-        is_mpc = False
+        #is_spc = False
+        #is_mpc = False
         #if 0:
             #zero = array([])
             #MPCgg = zero
@@ -1883,10 +1876,10 @@ class Solver(OP2):
         self.Kgg = zeros((i, i), 'float64')
         self.log.info("Kgg.shape = %s" % str(self.Kgg.shape))
 
-        dof_mapper = []
+        #dof_mapper = []
 
         nnodes = model.grid.n
-        nspoints = model.spoint.n
+        #nspoints = model.spoint.n
         assert nnodes > 0
         self.log.info("nnodes = %s" % nnodes)
         #ndofs = 6 * nnodes + nspoints
@@ -1899,7 +1892,7 @@ class Solver(OP2):
 
         #dofs_0 = [nid=2, 1] -> searchsorted(nids, nid)[0]
 
-        #for nid in sorted(self.nodes.iterkeys()):
+        #for nid in sorted(self.nodes.keys()):
             #nid_dof_mapper[]
 
         self.log.info('start calculating xyz_cid0')
@@ -1997,14 +1990,14 @@ class Solver(OP2):
         self.Mgg = zeros((ndofs, ndofs), 'float64')
         self.Mgg_sparse = dok_matrix((ndofs, ndofs), dtype='float64')
 
-        dof_mapper = []
+        #dof_mapper = []
 
         nnodes = model.grid.n
-        nspoints = model.spoint.n
+        #nspoints = model.spoint.n
         assert nnodes > 0, nnodes
 
         i = 0
-        nids = model.grid.node_id
+        #nids = model.grid.node_id
 
         self.positions = {}
         index0s = {}
@@ -2112,7 +2105,7 @@ class Solver(OP2):
                 #print("spc_set =", spc_set)
                 for spc in spc_set:
                     if spc.type == 'SPC1':
-                        for dof, node_ids in iteritems(spc.components):
+                        for dof, node_ids in spc.components.items():
                             #print("dof =", dof)
                             for dofi in dof:
                                 dofi = int(dofi)
@@ -2308,7 +2301,7 @@ class Solver(OP2):
             #assert isinstance(moment_constraints, dict), type(moment_constraints)
             #assert isinstance(gravity_load, list), type(gravity_load)
 
-            #nids = set([])
+            #nids = set()
             #for nid in force_loads:
                 #nids.add(nid)
             #for nid in moment_loads:
@@ -2342,7 +2335,7 @@ class Solver(OP2):
                         #Fg[Dofs[(nid, 6)]] += moment[2]
 
         #if sum(abs(self.grav_load)) > 0.0:
-            #for (eid, elem) in sorted(iteritems(model.elements)):  # CROD, CONROD
+            #for (eid, elem) in sorted(model.elements.items()):  # CROD, CONROD
                 #self.log.info("----------------------------")
                 #node_ids, index0s = self.element_dof_start(elem, nids)
                 #self.log.info("node_ids=%s index0s=%s" % (node_ids, index0s))

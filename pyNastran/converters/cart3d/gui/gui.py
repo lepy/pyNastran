@@ -2,10 +2,6 @@
 An attempt at a user friendly Cart3d GUI
 """
 # -*- coding: utf-8 -*-
-from __future__ import division, unicode_literals, print_function
-#from six.moves import range
-
-# standard library
 import sys
 import os.path
 
@@ -26,7 +22,7 @@ import vtk
 import pyNastran
 from pyNastran.gui.formats import Cart3dIO#, CLASS_MAP
 from pyNastran.gui.arg_handling import get_inputs
-#from pyNastran.gui.qt_files.gui_qt_common import GuiCommon
+#from pyNastran.gui.qt_files.gui_qt_common import GuiQtCommon
 from pyNastran.gui.gui_common import GuiCommon2
 
 

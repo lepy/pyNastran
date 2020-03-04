@@ -9,21 +9,36 @@ All damper elements are defined in this file.  This includes:
  * CVISC
 
 All damper elements are DamperElement and Element objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 
-from pyNastran.utils import integer_types
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.base_card import Element
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double)
 from pyNastran.bdf.field_writer_8 import print_card_8
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class DamperElement(Element):
     def __init__(self):
         Element.__init__(self)
 
+    #def Centroid(self):
+        ## same as below, but we ignore the 2nd point it it's None
+        ##p = (self.nodes_ref[1].get_position() + self.nodes_ref[0].get_position()) / 2.
+
+        #p = self.nodes_ref[0].get_position()
+        #if self.nodes_ref[1] is not None:
+            #p += self.nodes_ref[1].get_position()
+            #p /= 2.
+        #return p
+
+    #def center_of_mass(self):
+        #return self.Centroid()
 
 class LineDamper(DamperElement):
     def __init__(self):
@@ -67,9 +82,29 @@ class CDAMP1(LineDamper):
         self.pid = pid
         self.c1 = c1
         self.c2 = c2
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         self.nodes_ref = None
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+            #components.append([comp if comp is not None else 0 for comp in [element.c1, element.c2]])
+            components.append([element.c1, element.c2])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('components', data=components)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -148,7 +183,7 @@ class CDAMP1(LineDamper):
     def B(self):
         return self.pid_ref.b
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -157,7 +192,7 @@ class CDAMP1(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CDAMP1 eid=%s' % self.eid
+        msg = ', which is required by CDAMP1 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
         pid = self.pid
@@ -172,7 +207,19 @@ class CDAMP1(LineDamper):
                    'Allowed Pids=%s' % (self.pid, self.eid, pids))
             raise KeyError(msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -184,7 +231,7 @@ class CDAMP1(LineDamper):
                   nodes[1], self.c2]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -232,10 +279,29 @@ class CDAMP2(LineDamper):
         self.c2 = c2
 
         # CDAMP2 do not have to be unique
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         self.nodes_ref = None
         self.pid = 0
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        b = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            b.append(element.b)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+            components.append([element.c1, element.c2])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('B', data=b)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('components', data=components)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -296,7 +362,7 @@ class CDAMP2(LineDamper):
     def B(self):
         return self.b
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -305,10 +371,22 @@ class CDAMP2(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CDAMP2 eid=%s' % self.eid
+        msg = ', which is required by CDAMP2 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.nodes_ref = None
 
@@ -328,7 +406,7 @@ class CDAMP2(LineDamper):
                   nodes[1], self.c2]
         return fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -373,10 +451,27 @@ class CDAMP3(LineDamper):
         LineDamper.__init__(self)
         self.eid = eid
         self.pid = pid
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(self.nodes) == 2
         self.pid_ref = None
         self.nodes_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -431,7 +526,7 @@ class CDAMP3(LineDamper):
     def B(self):
         return self.pid_ref.b
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -444,7 +539,22 @@ class CDAMP3(LineDamper):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CDAMP3 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
+        #self.nodes_ref = model.safe_empty_nodes(self.nodes, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.pid_ref = None
@@ -459,7 +569,7 @@ class CDAMP3(LineDamper):
         list_fields = ['CDAMP3', self.eid, self.Pid()] + self.node_ids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -498,9 +608,25 @@ class CDAMP4(LineDamper):
         self.eid = eid
         self.b = b
         self.nids = nids
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(self.nodes) == 2
         self.nodes_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        b = []
+        nodes = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            b.append(element.b)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('B', data=b)
+        h5_file.create_dataset('nodes', data=nodes)
 
     @classmethod
     def add_card(cls, card, icard=0, comment=''):
@@ -553,7 +679,7 @@ class CDAMP4(LineDamper):
     def B(self):
         return self.b
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -565,7 +691,21 @@ class CDAMP4(LineDamper):
         msg = ', which is required by CDAMP4 eid=%s' % (self.eid)
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        #msg = ', which is required by CDAMP4 eid=%s' % (self.eid)
+        #self.nodes_ref = model.safe_empty_nodes(self.node_ids, msg=msg)
+        self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.nodes_ref = None
 
@@ -573,7 +713,7 @@ class CDAMP4(LineDamper):
         list_fields = ['CDAMP4', self.eid, self.b] + self.node_ids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -617,10 +757,27 @@ class CDAMP5(LineDamper):
         self.eid = eid
         #: Property ID
         self.pid = pid
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(self.nodes) == 2
         self.nodes_ref = None
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append([nid if nid is not None else 0 for nid in element.nodes])
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -672,7 +829,7 @@ class CDAMP5(LineDamper):
             b = self.B()
             assert isinstance(b, float)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -685,7 +842,21 @@ class CDAMP5(LineDamper):
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CDAMP5 eid=%s' % (self.eid)
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -703,7 +874,7 @@ class CDAMP5(LineDamper):
         list_fields = ['CDAMP5', self.eid, self.Pid(), nodes[0], nodes[1]]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)
 
@@ -751,10 +922,27 @@ class CVISC(LineDamper):
             self.comment = comment
         self.eid = eid
         self.pid = pid
-        self.prepare_node_ids(nids)
+        self.nodes = self.prepare_node_ids(nids)
         assert len(self.nodes) == 2
         self.nodes_ref = None
         self.pid_ref = None
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        components = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -792,7 +980,7 @@ class CVISC(LineDamper):
         nids = data[2:4]
         return CVISC(eid, pid, nids, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -801,11 +989,25 @@ class CVISC(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CVISC eid=%s' % self.eid
+        msg = ', which is required by CVISC eid=%s' % self.eid
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CVISC eid=%s' % (self.eid)
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -842,6 +1044,6 @@ class CVISC(LineDamper):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
         return self.comment + print_card_8(card)

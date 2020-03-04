@@ -20,26 +20,81 @@ these are used by:
  - ComplexSPCForcesArray
  - ComplexMPCForcesArray
  - ComplexAppliedLoadsArray
+
 """
-from __future__ import print_function, unicode_literals
 import copy
 from struct import Struct, pack
 import warnings
-
-from six.moves import zip, range
+from typing import List
 
 import numpy as np
-from numpy import zeros, abs, angle, float32, searchsorted, unique, where
-from numpy import allclose, asarray, vstack, swapaxes, hstack
+#from numpy import float32
 
 from pyNastran.op2.result_objects.op2_objects import ScalarObject
 from pyNastran.f06.f06_formatting import write_floats_13e, write_imag_floats_13e, write_float_12e
-try:
-    import pandas as pd
-except ImportError:
-    pass
+from pyNastran.op2.op2_interface.write_utils import set_table3_field
 
+float_types = (float, np.float32)
+integer_types = (int, np.int32)
 
+SORT2_TABLE_NAME_MAP = {
+    # sort2_name : sort1_name
+    'OUGATO2' : 'OUGATO1',
+    'OUGCRM2' : 'OUGCRM1',
+    'OUGNO2' : 'OUGNO1',
+    'OUGPSD2' : 'OUGPSD1',
+    'OUGRMS2' : 'OUGRMS1',
+
+    'OVGATO2' : 'OVGATO1',
+    'OVGCRM2' : 'OVGCRM1',
+    'OVGNO2' : 'OVGNO1',
+    'OVGPSD2' : 'OVGPSD1',
+    'OVGRMS2' : 'OVGRMS1',
+
+    'OAGATO2' : 'OAGATO1',
+    'OAGCRM2' : 'OAGCRM1',
+    'OAGNO2' : 'OAGNO1',
+    'OAGPSD2' : 'OAGPSD1',
+    'OAGRMS2' : 'OAGRMS1',
+
+    'OQGATO2' : 'OQGATO1',
+    'OQGCRM2' : 'OQGCRM1',
+    'OQGNO2' : 'OQGNO1',
+    'OQGPSD2' : 'OQGPSD1',
+    'OQGRMS2' : 'OQGRMS1',
+
+    'OQMATO2' : 'OQMATO1',
+    'OQMCRM2' : 'OQMCRM1',
+    'OQMNO2' : 'OQMNO1',
+    'OQMPSD2' : 'OQMPSD1',
+    'OQMRMS2' : 'OQMRMS1',
+
+    'OPGATO2' : 'OPGATO1',
+    'OPGCRM2' : 'OPGCRM1',
+    'OPGNO2' : 'OPGNO1',
+    'OPGPSD2' : 'OPGPSD1',
+    'OPGRMS2' : 'OPGRMS1',
+
+    #'OUG2' : 'OUG1',
+    'OUGV2' : 'OUGV1',
+    'OQG2' : 'OQG1',
+    'OQMG2' : 'OQMG1',
+    'OPG2' : 'OPG1',
+    'OPNL2' : 'OPNL1',
+    'OUXY2' : 'OUXY1',
+}
+table_name_to_table_code = {
+    # displacement (msc/nx)
+    'OUGV1' : 1,
+    'BOUGV1' : 1,
+    # load vector (msc/nx)
+    'OPG1' : 2,
+    'BOPG1' : 2,
+    #'BOPHIG1' : 5, # ???
+
+    # spc/mpc forces
+    'OQG1' : 3,
+}
 def append_sort1_sort2(data1, data2, to_sort1=True):
     """
     data1 : (ntimes, nnids, 6)
@@ -53,14 +108,69 @@ def append_sort1_sort2(data1, data2, to_sort1=True):
     unused_nnids = nnids1 + nnids2
     assert ntimes1 == ntimes2
     if to_sort1:
-        out = hstack([
+        out = np.hstack([
             data1,
-            swapaxes(data2, 0, 1),])
+            np.swapaxes(data2, 0, 1),])
     else:
-        out = hstack([
-            swapaxes(data1, 0, 1),
+        out = np.hstack([
+            np.swapaxes(data1, 0, 1),
             data2,])
     return out
+
+def oug_data_code(table_name, analysis_code,
+                  is_sort1=True, is_random=False,
+                  random_code=0, title='', subtitle='', label='', is_msc=True):
+    sort1_sort_bit = 0 if is_sort1 else 1
+    random_sort_bit = 1 if is_random else 0
+    sort_method = 1 if is_sort1 else 2
+    assert analysis_code != 0, analysis_code
+    #if format_code == 1:
+        #format_word = "Real"
+    #elif format_code == 2:
+        #format_word = "Real/Imaginary"
+    #elif format_code == 3:
+        #format_word = "Magnitude/Phase"
+    #DEVICE_CODE_MAP = {
+        #1 : "Print",
+        #2 : "Plot",
+        #3 : "Print and Plot",
+        #4 : "Punch",
+        #5 : "Print and Punch",
+        #6 : "Plot and Punch",
+        #7 : "Print, Plot, and Punch",
+    #}
+
+    table_code = table_name_to_table_code[table_name]
+    sort_code = 1 # TODO: what should this be???
+
+    #table_code = tCode % 1000
+    #sort_code = tCode // 1000
+    tCode = table_code * 1000 + sort_code
+
+    device_code = 2  # Plot
+    approach_code = analysis_code * 10 + device_code
+    #print(f'approach_code={approach_code} analysis_code={analysis_code} device_code={device_code}')
+    data_code = {
+        'nonlinear_factor': None,
+        'approach_code' : approach_code,
+        'analysis_code' : analysis_code,
+        'sort_bits': [0, sort1_sort_bit, random_sort_bit], # real, sort1, random
+        'sort_method' : sort_method,
+        'is_msc': is_msc,
+        #'is_nasa95': is_nasa95,
+        'format_code': 1, # real
+        'table_code': table_code,
+        'tCode': tCode,
+        'table_name': table_name, ## TODO: should this be a string?
+        'device_code' : device_code,
+        'random_code' : random_code,
+        'thermal': 0,
+        'title' : title,
+        'subtitle': subtitle,
+        'label': label,
+        'num_wide' : 8, # displacement-style table
+    }
+    return data_code
 
 class TableArray(ScalarObject):  # displacement style table
     """
@@ -69,13 +179,15 @@ class TableArray(ScalarObject):  # displacement style table
      - ComplexTableArray
     """
     def __init__(self, data_code, is_sort1, isubcase, dt):
-        self.nonlinear_factor = None
-        self.table_name = None
-        self.approach_code = None
-        self.analysis_code = None
-        ScalarObject.__init__(self, data_code, isubcase, apply_data_code=True)  # no double inheritance
-        self.is_sort1
-        self.is_sort2
+        self.nonlinear_factor = np.nan
+        #self.table_name = None
+        #self.approach_code = None
+        #self.analysis_code = None
+
+        # no double inheritance
+        ScalarObject.__init__(self, data_code, isubcase, apply_data_code=True)
+        str(self.is_sort1)
+        str(self.is_sort2)
         #self.dt = dt
 
         #self.code = [self.format_code, self.sort_code, self.s_code]
@@ -84,16 +196,20 @@ class TableArray(ScalarObject):  # displacement style table
         self.ntotal = 0
         self._nnodes = 0  # result specific
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         return self.assert_equal(table)
 
     def assert_equal(self, table, rtol=1.e-5, atol=1.e-8):
         self._eq_header(table)
         assert self.is_sort1 == table.is_sort1
+        #print(self.node_gridtype)
+        #print(table.node_gridtype)
         if not np.array_equal(self.node_gridtype, table.node_gridtype):
             assert self.node_gridtype.shape == table.node_gridtype.shape, 'shape=%s table.shape=%s' % (self.node_gridtype.shape, table.node_gridtype.shape)
             msg = 'table_name=%r class_name=%s\n' % (self.table_name, self.__class__.__name__)
             msg += '%s\n' % str(self.code_information())
+            msg += 'nid_gridtype:\n'
+            msg += 'gridtype.shape=%s table.gridtype.shape=%s\n' % (str(self.node_gridtype.shape), str(table.node_gridtype.shape))
             for (nid, grid_type), (nid2, grid_type2) in zip(self.node_gridtype, table.node_gridtype):
                 msg += '(%s, %s)    (%s, %s)\n' % (nid, grid_type, nid2, grid_type2)
             print(msg)
@@ -114,7 +230,7 @@ class TableArray(ScalarObject):  # displacement style table
                         (nid, grid_type) = nid_gridtype
                         t1 = self.data[itime, inid, :]
                         t2 = table.data[itime, inid, :]
-                        if not allclose(t1, t2, rtol=rtol, atol=atol):
+                        if not np.allclose(t1, t2, rtol=rtol, atol=atol):
                         #if not np.array_equal(t1, t2):
                             inonzero = np.where(t1 != 0.)[0]
                             atoli = np.abs(t2 - t1).max()
@@ -154,7 +270,7 @@ class TableArray(ScalarObject):  # displacement style table
         #print(self._times)
         #print(result._times)
         # self._times = hstack([self._times, result._times])
-        self.node_gridtype = vstack([self.node_gridtype, result.node_gridtype])
+        self.node_gridtype = np.vstack([self.node_gridtype, result.node_gridtype])
         #print('%s' % ''.join(self.get_stats()))
 
     def _get_msgs(self, is_mag_phase):
@@ -163,7 +279,7 @@ class TableArray(ScalarObject):  # displacement style table
     def data_type(self):
         raise NotImplementedError()
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>; table_name=%r\n' % (self.__class__.__name__, self.table_name),
@@ -192,7 +308,7 @@ class TableArray(ScalarObject):  # displacement style table
             assert nminor == ntotal, 'ntotal=%s expected=%s' % (nminor, ntimes)
 
         msg.append('  isubcase = %s\n' % self.isubcase)
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%s nnodes=%s, table_name=%s\n'
                        % (self.__class__.__name__, ntimes, nnodes, self.table_name))
         else:
@@ -210,13 +326,13 @@ class TableArray(ScalarObject):  # displacement style table
         return msg
 
     @property
-    def headers(self):
+    def headers(self) -> List[str]:
         return ['t1', 't2', 't3', 'r1', 'r2', 'r3']
 
-    def _get_headers(self):
+    def _get_headers(self) -> List[str]:
         return self.headers
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         return self._get_headers()
 
     def _reset_indices(self):
@@ -226,10 +342,6 @@ class TableArray(ScalarObject):  # displacement style table
         """sizes the vectorized attributes of the TableArray"""
         #print('_nnodes=%s ntimes=%s sort1?=%s ntotal=%s -> _nnodes=%s' % (self._nnodes, self.ntimes, self.is_sort1,
                                                                           #self.ntotal, self._nnodes // self.ntimes))
-        if self.is_built:
-            #print("resetting...")
-            #self.itotal = 0
-            return
 
         # we have a SORT1 data array that will be (ntimes, nnodes, 6)
         # we start by sizing the total number of entries (_nnodes = ntimes * nnodes)
@@ -258,14 +370,15 @@ class TableArray(ScalarObject):  # displacement style table
             ntotal = self.ntotal
             nx = ntimes
             ny = nnodes
-            #print("ntimes=%s nnodes=%s" % (ntimes, nnodes))
+            #print("SORT1 ntimes=%s nnodes=%s" % (ntimes, nnodes))
         elif self.is_sort2:
-            nnodes = self.ntimes
+            # flip this to sort1
             ntimes = self.ntotal
-            ntotal = self.ntotal
-            nx = nnodes
-            ny = ntimes
-            #print("***ntotal=%s nnodes=%s ntimes=%s" % (ntotal, nnodes, ntimes))
+            nnodes = self.ntimes
+            ntotal = nnodes
+            nx = ntimes
+            ny = nnodes
+            #print("***SORT2 ntotal=%s nnodes=%s ntimes=%s" % (ntotal, nnodes, ntimes))
         else:
             raise RuntimeError('expected sort1/sort2\n%s' % self.code_information())
         self.build_data(ntimes, nnodes, ntotal, nx, ny, self._times_dtype)
@@ -276,73 +389,262 @@ class TableArray(ScalarObject):  # displacement style table
         self._nnodes = nnodes
         self.ntotal = ntotal
 
-        self._times = zeros(ntimes, dtype=float_fmt)
-        self.node_gridtype = zeros((nnodes, 2), dtype='int32')
+        _times = np.zeros(ntimes, dtype=float_fmt)
+        int_fmt = 'int32' if self.size == 4 else 'int64'
+        node_gridtype = np.zeros((nnodes, 2), dtype=int_fmt)
 
         #[t1, t2, t3, r1, r2, r3]
-        self.data = zeros((nx, ny, 6), self.data_type())
-        #print('ntimes=%s nnodes=%s; nx=%s ny=%s; ntotal=%s' % (ntimes, nnodes, nx, ny, self.ntotal))
+        data = np.zeros((nx, ny, 6), self.data_type())
+        if self.load_as_h5:
+            group = self._get_result_group()
+            self._times = group.create_dataset('_times', data=_times)
+            self.node_gridtype = group.create_dataset('node_gridtype', data=node_gridtype)
+            self.data = group.create_dataset('data', data=data)
+        else:
+            self._times = _times
+            self.node_gridtype = node_gridtype
+            self.data = data
+        #print('ntimes=%s nnodes=%s; nx=%s ny=%s; ntotal=%s' % (
+            #ntimes, nnodes, nx, ny, self.ntotal))
 
     def build_dataframe(self):
+        """creates a pandas dataframe
+
+        works: 0.24.2
+        broken: 0.25.0
+        """
+        import pandas as pd
+        #is_v25 = pd.__version__ >= '0.25'
+
         headers = self.get_headers()
         #headers = [0, 1, 2, 3, 4, 5]
-        node_gridtype = [self.node_gridtype[:, 0], self.gridtype_str]
-        #node_gridtype = self.node_gridtype
-        ugridtype_str = unique(self.gridtype_str)
+        #node_gridtype = [self.node_gridtype[:, 0], self.gridtype_str]
 
-        if self.nonlinear_factor is not None:
+        #letter_dims = [
+            #('G', 6),
+            #('E', 1),
+            #('S', 1),
+            #('H', 6),
+            #('L', 6),
+        #]
+        ntimes, nnodes = self.data.shape[:2]
+
+        ugridtype_str = np.unique(self.gridtype_str)
+        if self.nonlinear_factor not in (None, np.nan):
+            #if not self.is_sort1:
+                #print("skipping %s becuase it's not SORT1" % self.class_name)
+                #return
             column_names, column_values = self._build_dataframe_transient_header()
-            #print('data.shape = %s' % str(self.data.shape))
-            #print('column_values = %s' % column_values)
-            #print('node_gridtype.shape = %s' % str(node_gridtype.shape))
-            self.data_frame = pd.Panel(self.data, items=column_values,
-                                       major_axis=node_gridtype, minor_axis=headers).to_frame()  # to_xarray()
+            #if is_v25:
+            #  we start out like this...
+            #
+            # Mode                             1                 2                   3
+            # EigenvalueReal               -0.0              -0.0                -0.0
+            # EigenvalueImag          -0.463393          0.463393           -1.705689
+            # Damping                        0.0               0.0                 0.0
+            # NodeID Type Item
+            # 1      G    t1      (0.6558146+0j)    (0.6558146+0j)       (1.034078+0j)
+            #             t2                  0j                0j                  0j
+            #             t3                  0j                0j                  0j
+            #             r1                  0j                0j                  0j
+            #             r2                  0j                0j                  0j
+            #             r3                  0j                0j                  0j
+            #  ...
+            #
+            # then we call pandas_extract_rows to make it this...
+            #
+            # Mode                        1              2              3
+            # EigenvalueReal           -0.0           -0.0           -0.0
+            # EigenvalueImag      -0.463393       0.463393      -1.705689
+            # Damping                   0.0            0.0            0.0
+            # NodeID Item
+            # 1      t1       0.655815+0.0j  0.655815+0.0j  1.034078+0.0j
+            #        t2            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        t3            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        r1            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        r2            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        r3            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            # 2      t1       0.999141+0.0j  0.999141+0.0j -0.282216+0.0j
+            #        t2            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        t3            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        r1            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        r2            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            #        r3            0.0+0.0j       0.0+0.0j       0.0+0.0j
+            # 1001   S        0.000859+0.0j  0.000859+0.0j -0.003323+0.0j
+
+            columns = pd.MultiIndex.from_arrays(column_values, names=column_names)
+
+            gridtype_str = self.gridtype_str
+            ugridtype_str = np.unique(gridtype_str)
+            if len(ugridtype_str) == 1 and gridtype_str[0] in ['S', 'M', 'E']:
+                nnodes = self.node_gridtype.shape[0]
+                node_gridtype = [self.node_gridtype[:, 0], [gridtype_str[0]] * nnodes]
+
+                names = ['NodeID', 'Item']
+                index = pd.MultiIndex.from_arrays(node_gridtype, names=names)
+                A = self.data[:, :, 0].T
+                data_frame = pd.DataFrame(A, columns=columns, index=index)
+            else:
+                node_gridtype_item = []
+                node_ids = self.node_gridtype[:, 0]
+                for nid, gridtype in zip(node_ids, gridtype_str):
+                    node_gridtype_item.extend([[nid, gridtype, 't1']])
+                    node_gridtype_item.extend([[nid, gridtype, 't2']])
+                    node_gridtype_item.extend([[nid, gridtype, 't3']])
+                    node_gridtype_item.extend([[nid, gridtype, 'r1']])
+                    node_gridtype_item.extend([[nid, gridtype, 'r2']])
+                    node_gridtype_item.extend([[nid, gridtype, 'r3']])
+
+
+                names = ['NodeID', 'Type', 'Item']
+                index = pd.MultiIndex.from_tuples(node_gridtype_item, names=names)
+                A = self.data.reshape(ntimes, nnodes*6).T
+                try:
+                    data_frame = pd.DataFrame(A, columns=columns, index=index)
+                except ValueError:  # pragma: no cover
+                    print(f'data.shape={self.data.shape} A.shape={A.shape} '
+                          f'ntimes={ntimes} nnodes*6={nnodes*6} ngrids={len(node_ids)}\n'
+                          f'column_names={column_names} column_values={column_values} _times={self._times}')
+                    raise
+                #print(data_frame.to_string())
+                data_frame = pandas_extract_rows(data_frame, ugridtype_str, ['NodeID', 'Item'])
+
+            #elif is_v25 and 0:  # pragma: no cover
+                #                                                                           t1        t2
+                # itime Mode  EigenvalueReal EigenvalueImag Damping  NodeID  Type
+                # 0      1      G    -0.0         -0.463393     0.0  1           0.655815+0.0j  0.0+0.0j
+                #               G                                    2           0.999141+0.0j  0.0+0.0j
+                #               G                                    3                1.0+0.0j  0.0+0.0j
+                #               S                                    1001        0.000859+0.0j  0.0+0.0j
+                # 1      1      G    -0.0          0.463393     0.0  2           0.655815+0.0j  0.0+0.0j
+                #               G                                    2           0.999141+0.0j  0.0+0.0j
+                #               G                                    3                1.0+0.0j  0.0+0.0j
+                #               S                                    1001        0.000859+0.0j  0.0+0.0j
+                # 2      1      G    -0.0        -1.705689      0.0  3           1.034078+0.0j  0.0+0.0j
+                #               G                                    2          -0.282216+0.0j  0.0+0.0j
+                #               G                                    3          -0.285539+0.0j  0.0+0.0j
+                #               S                                    1001       -0.003323+0.0j  0.0+0.0j
+                #time_node_gridtype = []
+                #from itertools import count
+                #for itime in range(ntimes):
+                    #column_values2 = [column_value[itime] for column_value in column_values]
+                    #for nid, gridtype in zip(self.node_gridtype[:, 0], self.gridtype_str):
+                        #time_node_gridtype.append([itime] + column_values2 + [nid, gridtype])
+
+                #names = ['itime'] + column_names + ['NodeID', 'Type']
+                #index = pd.MultiIndex.from_tuples(time_node_gridtype, names=names)
+                #A = self.data.reshape(ntimes*nnodes, 6)
+                #data_frame = pd.DataFrame(A, columns=headers, index=index)
+                ##print(self.data_frame.index.names)
+                ##data_frame = pandas_extract_rows(self.data_frame, ugridtype_str)
+                #print(data_frame)
+            #elif is_v25 and 0:  # pragma: no cover
+                #node_gridtype2 = []
+                #NodeID Type             t1        t2        ...
+                #1      G     0.655815+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G     0.999141+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G          1.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S     0.000859+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1      G     0.655815+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G     0.999141+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G          1.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S     0.000859+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1      G     1.034078+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G    -0.282216+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G    -0.285539+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S    -0.003323+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1      G     1.034078+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G    -0.282216+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G    -0.285539+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S    -0.003323+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1      G    -0.001818+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G    -0.124197+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G     0.625574+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S     0.749771+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1      G     0.001011+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G    -0.200504+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G          1.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S     1.200504+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1      G     0.001011+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #2      G    -0.200504+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #3      G          1.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #1001   S     1.200504+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #for itime in range(ntimes):
+                    #column_values2 = [column_value[itime] for column_value in column_values]
+                    #for nid, gridtype in zip(self.node_gridtype[:, 0], self.gridtype_str):
+                        #node_gridtype2.append([itime, nid, gridtype])
+
+                #names = ['itime', 'NodeID', 'Type']
+                #index = pd.MultiIndex.from_tuples(node_gridtype2, names=names)
+                #A = self.data.reshape(ntimes*nnodes, 6)
+                #data_frame = pd.DataFrame(A, columns=headers, index=index)
+                ##print(data_frame.index.names)
+                ##data_frame = pandas_extract_rows(data_frame, ugridtype_str)
+                #print(data_frame)
+
+            #elif is_v25 and 0:  # pragma: no cover
+                #                t1        t2        t3        r1        r2        r3
+                # 0   0.655815+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                # 1   0.999141+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                # 2        1.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                # 3   0.000859+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                # 4   0.655815+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                # 5   0.999141+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                # 6        1.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j  0.0+0.0j
+                #index = pd.MultiIndex.from_arrays(node_gridtype, names=['NodeID', 'Type'])
+                #A = self.data.reshape(nnodes*ntimes, 6)
+                #data_frame = pd.DataFrame(A, columns=headers)
+                ##data_frame = pd.DataFrame(A, columns=headers, index=index)  # doesn't work
+                # doesn't turn into workable table
+            #else:
+                # old
+                # Mode                             1                 2                   3
+                # EigenvalueReal               -0.0              -0.0                -0.0
+                # EigenvalueImag          -0.463393          0.463393           -1.705689
+                # Damping                        0.0               0.0                 0.0
+                # NodeID Type Item
+                # 1      G    t1      (0.6558146+0j)    (0.6558146+0j)       (1.034078+0j)
+                #             t2                  0j                0j                  0j
+                #             t3                  0j                0j                  0j
+                #             r1                  0j                0j                  0j
+                #             r2                  0j                0j                  0j
+                #             r3                  0j                0j                  0j
+
+                #   mode    1      2    3
+                #   freq    1.0  2.0  3.0
+                # nodeid
+                #  1  item  1.0  2.0  3.0
+                #     t1    etc.
+                #     t2
+                #     t3
+                #     ...
+                #  2
+                #     t1
+                #     t2
+                #     t3
+                #     ...
+
+                #data_frame = pd.Panel(self.data, items=column_values,
+                                      #major_axis=node_gridtype, minor_axis=headers).to_frame()  # to_xarray()
+                #data_frame.columns.names = column_names
+                #data_frame.index.names = ['NodeID', 'Type', 'Item']
+                #print(column_names)
+                #print(data_frame)
+                #print(self.data_frame.index.names)
+                #data_frame = pandas_extract_rows(data_frame, ugridtype_str, ['NodeID', 'Item'])
+            self.data_frame = data_frame
             #print(self.data_frame)
 
-            if 0:  # pragma: no cover
-                coords = {}
-                for key, value in zip(column_names, column_values):
-                    coords[key] = value
-
-                import xarray
-                #a = xarray.DataArray(self.data, items=column_values,
-                                     #major_axis=node_gridtype, minor_axis=headers)
-                unused_a = xarray.DataArray(self.data, coords=coords)
-                #print(unused_a)
-            else:
-                self.data_frame.columns.names = column_names
-                self.data_frame.index.names = ['NodeID', 'Type', 'Item']
-                #print(column_names)
-                #print(self.data_frame)
-                #print(self.data_frame.index.names)
-
-            letter_dims = [
-                ('G', 6),
-                ('E', 1),
-                ('S', 1),
-                ('H', 6),
-                ('L', 6),
-            ]
-            cat_keys = []
-            for (letter, dim) in letter_dims:
-                if letter not in ugridtype_str:
-                    continue
-                if dim == 1:
-                    # Note that I'm only keeping every 6th row
-                    eig = self.data_frame.xs(letter,level=1).iloc[0::6]
-                    eig = eig.reset_index().replace(
-                        {'Item' : {'t1' : letter}}).set_index(['NodeID', 'Item'])
-                elif dim == 6:
-                    eig = self.data_frame.xs(letter, level=1)
-                else:
-                    raise RuntimeError(dim)
-                #log.info('eig = %s' % eig)
-                cat_keys.append(eig)
-            self.data_frame = pd.concat(cat_keys)
         else:
             #self.data_frame = pd.Panel(self.data[0, :, :], major_axis=node_gridtype, minor_axis=headers).to_frame()
             #self.data_frame.columns.names = ['Static']
             #self.data_frame.index.names = ['NodeID', 'Type', 'Item']
+
+            #    NodeID Type      t1           t2            t3   r1   r2   r3
+            # 0        1    G     0.0     0.000000  0.000000e+00  0.0  0.0  0.0
+            # 1        2    G     0.0     0.000000  0.000000e+00  0.0  0.0  0.0
+            # 2        3    G     0.0     0.000000  0.000000e+00  0.0  0.0  0.0
+            #self.data_frame = pd.DataFrame(self.data[0], columns=headers, index=self.node_gridtype)
 
             df1 = pd.DataFrame(self.node_gridtype[:, 0])
             df1.columns = ['NodeID']
@@ -360,19 +662,53 @@ class TableArray(ScalarObject):  # displacement style table
         #print(self.data_frame)
 
     def finalize(self):
+        """
+        Calls any OP2 objects that need to do any post matrix calcs
+        """
+        self.set_as_sort1()
         gridtypes = self.node_gridtype[:, 1]
         nnodes = len(gridtypes)
         self.gridtype_str = np.chararray((nnodes), unicode=True)
-        ugridtypes = unique(gridtypes)
+        ugridtypes = np.unique(gridtypes)
         for ugridtype in ugridtypes:
-            i = where(gridtypes == ugridtype)
+            i = np.where(gridtypes == ugridtype)
             self.gridtype_str[i] = self.recast_gridtype_as_string(ugridtype)
+        #del self.itotal, self.itime
+
+    def set_as_sort1(self):
+        """changes the table into SORT1"""
+        #if not self.table_name != 'OQMRMS1':
+            #return
+        if self.is_sort1:
+            return
+        #print('table_name=%r' % self.table_name)
+        try:
+            analysis_method = self.analysis_method
+        except AttributeError:
+            print(self.code_information())
+            raise
+        #print(self.get_stats())
+        #print(self.node_gridtype)
+        #print(self.data.shape)
+        self.sort_method = 1
+        self.sort_bits[1] = 0
+        bit0, bit1, bit2 = self.sort_bits
+        self.table_name = SORT2_TABLE_NAME_MAP[self.table_name]
+        self.sort_code = bit0 + 2*bit1 + 4*bit2
+        #print(self.code_information())
+        assert self.is_sort1
+        if analysis_method != 'N/A':
+            self.data_names[0] = analysis_method
+            #print(self.table_name_str, analysis_method, self._times)
+            setattr(self, self.analysis_method + 's', self._times)
+        del self.analysis_method
 
     def add_sort1(self, dt, node_id, grid_type, v1, v2, v3, v4, v5, v6):
-        """
+        """unvectorized method for adding SORT1 transient data"""
+        assert isinstance(node_id, int) and node_id > 0, 'dt=%s node_id=%s' % (dt, node_id)
         # itotal - the node number
         # itime - the time/frequency step
-        """
+
         # the times/freqs
         self._times[self.itime] = dt
         self.node_gridtype[self.itotal, :] = [node_id, grid_type]
@@ -380,24 +716,161 @@ class TableArray(ScalarObject):  # displacement style table
         self.itotal += 1
 
     def add_sort2(self, dt, node_id, grid_type, v1, v2, v3, v4, v5, v6):
-        #msg = "dt=%s node_id=%s v1=%s v2=%s v3=%s\n" % (dt, node_id, v1, v2, v3)
-        #msg += "                    v4=%s v5=%s v6=%s" % (v4, v5, v6)
+        #if node_id < 1:
+            #msg = self.code_information()
+            #msg += "(%s, %s) dt=%g node_id=%s v1=%g v2=%g v3=%g" % (
+                #self.itotal, self.itime, dt, node_id, v1, v2, v3)
+            ##msg += "                    v4=%g v5=%g v6=%g" % (v4, v5, v6)
+            #raise RuntimeError(msg)
+        #print(msg)
         self._times[self.itotal] = dt
 
-        if 1:  # this is needed for SORT1 tables
-            inode = self.itime
-            self.node_gridtype[self.itime, :] = [node_id, grid_type]
-            self.data[self.itime, self.itotal, :] = [v1, v2, v3, v4, v5, v6]
-            # itotal - the node number
-            # itime - the time/frequency step
-        else:
-            self.node_gridtype[self.itime, :] = [node_id, grid_type]
-            self.data[self.itotal, self.itime, :] = [v1, v2, v3, v4, v5, v6]
-            # itotal - the time/frequency step
-            # itime - the node number
+        # itotal - the time/frequency step
+        # itime - the node number
+        #print('itime=%s' % self.itime)
+        self.node_gridtype[self.itime, :] = [node_id, grid_type]
+        self.data[self.itotal, self.itime, :] = [v1, v2, v3, v4, v5, v6]
 
         self.itotal += 1
         #self.itime += 1
+
+    def _write_table_3(self, op2_file, fascii, new_result, itable=-3, itime=0):
+        import inspect
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        fascii.write('%s.write_table_3: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if new_result and itable != -3:
+            header = [
+                4, 146, 4,
+            ]
+        else:
+            header = [
+                4, itable, 4,
+                4, 1, 4,
+                4, 0, 4,
+                4, 146, 4,
+            ]
+        op2_file.write(pack(b'%ii' % len(header), *header))
+        fascii.write('table_3_header = %s\n' % header)
+        #op2_file.write(pack('12i', *[4, itable, 4,
+                              #4, 1, 4,
+                              #4, 0, 4,
+                              #4, 146, 4,
+                              #]))
+
+        approach_code = self.approach_code
+        table_code = self.table_code
+        isubcase = self.isubcase
+        random_code = self.random_code
+        format_code = 1
+        num_wide = self.num_wide
+        acoustic_flag = self.acoustic_flag if hasattr(self, 'acoustic_flag') else 0
+        thermal = self.thermal
+        title = b'%-128s' % self.title.encode('ascii')
+        subtitle = b'%-128s' % self.subtitle.encode('ascii')  # missing superelement_adaptivity_index
+        label = b'%-128s' % self.label.encode('ascii')
+        oCode = 0
+
+        ftable3 = b'i' * 50 + b'128s 128s 128s'
+        field6 = 0
+        field7 = 0
+
+        if isinstance(acoustic_flag, float_types):
+            ftable3 = set_table3_field(ftable3, 12, b'f') # field 11
+
+        #print(self.get_stats())
+        if self.analysis_code == 1:
+            #if hasattr(self, 'lsdvmns'):
+            field5 = self.lsdvmns[itime]
+            #else:
+                #field5 = self.dts[itime]
+                #assert isinstance(field5, float_types), type(field5)
+                #ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+
+        elif self.analysis_code == 2:
+            field5 = self.modes[itime]
+            field6 = self.eigns[itime]
+            field7 = self.mode_cycles[itime]
+            assert isinstance(field6, float_types), f'field6={field6} type={type(field6)}'
+            assert isinstance(field7, float_types), f'field5={field5} field6={field6} field7={field7} type={type(field7)}'
+            ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+            ftable3 = set_table3_field(ftable3, 7, b'f') # field 7
+        elif self.analysis_code == 5:
+            field5 = self.freqs[itime]
+            assert isinstance(field5, float_types), f'field5={field5} type={type(field5)}'
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+        elif self.analysis_code == 6:
+            if hasattr(self, 'dts'):
+                field5 = self.dts[itime]
+                #assert isinstance(field5, float), type(field5)
+            else:
+                field5 = self.times[itime]
+                #assert isinstance(field5, float), type(field5)
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+        elif self.analysis_code == 7:  # pre-buckling
+            field5 = self.lsdvmns[itime] # load set number
+        elif self.analysis_code == 8:  # post-buckling
+            field5 = self.lsdvmns[itime] # load set number
+            if hasattr(self, 'eigns'):
+                field6 = self.eigns[itime]
+            elif hasattr(self, 'eigrs'):
+                field6 = self.eigrs[itime]
+            else:  # pragma: no cover
+                raise NotImplementedError('cant find eigns or eigrs on analysis_code=8')
+            assert isinstance(field6, float_types), f'field6={field6} type={type(field6)}'
+            ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+        elif self.analysis_code == 9:  # complex eigenvalues
+            field5 = self.modes[itime]
+            if hasattr(self, 'eigns'):
+                field6 = self.eigns[itime]
+                ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+            field7 = self.eigis[itime]
+            ftable3 = set_table3_field(ftable3, 7, b'f') # field 7
+        elif self.analysis_code == 10:  # nonlinear statics
+            field5 = self.lftsfqs[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5; load step
+        elif self.analysis_code == 11:  # old geometric nonlinear statics
+            field5 = self.lsdvmns[itime] # load set number
+        else:
+            raise NotImplementedError(self.analysis_code)
+
+        table3 = [
+            approach_code, table_code, 0, isubcase, field5,
+            field6, field7, random_code, format_code, num_wide,
+            oCode, acoustic_flag, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, thermal, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+            title, subtitle, label,
+        ]
+        assert table3[22] == thermal
+
+        n = 0
+        from itertools import count
+        for i, val, ftable3i in zip(count(), table3, ftable3.decode('ascii')):
+            assert val is not None, 'i=%s val=%s ftable3i=%s\n%s' % (i, val, ftable3i, self.get_stats())
+            if isinstance(val, integer_types):
+                n += 4
+                assert ftable3i == 'i', 'analysis_code=%s i=%s val=%s type=%s' % (self.analysis_code, i, val, ftable3i)
+            elif isinstance(val, float_types):
+                n += 4
+                assert ftable3i == 'f', 'analysis_code=%s i=%s val=%s type=%s' % (self.analysis_code, i, val, ftable3i)
+            else:
+                n += len(val)
+        assert n == 584, n
+        data = [584] + table3 + [584]
+        fmt = b'i' + ftable3 + b'i'
+
+        #op2_file.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
+        fascii.write('%s header 3c = %s\n' % (self.table_name, data))
+
+        #j = 7
+        #print(ftable3[:j])
+        #print(table3[:j])
+        #pack(ftable3[:j], *table3[:j])
+        op2_file.write(pack(fmt, *data))
 
 
 class RealTableArray(TableArray):
@@ -406,6 +879,121 @@ class RealTableArray(TableArray):
     """
     def __init__(self, data_code, is_sort1, isubcase, dt):
         TableArray.__init__(self, data_code, is_sort1, isubcase, dt)
+
+    def set_as_static_case(self):
+        analysis_code = 1 # static
+        device_code = 2  # Plot
+        approach_code = analysis_code * 10 + device_code
+
+        self.table_code = table_name_to_table_code[self.table_name_str]
+        self.nonlinear_factor = None
+        self.data_code['lsdvmns'] = [0] # TODO: ???
+        self.data_code['data_names'] = []
+        self.data_code['analysis_code'] = analysis_code
+        self.data_code['approach_code'] = approach_code
+        self.analysis_code = analysis_code
+        self.approach_code = approach_code
+        self.data_names = []
+        self.lsdvmns = [0]
+        self._times = [None]
+
+    @classmethod
+    def add_static_case(cls, table_name, node_gridtype, data, isubcase,
+                        is_sort1=True, is_random=False, is_msc=True,
+                        random_code=0, title='', subtitle='', label=''):
+
+        table_name = table_name
+        analysis_code = 1 # static
+        data_code = oug_data_code(table_name, analysis_code,
+                                  is_sort1=is_sort1, is_random=is_random,
+                                  random_code=random_code,
+                                  title=title, subtitle=subtitle, label=label,
+                                  is_msc=is_msc)
+        data_code['lsdvmns'] = [0] # TODO: ???
+        data_code['data_names'] = []
+
+        ntimes = data.shape[0]
+        nnodes = data.shape[1]
+        dt = None
+        obj = cls(data_code, is_sort1, isubcase, dt)
+        obj.node_gridtype = node_gridtype
+        obj.data = data
+
+        obj.ntimes = ntimes
+        obj.ntotal = nnodes
+        obj._times = [None]
+        obj.is_built = True
+        return obj
+
+    @classmethod
+    def add_transient_case(cls, table_name, node_gridtype, data, isubcase,
+                           times,
+                           is_sort1=True, is_random=False, is_msc=True,
+                           random_code=0, title='', subtitle='', label=''):
+
+        analysis_code = 6 # transient
+        data_code = oug_data_code(table_name, analysis_code,
+                                  is_sort1=is_sort1, is_random=is_random,
+                                  random_code=random_code, title=title, subtitle=subtitle, label=label,
+                                  is_msc=is_msc)
+        data_code['data_names'] = ['dt']
+
+        ntimes = data.shape[0]
+        nnodes = data.shape[1]
+        dt = times[0]
+        obj = cls(data_code, is_sort1, isubcase, dt)
+        obj.node_gridtype = node_gridtype
+        obj.data = data
+
+        obj.ntimes = ntimes
+        obj.ntotal = nnodes
+        obj.dts = times
+        obj._times = times
+        obj.is_built = True
+        return obj
+
+    @classmethod
+    def add_modal_case(cls, table_name, node_gridtype, data, isubcase,
+                       modes, eigenvalues, mode_cycles,
+                       is_sort1=True, is_random=False, is_msc=True,
+                       random_code=0, title='', subtitle='', label=''):
+
+        #elif self.analysis_code == 2:  # real eigenvalues
+            ## mode number
+            #self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
+            ## eigenvalue
+            #self.eign = self.add_data_parameter(data, 'eign', b'f', 6, False)
+            ## mode or cycle .. todo:: confused on the type - F1???
+            #self.mode_cycle = self.add_data_parameter(data, 'mode_cycle', b'i', 7, False)
+            #self.update_mode_cycle('mode_cycle')
+            #self.data_names = self.apply_data_code_value('data_names', ['mode', 'eign', 'mode_cycle'])
+
+        analysis_code = 2 # modal
+        data_code = oug_data_code(table_name, analysis_code,
+                                  is_sort1=is_sort1, is_random=is_random,
+                                  random_code=random_code, title=title, subtitle=subtitle, label=label,
+                                  is_msc=is_msc)
+        #data_code['modes'] = modes
+        #data_code['eigns'] = eigenvalues
+        #data_code['mode_cycles'] = mode_cycles
+        data_code['data_names'] = ['modes', 'eigns', 'mode_cycles']
+
+        ntimes = data.shape[0]
+        nnodes = data.shape[1]
+        dt = modes[0]
+        obj = cls(data_code, is_sort1, isubcase, dt)
+        obj.node_gridtype = node_gridtype
+        obj.data = data
+
+        obj.modes = modes
+        obj.eigns = eigenvalues
+        obj.mode_cycles = mode_cycles
+
+        obj.ntimes = ntimes
+        obj.ntotal = nnodes
+        obj._times = modes
+        obj.is_built = True
+        return obj
 
     @property
     def is_real(self):
@@ -418,78 +1006,38 @@ class RealTableArray(TableArray):
     def data_type(self):
         return 'float32'
 
-    def _write_table_3(self, op2_file, fascii, itable=-3, itime=0):
+    def write_op2(self, op2_file, fascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
         import inspect
-        frame = inspect.currentframe()
-        call_frame = inspect.getouterframes(frame, 2)
-        fascii.write('%s.write_table_3: %s\n' % (self.__class__.__name__, call_frame[1][3]))
-
-        op2_file.write(pack('12i', *[4, itable, 4,
-                              4, 1, 4,
-                              4, 0, 4,
-                              4, 146, 4,
-                              ]))
-        approach_code = self.approach_code
-        table_code = self.table_code
-        isubcase = self.isubcase
-        random_code = self.random_code
-        format_code = 1
-        num_wide = self.num_wide
-        acoustic_flag = 0
-        thermal = 0
-        title = b'%-128s' % bytes(self.title)
-        subtitle = b'%-128s' % bytes(self.subtitle)
-        label = b'%-128s' % bytes(self.label)
-        ftable3 = b'50i 128s 128s 128s'
-        oCode = 0
-        if self.analysis_code == 1:
-            lsdvmn = self.lsdvmn
-        else:
-            raise NotImplementedError(self.analysis_code)
-
-        table3 = [
-            approach_code, table_code, 0, isubcase, lsdvmn,
-            0, 0, random_code, format_code, num_wide,
-            oCode, acoustic_flag, 0, 0, 0,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, thermal, thermal, 0,
-            title, subtitle, label,
+        allowed_tables = [
+            'OUGV1', 'BOUGV1', 'BOPHIG', 'BOPG1',
+            'OUPV1', 'OUXY1', # solution set
+            'OQP1', 'OQMG1', 'OQG1', 'OQGV1', 'OPNL1',
+            'OPG1', 'OPGV1',
+                       'OUGCRM1', 'OUGNO1', 'OUGPSD1', 'OUGRMS1', # disp/vel/acc/eigenvector
+            'OAGATO1', 'OAGCRM1', 'OAGNO1', 'OAGPSD1', 'OAGRMS1', # acceleration
+                                  'OPGNO1',            'OPGRMS1', # load vector
+            'OQGPSD1',
+            'OCRPG', 'OCRUG', 'OUG1',
+            'OUGV1PAT',
+            'RADCONS', 'RADEATC', 'RADEFFM',
         ]
-
-        n = 0
-        for v in table3:
-            if isinstance(v, (int, float)):
-                n += 4
-            else:
-                n += len(v)
-        assert n == 584, n
-        data = [584] + table3 + [584]
-        fmt = 'i' + ftable3 + 'i'
-        #print(fmt)
-        #op2_file.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
-        fascii.write('%s header 3c = %s\n' % (self.table_name, data))
-        op2_file.write(pack(fmt, *data))
-
-    def write_op2(self, op2_file, fascii, itable, date, is_mag_phase=False, endian='>'):
-        import inspect
-        assert self.table_name in ['OUGV1', 'OQMG1', 'OQG1'], self.table_name
+        assert self.table_name in allowed_tables, self.table_name
 
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
         fascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
 
-        #print('data_code =', self.data_code)
         if itable == -1:
-            self._write_table_header(f, fascii, date)
+            self._write_table_header(op2_file, fascii, date)
             itable = -3
 
-        if isinstance(self.nonlinear_factor, float):
-            op2_format = endian + b'%sif' % (7 * self.ntimes)
-            raise NotImplementedError()
+        #print('nonlinear_factor =', self.nonlinear_factor)
+        if self.is_sort1:
+            op2_format = endian + b'2i6f'
         else:
-            op2_format = endian + b'2i6f' * self.ntimes
+            raise NotImplementedError('SORT2')
         s = Struct(op2_format)
 
         unused_node = self.node_gridtype[:, 0]
@@ -503,10 +1051,10 @@ class RealTableArray(TableArray):
         nnodes_device = self.node_gridtype[:, 0] * 10 + self.device_code
 
         #(2+6) => (node_id, gridtypei, t1i, t2i, t3i, r1i, r2i, r3i)
-        ntotal = self.ntimes * nnodes * (2 + 6)
+        ntotal = nnodes * (2 + 6)
 
         #print('shape = %s' % str(self.data.shape))
-        assert nnodes > 1, nnodes
+        #assert nnodes > 1, nnodes
         assert ntotal > 1, ntotal
 
         unused_device_code = self.device_code
@@ -515,17 +1063,18 @@ class RealTableArray(TableArray):
         #fmt = '%2i %6f'
         #print('ntotal=%s' % (ntotal))
         for itime in range(self.ntimes):
-            self._write_table_3(op2_file, fascii, itable, itime)
+            self._write_table_3(op2_file, fascii, new_result, itable, itime)
 
             # record 4
-            header = [4, -4, 4,
+            itable -= 1
+            header = [4, itable, 4,
                       4, 1, 4,
                       4, 0, 4,
                       4, ntotal, 4,
                       4*ntotal]
             op2_file.write(pack(b'%ii' % len(header), *header))
             fascii.write('r4 [4, 0, 4]\n')
-            fascii.write('r4 [4, %s, 4]\n' % (itable-1))
+            fascii.write('r4 [4, %s, 4]\n' % (itable))
             fascii.write('r4 [4, %i, 4]\n' % (4*ntotal))
 
             t1 = self.data[itime, :, 0]
@@ -540,18 +1089,12 @@ class RealTableArray(TableArray):
                 fascii.write('  nid, grid_type, dx, dy, dz, rx, ry, rz = %s\n' % data)
                 op2_file.write(s.pack(*data))
 
-            itable -= 2
+            itable -= 1
             header = [4 * ntotal,]
             op2_file.write(pack(b'i', *header))
-            fascii.write('footer = %s' % header)
-        header = [
-            4, itable, 4,
-            4, 1, 4,
-            4, 0, 4,
-        ]
-        op2_file.write(pack(b'%ii' % len(header), *header))
+            fascii.write('footer = %s\n' % header)
+            new_result = False
         return itable
-
 
     def write_csv(self, csv_file, is_mag_phase=False):
         name = str(self.__class__.__name__)
@@ -626,9 +1169,9 @@ class RealTableArray(TableArray):
                 if sgridtype in ['G', 'H', 'L']:
                     f06_file.write('%14s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %s\n' % (
                         write_float_12e(dt), sgridtype, dx, dy, dz, rx, ry, rz))
-                elif sgridtype == 'S':
+                elif sgridtype in ['S', 'M', 'E']:
                     f06_file.write('%14s %6s     %s\n' % (node_id, sgridtype, dx))
-                else:
+                else:  # pragma: no cover
                     raise NotImplementedError(sgridtype)
             f06_file.write(page_stamp % page_num)
             page_num += 1
@@ -648,7 +1191,7 @@ class RealTableArray(TableArray):
             r2 = self.data[itime, :, 4]
             r3 = self.data[itime, :, 5]
 
-            if isinstance(dt, (float, float32)):
+            if isinstance(dt, float_types):
                 header[1] = ' %s = %10.4E\n' % (self.data_code['name'], dt)
             else:
                 header[1] = ' %s = %10i\n' % (self.data_code['name'], dt)
@@ -661,43 +1204,43 @@ class RealTableArray(TableArray):
                 if sgridtype in ['G', 'H', 'L']:
                     f06_file.write('%14i %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %s\n' % (
                         node_id, sgridtype, dx, dy, dz, rx, ry, rz))
-                elif sgridtype == 'S':
+                elif sgridtype in ['S', 'M', 'E']:
                     f06_file.write('%14i %6s     %s\n' % (node_id, sgridtype, dx))
-                else:
-                    raise NotImplementedError(sgridtype)
+                else:  # pragma: no cover
+                    raise NotImplementedError(f'node_id={node_id} sgridtype={sgridtype} vals={vals2}')
             f06_file.write(page_stamp % page_num)
             page_num += 1
         return page_num
 
-    def _write_sort2_as_sort2(self, f06_file, page_num, page_stamp, header, words):
-        nodes = self.node_gridtype[:, 0]
-        gridtypes = self.node_gridtype[:, 1]
-        times = self._times
-        for inode, (node_id, gridtypei) in enumerate(zip(nodes, gridtypes)):
-            t1 = self.data[inode, :, 0]
-            t2 = self.data[inode, :, 1]
-            t3 = self.data[inode, :, 2]
-            r1 = self.data[inode, :, 3]
-            r2 = self.data[inode, :, 4]
-            r3 = self.data[inode, :, 5]
+    #def _write_sort2_as_sort2(self, f06_file, page_num, page_stamp, header, words):
+        #nodes = self.node_gridtype[:, 0]
+        #gridtypes = self.node_gridtype[:, 1]
+        #times = self._times
+        #for inode, (node_id, gridtypei) in enumerate(zip(nodes, gridtypes)):
+            #t1 = self.data[inode, :, 0]
+            #t2 = self.data[inode, :, 1]
+            #t3 = self.data[inode, :, 2]
+            #r1 = self.data[inode, :, 3]
+            #r2 = self.data[inode, :, 4]
+            #r3 = self.data[inode, :, 5]
 
-            header[1] = ' POINT-ID = %10i\n' % node_id
-            f06_file.write(''.join(header + words))
-            for dt, t1i, t2i, t3i, r1i, r2i, r3i in zip(times, t1, t2, t3, r1, r2, r3):
-                sgridtype = self.recast_gridtype_as_string(gridtypei)
-                vals = [t1i, t2i, t3i, r1i, r2i, r3i]
-                vals2 = write_floats_13e(vals)
-                (dx, dy, dz, rx, ry, rz) = vals2
-                if sgridtype in ['G', 'H', 'L']:
-                    f06_file.write('%14s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %s\n' % (
-                        write_float_12e(dt), sgridtype, dx, dy, dz, rx, ry, rz))
-                elif sgridtype == 'S':
-                    f06_file.write('%14s %6s     %s\n' % (node_id, sgridtype, dx))
-                else:
-                    raise NotImplementedError(sgridtype)
-            f06_file.write(page_stamp % page_num)
-            page_num += 1
-        return page_num
+            #header[1] = ' POINT-ID = %10i\n' % node_id
+            #f06_file.write(''.join(header + words))
+            #for dt, t1i, t2i, t3i, r1i, r2i, r3i in zip(times, t1, t2, t3, r1, r2, r3):
+                #sgridtype = self.recast_gridtype_as_string(gridtypei)
+                #vals = [t1i, t2i, t3i, r1i, r2i, r3i]
+                #vals2 = write_floats_13e(vals)
+                #(dx, dy, dz, rx, ry, rz) = vals2
+                #if sgridtype in ['G', 'H', 'L']:
+                    #f06_file.write('%14s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %s\n' % (
+                        #write_float_12e(dt), sgridtype, dx, dy, dz, rx, ry, rz))
+                #elif sgridtype == 'S':
+                    #f06_file.write('%14s %6s     %s\n' % (node_id, sgridtype, dx))
+                #else:
+                    #raise NotImplementedError(sgridtype)
+            #f06_file.write(page_stamp % page_num)
+            #page_num += 1
+        #return page_num
 
     def _write_f06_transient_block(self, words, header, page_stamp, page_num, f06_file, write_words,
                                    is_mag_phase=False, is_sort1=True):
@@ -709,21 +1252,23 @@ class RealTableArray(TableArray):
             header.append('')
 
         is_sort2 = not is_sort1
-        if self.is_sort1 or self.nonlinear_factor is None:
+        if self.is_sort1 or self.nonlinear_factor in (None, np.nan):
             if is_sort2 and self.nonlinear_factor is not None:
                 page_num = self._write_sort1_as_sort2(f06_file, page_num, page_stamp, header, words)
             else:
                 page_num = self._write_sort1_as_sort1(f06_file, page_num, page_stamp, header, words)
         else:
-            page_num = self._write_sort2_as_sort2(f06_file, page_num, page_stamp, header, words)
+            return page_num - 1
+            #raise NotImplementedError('SORT2')
+            #page_num = self._write_sort2_as_sort2(f06_file, page_num, page_stamp, header, words)
         return page_num - 1
 
     def extract_xyplot(self, node_ids, index):
-        node_ids = asarray(node_ids, dtype='int32')
+        node_ids = np.asarray(node_ids, dtype='int32')
         i = index - 1
         assert index in [1, 2, 3, 4, 5, 6], index
         nids = self.node_gridtype[:, 0]
-        inids = searchsorted(nids, node_ids)
+        inids = np.searchsorted(nids, node_ids)
         assert all(nids[inids] == node_ids), 'nids=%s expected=%s; all=%s'  % (nids[inids], node_ids, nids)
         return self.data[:, inids, i]
 
@@ -734,6 +1279,39 @@ class ComplexTableArray(TableArray):
     """
     def __init__(self, data_code, is_sort1, isubcase, dt):
         TableArray.__init__(self, data_code, is_sort1, isubcase, dt)
+
+    @classmethod
+    def add_freq_case(cls, table_name, node_gridtype, data, isubcase,
+                      freqs,
+                      is_sort1=True, is_random=False, is_msc=True,
+                      random_code=0, title='', subtitle='', label=''):
+
+        table_name = 'OUGV1'
+        analysis_code = 5 # freq
+        data_code = oug_data_code(table_name, analysis_code,
+                                  is_sort1=is_sort1, is_random=is_random,
+                                  random_code=random_code, title=title, subtitle=subtitle, label=label,
+                                  is_msc=is_msc)
+        #data_code['modes'] = modes
+        #data_code['eigns'] = eigenvalues
+        #data_code['mode_cycles'] = mode_cycles
+        data_code['data_names'] = ['freq']
+        data_code['name'] = 'FREQ'
+
+        ntimes = data.shape[0]
+        nnodes = data.shape[1]
+        dt = freqs[0]
+        obj = cls(data_code, is_sort1, isubcase, dt)
+        obj.node_gridtype = node_gridtype
+        obj.data = data
+
+        obj.freqs = freqs
+
+        obj.ntimes = ntimes
+        obj.ntotal = nnodes
+        obj._times = freqs
+        obj.is_built = True
+        return obj
 
     def extract_xyplot(self, node_ids, index, index_str):
         index_str = index_str.lower().strip()
@@ -748,12 +1326,12 @@ class ComplexTableArray(TableArray):
         else:
             raise ValueError('index_str=%r' % index_str)
 
-        node_ids = asarray(node_ids, dtype='int32')
+        node_ids = np.asarray(node_ids, dtype='int32')
         i = index - 1
         assert index in [1, 2, 3, 4, 5, 6,
                          7, 8, 9, 10, 11, 12], index
         nids = self.node_gridtype[:, 0]
-        inids = searchsorted(nids, node_ids)
+        inids = np.searchsorted(nids, node_ids)
         assert all(nids[inids] == node_ids), 'nids=%s expected=%s; all=%s'  % (nids[inids], node_ids, nids)
         if j == 1:
             # real
@@ -763,10 +1341,10 @@ class ComplexTableArray(TableArray):
             return self.data[:, inids, i].imag
         elif j == 3:
             # mag
-            return abs(self.data[:, inids, i])
+            return np.abs(self.data[:, inids, i])
         elif j == 4:
             # phase
-            return angle(self.data[:, inids, i])
+            return np.angle(self.data[:, inids, i])
         else:
             raise RuntimeError()
 
@@ -850,16 +1428,16 @@ class ComplexTableArray(TableArray):
                 vals2 = write_imag_floats_13e(vals, is_mag_phase)
                 [dxr, dyr, dzr, rxr, ryr, rzr,
                  dxi, dyi, dzi, rxi, ryi, rzi] = vals2
-                if sgridtype == 'G':
+                if sgridtype in ['G', 'H']:
                     f06_file.write('0 %12i %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n'
                                    '  %12s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n' % (
                                        node_id, sgridtype, dxr, dyr, dzr, rxr, ryr, rzr,
                                        '', '', dxi, dyi, dzi, rxi, ryi, rzi))
-                elif sgridtype == 'S':
+                elif sgridtype in ['S', 'M', 'E']:
                     f06_file.write('0 %12i %6s     %-13s\n'
                                    '  %12s %6s     %-13s\n' % (node_id, sgridtype, dxr, '', '', dxi))
-                else:
-                    raise NotImplementedError(sgridtype)
+                else:  # pragma: no cover
+                    raise NotImplementedError(f'node_id={node_id} sgridtype={sgridtype} vals={vals2}')
             f06_file.write(page_stamp % page_num)
             page_num += 1
         return page_num
@@ -897,7 +1475,7 @@ class ComplexTableArray(TableArray):
                                    '  %13s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n' % (
                                        sdt, sgridtype, dxr, dyr, dzr, rxr, ryr, rzr,
                                        '', '', dxi, dyi, dzi, rxi, ryi, rzi))
-                elif sgridtype == 'S':
+                elif sgridtype in ['S', 'M', 'E']:
                     f06_file.write('0 %12s %6s     %-13s\n'
                                    '  %12s %6s     %-13s\n' % (sdt, sgridtype, dxr, '', '', dxi))
                 else:
@@ -908,49 +1486,181 @@ class ComplexTableArray(TableArray):
             page_num += 1
         return page_num
 
-    def write_sort2_as_sort2(self, f06_file, page_num, page_stamp, header, words, is_mag_phase):
-        node = self.node_gridtype[:, 0]
+    def write_op2(self, op2_file, fascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        allowed_tables = [
+            'OUGV1', 'BOUGV1',
+            'OQG1', 'OQMG1',
+            'OPG1',
+            'OUXY1',
+        ]
+        assert self.table_name in allowed_tables, self.table_name
+
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        fascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if itable == -1:
+            self._write_table_header(op2_file, fascii, date)
+            itable = -3
+
+        #print('nonlinear_factor =', self.nonlinear_factor)
+        if self.is_sort1:
+            op2_format = endian + b'2i 12f'
+        else:
+            raise NotImplementedError('SORT2')
+        s = Struct(op2_format)
+
+        unused_node = self.node_gridtype[:, 0]
         gridtype = self.node_gridtype[:, 1]
+        #format_table4_1 = Struct(self._endian + b'15i')
+        #format_table4_2 = Struct(self._endian + b'3i')
 
-        times = self._times
-        for inode, (node_id, gridtypei) in enumerate(zip(node, gridtype)):
-            # TODO: for SORT1 pretending to be SORT2
-            #t1 = self.data[:, inode, 0].ravel()
-            t1 = self.data[inode, :, 0]
-            t2 = self.data[inode, :, 1]
-            t3 = self.data[inode, :, 2]
-            r1 = self.data[inode, :, 3]
-            r2 = self.data[inode, :, 4]
-            r3 = self.data[inode, :, 5]
-            if len(r3) != len(times):
-                raise RuntimeError('len(d)=%s len(times)=%s' % (len(r3), len(times)))
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        nnodes = self.data.shape[1]
+        nnodes_device = self.node_gridtype[:, 0] * 10 + self.device_code
 
-            header[2] = ' POINT-ID = %10i\n' % node_id
-            f06_file.write(''.join(header + words))
-            for dt, t1i, t2i, t3i, r1i, r2i, r3i in zip(times, t1, t2, t3, r1, r2, r3):
-                sgridtype = self.recast_gridtype_as_string(gridtypei)
-                vals = [t1i, t2i, t3i, r1i, r2i, r3i]
-                vals2 = write_imag_floats_13e(vals, is_mag_phase)
-                [dxr, dyr, dzr, rxr, ryr, rzr,
-                 dxi, dyi, dzi, rxi, ryi, rzi] = vals2
-                sdt = write_float_12e(dt)
-                #if not is_all_zeros:
-                if sgridtype == 'G':
-                    f06_file.write('0 %12s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n'
-                                   '  %13s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n' % (
-                                       sdt, sgridtype, dxr, dyr, dzr, rxr, ryr, rzr,
-                                       '', '', dxi, dyi, dzi, rxi, ryi, rzi))
-                elif sgridtype == 'S':
-                    f06_file.write('0 %12s %6s     %-13s\n'
-                                   '  %12s %6s     %-13s\n' % (sdt, sgridtype, dxr, '', '', dxi))
-                else:
-                    msg = 'nid=%s dt=%s type=%s dx=%s dy=%s dz=%s rx=%s ry=%s rz=%s' % (
-                        node_id, dt, sgridtype, t1i, t2i, t3i, r1i, r2i, r3i)
-                    raise NotImplementedError(msg)
-            f06_file.write(page_stamp % page_num)
-            page_num += 1
-        return page_num
+        #(2+6) => (node_id, gridtypei, t1i, t2i, t3i, r1i, r2i, r3i)
+        ntotal = nnodes * (2 + 12)
 
+        #print('shape = %s' % str(self.data.shape))
+        assert nnodes >= 1, nnodes
+        assert ntotal > 1, ntotal
+
+        unused_device_code = self.device_code
+        fascii.write('  ntimes = %s\n' % self.ntimes)
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+        for itime in range(self.ntimes):
+            self._write_table_3(op2_file, fascii, new_result, itable, itime)
+
+            # record 4
+            itable -= 1
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4*ntotal]
+            op2_file.write(pack(b'%ii' % len(header), *header))
+            fascii.write('r4 [4, 0, 4]\n')
+            fascii.write('r4 [4, %s, 4]\n' % (itable))
+            fascii.write('r4 [4, %i, 4]\n' % (4*ntotal))
+
+            t1 = self.data[itime, :, 0]
+            t2 = self.data[itime, :, 1]
+            t3 = self.data[itime, :, 2]
+            r1 = self.data[itime, :, 3]
+            r2 = self.data[itime, :, 4]
+            r3 = self.data[itime, :, 5]
+
+            for node_id, gridtypei, t1i, t2i, t3i, r1i, r2i, r3i in zip(nnodes_device, gridtype, t1, t2, t3, r1, r2, r3):
+                data = [node_id, gridtypei,
+                        t1i.real, t2i.real, t3i.real, r1i.real, r2i.real, r3i.real,
+                        t1i.imag, t2i.imag, t3i.imag, r1i.imag, r2i.imag, r3i.imag]
+                fascii.write('  nid, grid_type, dx, dy, dz, rx, ry, rz = %s\n' % data)
+                op2_file.write(s.pack(*data))
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2_file.write(pack(b'i', *header))
+            fascii.write('footer = %s\n' % header)
+            new_result = False
+            #header = [
+                #4, itable, 4,
+                #4, 1, 4,
+                #4, 0, 4,
+            #]
+            #op2_file.write(pack(b'%ii' % len(header), *header))
+            #fascii.write('footer2 = %s\n' % header)
+        return itable
+
+    #def write_sort2_as_sort2(self, f06_file, page_num, page_stamp, header, words, is_mag_phase):
+        #node = self.node_gridtype[:, 0]
+        #gridtype = self.node_gridtype[:, 1]
+
+        #times = self._times
+        #for inode, (node_id, gridtypei) in enumerate(zip(node, gridtype)):
+            ## TODO: for SORT1 pretending to be SORT2
+            ##t1 = self.data[:, inode, 0].ravel()
+            #t1 = self.data[inode, :, 0]
+            #t2 = self.data[inode, :, 1]
+            #t3 = self.data[inode, :, 2]
+            #r1 = self.data[inode, :, 3]
+            #r2 = self.data[inode, :, 4]
+            #r3 = self.data[inode, :, 5]
+            #if len(r3) != len(times):
+                #raise RuntimeError('len(d)=%s len(times)=%s' % (len(r3), len(times)))
+
+            #header[2] = ' POINT-ID = %10i\n' % node_id
+            #f06_file.write(''.join(header + words))
+            #for dt, t1i, t2i, t3i, r1i, r2i, r3i in zip(times, t1, t2, t3, r1, r2, r3):
+                #sgridtype = self.recast_gridtype_as_string(gridtypei)
+                #vals = [t1i, t2i, t3i, r1i, r2i, r3i]
+                #vals2 = write_imag_floats_13e(vals, is_mag_phase)
+                #[dxr, dyr, dzr, rxr, ryr, rzr,
+                 #dxi, dyi, dzi, rxi, ryi, rzi] = vals2
+                #sdt = write_float_12e(dt)
+                ##if not is_all_zeros:
+                #if sgridtype == 'G':
+                    #f06_file.write('0 %12s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n'
+                                   #'  %13s %6s     %-13s  %-13s  %-13s  %-13s  %-13s  %-s\n' % (
+                                       #sdt, sgridtype, dxr, dyr, dzr, rxr, ryr, rzr,
+                                       #'', '', dxi, dyi, dzi, rxi, ryi, rzi))
+                #elif sgridtype == 'S':
+                    #f06_file.write('0 %12s %6s     %-13s\n'
+                                   #'  %12s %6s     %-13s\n' % (sdt, sgridtype, dxr, '', '', dxi))
+                #else:
+                    #msg = 'nid=%s dt=%s type=%s dx=%s dy=%s dz=%s rx=%s ry=%s rz=%s' % (
+                        #node_id, dt, sgridtype, t1i, t2i, t3i, r1i, r2i, r3i)
+                    #raise NotImplementedError(msg)
+            #f06_file.write(page_stamp % page_num)
+            #page_num += 1
+        #return page_num
+
+def pandas_extract_rows(data_frame, ugridtype_str, index_names):
+    """removes the t2-t6 for S and E points"""
+    import pandas as pd
+    letter_dims = [
+        ('G', 6),
+        ('E', 1),
+        ('S', 1),
+        ('H', 6),
+        ('L', 6),
+    ]
+    cat_keys = []
+    for (letter, dim) in letter_dims:
+        if letter not in ugridtype_str:
+            continue
+        if dim == 1:
+            # Note that I'm only keeping every 6th row
+            eig = data_frame.xs(letter, level=1).iloc[0::6]
+            eig = eig.reset_index()
+            #print(eig.columns)
+            #print(eig)
+            #item = eig.loc[:, 1]
+            #item = eig.loc[:, 'Item']
+            #print(dir(eig))
+            #print(eig.loc)
+            #item = eig['Item']
+            #print(item)
+            try:
+                eig = eig.replace({'Item' : {'t1' : letter}}).set_index(index_names)
+            except (TypeError, NotImplementedError):
+                print(f'skipping pandas cleanup due to issue with complex {letter} points')
+                return data_frame
+                #continue
+        elif dim == 6:
+            eig = data_frame.xs(letter, level=1)
+        else:
+            raise RuntimeError(dim)
+        #log.info('eig = %s' % eig)
+        cat_keys.append(eig)
+    data_frame = pd.concat(cat_keys)
+    return data_frame
 
 #class StaticArrayNode(RealTableArray):
     #def __init__(self, data_code, is_sort1, isubcase, dt):

@@ -1,4 +1,5 @@
-from __future__ import print_function
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from collections import defaultdict
 import numpy as np
 
@@ -6,16 +7,18 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8, set_blank_if_default
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class Rods(object):
+class Rods:
     """intializes the Rods"""
     def __init__(self, model):
         self.model = model
         self.conrod = model.conrod
         self.crod = model.crod
         self.ctube = model.ctube
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:
@@ -51,7 +54,7 @@ class Rods(object):
         return self.repr_indent(indent='')
 
 
-class RodElement(object):
+class RodElement:
     """base class for CONROD, CROD, and CTUBE"""
     card_name = ''
 
@@ -67,7 +70,7 @@ class RodElement(object):
             add_card = True
         return add_card
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 

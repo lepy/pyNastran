@@ -1,37 +1,38 @@
-from __future__ import print_function
 import sys
 from collections import OrderedDict
-from six import iteritems, iterkeys
+from typing import Dict, Union, Any
+
 import numpy as np
+from pyNastran.femutils.utils import pivot_table
 
 #vm_word = get_plate_stress_strain(
     #model, key, is_stress, vm_word, itime,
     #oxx, oyy, txy, max_principal, min_principal, ovm, is_element_on,
     #header_dict, keys_map)
 
-class StressObject(object):
-    def __init__(self, model, key, all_eids, is_stress=True):
+class StressObject:
+    def __init__(self, model: Any, key: str, all_eids: Any, is_stress: bool=True) -> None:
         #print('--StressObject--')
         self.model = model
         self.vm_word = None
-        self.header_dict = OrderedDict()
-        self.keys_map = {}
-        self.composite_ieids = {}
+        self.header_dict = OrderedDict()  # type: Dict[Any, str]
+        self.keys_map = {}  # type: Dict[str, str]
+        self.composite_ieids = {}  # type: Dict[str, str]
         self.is_stress = is_stress
 
         self.composite_data_dict = create_composite_plates(model, key, is_stress, self.keys_map)
         #self.plates_data_dict = create_plates(model, key, is_stress)
 
-        #for key in iterkeys(self.plates_data_dict):
+        #for key in self.plates_data_dict.keys():
             #(case.element_node, ueids, data2, vm_word, ntimes) = self.plates_data_dict[key]
             #(min_data, max_data) = data2
 
-        for element_type, composite_data in iteritems(self.composite_data_dict):
+        for element_type, composite_data in self.composite_data_dict.items():
             for key in composite_data:
-                element_layer, ueids, data2, vm_word, ntimes, headers = composite_data[key]
+                element_layer, ueids, data2, vm_word, unused_ntimes, headers = composite_data[key]
                 #all_eids = ueids
 
-                ntimes, neids, nlayers, nresults = data2.shape
+                ntimes, unused_neids, unused_nlayers, unused_nresults = data2.shape
                 #data2[itime, eid, layer, oxx/oyy/...]
                 ieids = np.searchsorted(all_eids, ueids)
                 self.composite_ieids[element_type] = ieids
@@ -41,26 +42,23 @@ class StressObject(object):
 
 
     def set_composite_stress_old(self,
-                                 key, itime, oxx, oyy, txy, tyz, txz,
-                                 max_principal, min_principal, ovm,
-                                 is_element_on, header_dict):
-        #print("setting...")
-
-        for element_type, composite_data in iteritems(self.composite_data_dict):
+                                 key: int, itime: int,
+                                 oxx: Any, oyy: Any, txy: Any, tyz: Any, txz: Any,
+                                 max_principal: Any, min_principal: Any, ovm: Any,
+                                 is_element_on: Any, header_dict: Dict[Any, Any]) -> str:
+        for element_type, composite_data in self.composite_data_dict.items():
             try:
-                element_layer, ueids, data2, vm_word, ntimes, headers = composite_data[key]
+                element_layer, unused_ueids, data2, vm_word, unused_ntimes, headers = composite_data[key]
             except KeyError:
                 print(composite_data)
                 raise
-            #print("vm_word = ", key, vm_word)
             for itime2, header in enumerate(headers):
                 header_dict[(key, itime2)] = header
 
-            ntimes, neids, nlayers, nresults = data2.shape
+            ntimes, unused_neids, unused_nlayers, unused_nresults = data2.shape
             #data2[itime, eid, layer, oxx/oyy/...]
 
             ieids = self.composite_ieids[element_type]
-            #print('setting...')
             data3 = data2[itime, :, :, :]
             oxx[ieids] = np.nanmax(data3[:, :, 0], axis=1)
             oyy[ieids] = np.nanmax(data3[:, :, 1], axis=1)
@@ -71,20 +69,76 @@ class StressObject(object):
             max_principal[ieids] = np.nanmax(data3[:, :, 6], axis=1)
             min_principal[ieids] = np.nanmin(data3[:, :, 7], axis=1)
             ovm[ieids] = np.nanmax(data3[:, :, 8], axis=1)
+
             if itime == 0:
                 is_element_on[ieids] = 1
             #assert oxxi.shape == (ntimes, neids)
         return vm_word
 
+    def set_composite_stress_by_layer(self,
+                                      key: int, itime: int, nelements: int,
+                                      header_dict: Dict[Any, Any]) -> str:
+        """get all the ply stresses/strains"""
+        nlayers = 0
+        nelements2 = 0
+        for element_type, composite_data in self.composite_data_dict.items():
+            try:
+                unused_element_layer, unused_ueids, data2, vm_word, unused_ntimes, headers = composite_data[key]
+            except KeyError:
+                print(composite_data)
+                raise
+            unused_ntimesi, neidsi, nlayersi, unused_nresultsi = data2.shape
+            nlayers = max(nlayers, nlayersi)
+            nelements2 += neidsi
+
+        shape = (nelements2, nlayers)
+        unused_element_ids = np.full(nelements2, np.nan, dtype='float32')
+        oxx = np.full(shape, np.nan, dtype='float32')
+        oyy = np.full(shape, np.nan, dtype='float32')
+
+        txy = np.full(shape, np.nan, dtype='float32')
+        tyz = np.full(shape, np.nan, dtype='float32')
+        txz = np.full(shape, np.nan, dtype='float32')
+
+        max_principal = np.full(shape, np.nan, dtype='float32')  # max
+        min_principal = np.full(shape, np.nan, dtype='float32')  # min
+        ovm = np.full(shape, np.nan, dtype='float32')
+
+        for element_type, composite_data in self.composite_data_dict.items():
+            unused_element_layer, unused_ueids, data2, vm_word, unused_ntimes, headers = composite_data[key]
+
+            for itime2, header in enumerate(headers):
+                header_dict[(key, itime2)] = header
+
+            unused_ntimes, unused_neids, nlayers, unused_nresults = data2.shape
+            #data2[itime, eid, layer, oxx/oyy/...]
+
+            ieids = self.composite_ieids[element_type]
+            data3 = data2[itime, :, :, :]
+
+            # neids, nlayers, nresults
+            oxx[ieids] = data3[:, :, 0]
+            oyy[ieids] = data3[:, :, 1]
+            txy[ieids] = data3[:, :, 2]
+            txz[ieids] = data3[:, :, 3]
+            tyz[ieids] = data3[:, :, 4]
+            # angle
+            max_principal[ieids] = data3[:, :, 6]
+            min_principal[ieids] = data3[:, :, 7]
+            ovm[ieids] = data3[:, :, 8]
+
+            #assert oxxi.shape == (ntimes, neids)
+        return vm_word
+
     def set_composite_stress(self,
-                             oxx, oyy, txy, tyz, txz,
+                             key, oxx, oyy, txy, tyz, txz,
                              max_principal, min_principal, ovm,
                              ):  # pragma: no cover
 
-        for element_type, composite_data in iteritems(self.composite_data_dict):
-            element_layer, ueids, data2, vm_word, ntimes, headers = composite_data[key]
+        for element_type, composite_data in self.composite_data_dict.items():
+            unused_element_layer, unused_ueids, data2, unused_vm_word, ntimes, unused_headers = composite_data[key]
 
-            ntimes, neids, nlayers, nresults = data2.shape
+            ntimes, neids, unused_nlayers, unused_nresults = data2.shape
             #data2[itime, eid, layer, oxx/oyy/...]
 
             ieids = self.composite_ieids[element_type]
@@ -97,9 +151,9 @@ class StressObject(object):
             max_principal[ieids] = np.nanmax(data2[:, :, :, 6], axis=2)
             min_principal[ieids] = np.nanmin(data2[:, :, :, 7], axis=2)
             ovm[ieids] = np.nanmax(data2[:, :, :, 8], axis=2)
-            assert oxxi.shape == (ntimes, neids)
+            assert oxx.shape == (ntimes, neids)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.is_stress:
             msg = 'StressObject:\n'
         else:
@@ -108,7 +162,7 @@ class StressObject(object):
         msg += '    composite_ieids = %s\n' % self.composite_ieids
         return msg
 
-def create_plates(model, key, is_stress):
+def create_plates(model: Any, key: str, is_stress: bool) -> Dict[str, Any]:
     """helper method for _fill_op2_time_centroidal_stress"""
     if is_stress:
         plates = [
@@ -127,7 +181,7 @@ def create_plates(model, key, is_stress):
     isotropic_data_dict = {}
     for obj_dict in plates:
         cases_to_delete = []
-        for case_key, case in iteritems(obj_dict):
+        for case_key, case in obj_dict.items():
             if case_key == key:
                 #data_dict[element_type] = [ueids, data]
                 case_to_delete = case_key
@@ -142,7 +196,7 @@ def create_plates(model, key, is_stress):
                 nlayers_per_element = nnodes_per_element * 2  # *2 for every other layer
                 #eidsi = case.element_node[::nlayers_per_element, 0]  # ::2 is for layer skipping
                 ueids = np.unique(case.element_node[:, 0])
-                neids = len(ueids)
+                #neids = len(ueids)
 
                 #if 0:
                     #i = np.searchsorted(eids, eidsi)
@@ -175,7 +229,7 @@ def create_plates(model, key, is_stress):
                 min_data_list = [min_start]
                 max_data_list = [max_start]
                 for inode in range(1, nlayers_per_element):
-                    datai = case.data[:, j+inode, :]
+                    #datai = case.data[:, j+inode, :]
                     min_data_list.append(case.data[:, j+inode, :][:, :, max_vals])
                     max_data_list.append(case.data[:, j+inode, :])
                 if len(min_data_list) == 1:
@@ -204,20 +258,20 @@ def create_composite_plates(model, key, is_stress, keys_map):
     if is_stress:
         cplates = [
             ('CTRIA3', model.ctria3_composite_stress),
-            ('CQUAD4', model.cquad4_composite_stress),
             ('CTRIA6', model.ctria6_composite_stress),
+            ('CTRIAR', model.ctriar_composite_stress),
+            ('CQUAD4', model.cquad4_composite_stress),
             ('CQUAD8', model.cquad8_composite_stress),
-            #model.ctriar_composite_stress,
-            #model.cquadr_composite_stress,
+            ('CQUADR', model.cquadr_composite_stress),
         ]
     else:
         cplates = [
             ('CTRIA3', model.ctria3_composite_strain),
-            ('CQUAD4', model.cquad4_composite_strain),
             ('CTRIA6', model.ctria6_composite_strain),
+            ('CTRIAR', model.ctriar_composite_strain),
+            ('CQUAD4', model.cquad4_composite_strain),
             ('CQUAD8', model.cquad8_composite_strain),
-            #model.ctriar_composite_strain,
-            #model.cquadr_composite_strain,
+            ('CQUADR', model.cquadr_composite_strain),
         ]
 
     #[o11, o22, t12, t1z, t2z, angle, major, minor, max_shear]
@@ -228,9 +282,10 @@ def create_composite_plates(model, key, is_stress, keys_map):
             continue
 
         composite_data_dict[element_type] = {}
-        for case_key, case in iteritems(obj_dict):
+        for case_key, case in obj_dict.items():
             if case_key == key:
-                keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+                keys_map[key] = (case.subtitle, case.label,
+                                 case.superelement_adaptivity_index, case.pval_step)
                 #data_dict[element_type] = [ueids, data]
                 case_to_delete = case_key
                 cases_to_delete.append(case_to_delete)
@@ -242,7 +297,7 @@ def create_composite_plates(model, key, is_stress, keys_map):
                 eidsi = case.element_layer[:, 0]
                 layers = case.element_layer[:, 1]
                 ntimes = case.data.shape[0]
-                data2, ueids = pivot(case.data, eidsi, layers)
+                data2, ueids = pivot_table(case.data, eidsi, layers)
 
                 headers = []
                 for itime, dt in enumerate(case._times):
@@ -254,37 +309,10 @@ def create_composite_plates(model, key, is_stress, keys_map):
             del composite_data_dict[element_type]
         #for case_key in cases_to_delete:
             #del obj_dict[case_key]
-
-
     return composite_data_dict
 
 
-def pivot(data, rows, cols):
-    """
-    PCOMP: rows=element_ids, cols=layer
-    """
-    ncount = len(rows)
-    icount = np.arange(ncount)
-    assert len(data.shape) == 3
-    ntimes = data.shape[0]
-    nresults = data.shape[-1]
-
-    rows_new, row_pos_new = np.unique(rows, return_inverse=True)
-    cols_new, col_pos_new = np.unique(cols, return_inverse=True)
-    nrows = len(rows_new)
-    ncols = len(cols_new)
-
-    pivot_table = np.full((nrows, ncols), -1, dtype='int32')
-    pivot_table[row_pos_new, col_pos_new] = icount
-    #print(pivot_table)
-
-    ipivot_row, ipivot_col = np.where(pivot_table != -1)
-    data2 = np.full((ntimes, nrows, ncols, nresults), np.nan, dtype=data.dtype)
-    data2[:, ipivot_row, ipivot_col, :] = data[:, icount, :]
-
-    return data2, rows_new
-
-def _get_nastran_header(case, dt, itime):
+def _get_nastran_header(case: Any, dt: Union[int, float], itime: int) -> str:
     #if case is None:
         #return None
     try:
@@ -292,10 +320,14 @@ def _get_nastran_header(case, dt, itime):
     except KeyError:
         return 'Static'
 
-    if isinstance(dt, float):
+    if isinstance(dt, (float, np.float32)):
         header = ' %s = %.4E' % (code_name, dt)
-    else:
+    elif isinstance(dt, (int, np.int32)):
         header = ' %s = %i' % (code_name, dt)
+    elif dt is None:
+        return 'Static'
+    else:  # pragma: no cover
+        print(case, dt, type(dt))
 
     # cases:
     #   1. lsftsfqs
@@ -311,15 +343,36 @@ def _get_nastran_header(case, dt, itime):
         cycle = np.abs(eigi) / (2. * np.pi)
         header += '; freq = %g Hz' % cycle
     elif hasattr(case, 'eigns'):  #  eign is not eigr; it's more like eigi
-        eigi = case.eigrs[itime] #  but |eigi| = sqrt(|eign|)
-        cycle = np.sqrt(np.abs(eigi)) / (2. * np.pi)
-        header += '; freq = %g Hz' % cycle
-    elif hasattr(case, 'dt'):
+        eigi = case.eigns[itime] #  but |eigi| = sqrt(|eign|)
+        freq = np.sqrt(np.abs(eigi))
+        cycle = freq / (2. * np.pi)
+        header += '; freq = %g Hz' % freq
+    elif hasattr(case, 'freqs'):
+        header += '; freq = %g Hz' % case.freqs[itime]
+
+    elif hasattr(case, 'times'):
         time = case._times[itime]
         header += '; time = %g sec' % time
-    elif hasattr(case, 'lftsfqs') or hasattr(case, 'lsdvmns') or hasattr(case, 'loadIDs'):
-        pass
-        #raise RuntimeError(header)
+    elif hasattr(case, 'dts'):
+        time = case._times[itime]
+        header += '; time = %g sec' % time
+        #print(header)
+
+    elif hasattr(case, 'lftsfqs'):
+        step = case.lftsfqs[itime]
+        header += '; step = %g' % step
+    elif hasattr(case, 'lsdvmns'):
+        step = case.lsdvmns[itime]
+        header += '; step = %g' % step
+    elif hasattr(case, 'loadIDs'):
+        step = case.loadIDs[itime]
+        header += '; step = %g' % step
+    elif hasattr(case, 'loadFactors'):
+        step = case.loadFactors[itime]
+        header += '; step = %g' % step
+    elif hasattr(case, 'load_steps'):
+        step = case.load_steps[itime]
+        header += '; step = %g' % step
     else:
         msg = 'unhandled case; header=%r\n%s' % (header, str(case))
         print(msg)
@@ -348,16 +401,29 @@ def get_rod_stress_strain(model, key, is_stress, vm_word, itime,
         eidsi = case.element
         i = np.searchsorted(eids, eidsi)
         if len(i) != len(np.unique(i)):
-            msg = 'irod=%s is not unique\n' % str(i)
-            print('eids = %s\n' % str(list(eids)))
-            print('eidsi = %s\n' % str(list(eidsi)))
-            raise RuntimeError(msg)
+            msg = 'i%s (rod)=%s is not unique' % (case.element_name, str(i))
+            print('  eids = %s\n' % str(list(eids)))
+            print('  eidsi = %s\n' % str(list(eidsi)))
+            model.log.warning(msg)
+            continue
+            #raise RuntimeError(msg)
 
-        is_element_on[i] = 1
-        dt = case._times[itime]
+        try:
+            is_element_on[i] = 1
+        except IndexError:
+            model.log.warning('missing %ss' % case.element_name)
+            continue
+
+        try:
+            dt = case._times[itime]
+        except IndexError:
+            print(case)
+            print(f'len(case._times)={len(case._times)} itime={itime}')
+            raise
         header = _get_nastran_header(case, dt, itime)
         header_dict[(key, itime)] = header
-        keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+        keys_map[key] = (case.subtitle, case.label,
+                         case.superelement_adaptivity_index, case.pval_step)
 
         # data=[1, nnodes, 4] where 4=[axial, SMa, torsion, SMt]
         oxx[i] = case.data[itime, :, 0]
@@ -405,7 +471,8 @@ def get_bar_stress_strain(model, key, is_stress, vm_word, itime,
             dt = case._times[itime]
             header = _get_nastran_header(case, dt, itime)
             header_dict[(key, itime)] = header
-            keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+            keys_map[key] = (case.subtitle, case.label,
+                             case.superelement_adaptivity_index, case.pval_step)
             #s1a = case.data[itime, :, 0]
             #s2a = case.data[itime, :, 1]
             #s3a = case.data[itime, :, 2]
@@ -430,7 +497,7 @@ def get_bar_stress_strain(model, key, is_stress, vm_word, itime,
             i = np.searchsorted(eids, eidsi)
             if len(i) != len(np.unique(i)):
                 print('ibar = %s' % i)
-                print('eids = %s' % eids)
+                print('  eids = %s' % eids)
                 msg = 'ibar=%s is not unique' % str(i)
                 raise RuntimeError(msg)
 
@@ -485,7 +552,8 @@ def get_bar100_stress_strain(model, key, is_stress, vm_word, itime,
             dt = case._times[itime]
             header = _get_nastran_header(case, dt, itime)
             header_dict[(key, itime)] = header
-            keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+            keys_map[key] = (case.subtitle, case.label,
+                             case.superelement_adaptivity_index, case.pval_step)
 
             #  0    1    2    3    4     5     6     7     8
             # [sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS]
@@ -509,7 +577,7 @@ def get_bar100_stress_strain(model, key, is_stress, vm_word, itime,
             i = np.searchsorted(eids, eidsi)
             if len(i) != len(np.unique(i)):
                 print('ibar = %s' % i)
-                print('eids = %s' % eids)
+                print('  eids = %s' % eids)
                 msg = 'ibar=%s is not unique' % str(i)
                 raise RuntimeError(msg)
 
@@ -550,7 +618,8 @@ def get_beam_stress_strain(model, key, is_stress, vm_word, itime,
             dt = case._times[itime]
             header = _get_nastran_header(case, dt, itime)
             header_dict[(key, itime)] = header
-            keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+            keys_map[key] = (case.subtitle, case.label,
+                             case.superelement_adaptivity_index, case.pval_step)
             sxc = case.data[itime, :, 0]
             sxd = case.data[itime, :, 1]
             sxe = case.data[itime, :, 2]
@@ -565,7 +634,12 @@ def get_beam_stress_strain(model, key, is_stress, vm_word, itime,
                 oxxi = 0.
                 smaxi = 0.
                 smini = 0.
-                eid2 = eid_map[eid]
+                try:
+                    eid2 = eid_map[eid]
+                except KeyError:
+                    model.log.warning('eid=%s is missing' % eid)
+                    continue
+
                 is_element_on[eid2] = 1.
                 oxxi = max(
                     sxc[imini:imaxi].max(),
@@ -580,14 +654,17 @@ def get_beam_stress_strain(model, key, is_stress, vm_word, itime,
                 max_principal[eid2] = smaxi
                 min_principal[eid2] = smini
                 ovm[eid2] = ovmi
-            del eidsi, ueids, sxc, sxd, sxe, sxf, smax, smin, oxxi, smaxi, smini, ovmi
+            del eidsi, ueids, sxc, sxd, sxe, sxf, smax, smin, oxxi, smaxi, smini
     del beams
     return vm_word
 
 def get_plate_stress_strain(model, key, is_stress, vm_word, itime,
                             oxx, oyy, txy, max_principal, min_principal, ovm, is_element_on,
                             eids, header_dict, keys_map):
-    """helper method for _fill_op2_time_centroidal_stress"""
+    """
+    helper method for _fill_op2_time_centroidal_stress.  Gets the max/min stress across all
+    layers.
+    """
     if is_stress:
         plates = [
             model.ctria3_stress, model.cquad4_stress,
@@ -622,28 +699,37 @@ def get_plate_stress_strain(model, key, is_stress, vm_word, itime,
             print(case.element_node)
             print('element_name=%s nnodes_per_element=%s' % (case.element_name, nnodes_per_element))
             print('iplate = %s' % i)
-            print('eids = %s' % eids)
-            print('eidsiA = %s' % case.element_node[:, 0])
-            print('eidsiB = %s' % eidsi)
-            msg = 'iplate=%s is not unique' % str(i)
-            raise RuntimeError(msg)
+            print('  eids = %s' % eids)
+            print('  eidsiA = %s' % case.element_node[:, 0])
+            print('  eidsiB = %s' % eidsi)
+
+            msg = 'i%s (plate)=%s is not unique' % (case.element_name, str(i))
+            #msg = 'iplate=%s is not unique' % str(i)
+            model.log.warning(msg)
+            continue
+            #raise RuntimeError(msg)
         #self.data[self.itime, self.itotal, :] = [fd, oxx, oyy,
         #                                         txy, angle,
         #                                         majorP, minorP, ovm]
+        #print('iplate = ', i)
+        #print('  is_element_on = ', is_element_on)
         try:
             is_element_on[i] = 1
         except IndexError:
-            print(case.element_node)
-            print('i = %s' % i)
-            print('eids = %s' % eids)
-            print('eidsi = %s' % eidsi)
-            raise
+            #print(case.element_node)
+            print('iplate = %s' % i)
+            print('  eids = %s' % eids)
+            print('  eidsi = %s' % eidsi)
+            continue
+            #raise
 
         ntotal = case.data.shape[1]  # (ndt, ntotal, nresults)
         if nlayers_per_element == 1:
             j = None
+            nj = 2
         else:
             j = np.arange(ntotal)[::nlayers_per_element]
+            nj = len(j)
 
         #self.data[self.itime, self.itotal, :] = [fd, oxx, oyy,
         #                                         txy, angle,
@@ -651,7 +737,8 @@ def get_plate_stress_strain(model, key, is_stress, vm_word, itime,
         dt = case._times[itime]
         header = _get_nastran_header(case, dt, itime)
         header_dict[(key, itime)] = header
-        keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+        keys_map[key] = (case.subtitle, case.label,
+                         case.superelement_adaptivity_index, case.pval_step)
         oxxi = case.data[itime, j, 1]
         oyyi = case.data[itime, j, 2]
         txyi = case.data[itime, j, 3]
@@ -669,7 +756,31 @@ def get_plate_stress_strain(model, key, is_stress, vm_word, itime,
             txyi = np.amax(np.vstack([txyi, case.data[itime, j + inode, 3]]), axis=0)
             o1i = np.amax(np.vstack([o1i, case.data[itime, j + inode, 5]]), axis=0)
             o3i = np.amin(np.vstack([o3i, case.data[itime, j + inode, 6]]), axis=0)
-            ovmi = np.amax(np.vstack([ovmi, case.data[itime, j + inode, 7]]), axis=0)
+            ovmi_vstacked = np.vstack([ovmi, case.data[itime, j + inode, 7]])
+            if np.any(np.isfinite(ovmi_vstacked)):
+                ovmi = np.nanmax(ovmi_vstacked, axis=0)
+                #print("---------------")
+                #print(f'ovmi:\n{ovmi}')
+                #print(f'itime={itime} j={j} inode={inode}\ncase.data[itime, j + inode, 7]:\n{case.data[itime, j + inode, 7]}')
+                #print(f'ovmi_vstacked:\n{ovmi_vstacked}')
+                #print('type', type(ovmi))
+            else:
+                if nj is None:
+                    nj, unused_nlayers = ovmi.shape
+                ovmi = np.full(nj, np.nan, dtype=ovmi.dtype)
+                #print("---------------")
+                #print(f'ovmi:\n{ovmi}')
+                #print(f'itime={itime} j={j} inode={inode}\ncase.data[itime, j + inode, 7]:\n{case.data[itime, j + inode, 7]}')
+                #print(f'ovmi_vstacked:\n{ovmi_vstacked}')
+                #print('type', type(ovmi))
+                #raise
+
+            #print('ovmi', ovmi, ovmi.shape)
+            #print('inode', j, j.shape)
+            #print('inode', inode)
+            #print('ovmi_vstacked.shape', ovmi_vstacked.shape)
+            #print('ovmi2', ovmi2)
+            #aa
             assert len(oxxi) == len(j)
             #print('-------')
 
@@ -680,7 +791,6 @@ def get_plate_stress_strain(model, key, is_stress, vm_word, itime,
         min_principal[i] = o3i
         ovm[i] = ovmi
     return vm_word
-
 
 def get_solid_stress_strain(model, key, is_stress, vm_word, itime,
                             oxx, oyy, ozz, txy, tyz, txz,
@@ -715,9 +825,13 @@ def get_solid_stress_strain(model, key, is_stress, vm_word, itime,
         i = np.searchsorted(eids, eidsi)
         if len(i) != len(np.unique(i)):
             print('isolid = %s' % str(i))
-            print('eids = %s' % eids)
-            print('eidsi = %s' % eidsi)
-            assert len(i) == len(np.unique(i)), 'isolid=%s is not unique' % str(i)
+            print('  eids = %s' % eids)
+            print('  eidsi = %s' % eidsi)
+            if len(i) != len(np.unique(i)):
+                msg = 'i%s (solid)=%s is not unique' % (case.element_name, str(i))
+                #msg = 'isolid=%s is not unique' % str(i)
+                model.log.warning(msg)
+                continue
 
         is_element_on[i] = 1
         #self.data[self.itime, self.itotal, :] = [oxx, oyy, ozz,
@@ -734,7 +848,8 @@ def get_solid_stress_strain(model, key, is_stress, vm_word, itime,
         dt = case._times[itime]
         header = _get_nastran_header(case, dt, itime)
         header_dict[(key, itime)] = header
-        keys_map[key] = (case.subtitle, case.label, case.superelement_adaptivity_index)
+        keys_map[key] = (case.subtitle, case.label,
+                         case.superelement_adaptivity_index, case.pval_step)
         oxxi = case.data[itime, j, 0]
         oyyi = case.data[itime, j, 1]
         ozzi = case.data[itime, j, 2]

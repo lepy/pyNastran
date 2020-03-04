@@ -1,17 +1,12 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import iteritems, integer_types
 from itertools import count
+from typing import List
+
 import numpy as np
 from numpy import zeros, searchsorted, ravel
-ints = (int, np.int32)
 
-from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, OES_Object
+from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
 
 class RealBush1DStressArray(OES_Object):
@@ -24,16 +19,24 @@ class RealBush1DStressArray(OES_Object):
         self.nelements = 0  # result specific
 
     @property
-    def is_stress(self):
+    def is_stress(self) -> bool:
         return True
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
+
+    @property
+    def nnodes_per_elements(self) -> int:
+        if self.element_type == 40:
+            nnodes_per_element = 1
+        else:
+            raise NotImplementedError(self.element_type)
+        return nnodes_per_element
 
     def _reset_indices(self):
         self.itotal = 0
@@ -51,26 +54,19 @@ class RealBush1DStressArray(OES_Object):
         return words
         # raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['element_force', 'axial_displacement', 'axial_velocity',
                    'axial_stress', 'axial_strain', 'plastic_strain']
         return headers
 
     def build(self):
         """sizes the vectorized attributes of the RealBush1DStressArray"""
-        if self.is_built:
-            return
         #print("self.ielement =", self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
 
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
-
-        if self.element_type == 40:
-            nnodes_per_element = 1
-        else:
-            raise NotImplementedError(self.element_type)
 
         self.itime = 0
         self.ielement = 0
@@ -80,7 +76,8 @@ class RealBush1DStressArray(OES_Object):
         self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
-            #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
+            #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements,
+            #self.ntotal))
         dtype = 'float32'
         if isinstance(self.nonlinear_factor, integer_types):
             dtype = 'int32'
@@ -92,18 +89,33 @@ class RealBush1DStressArray(OES_Object):
         self.data = zeros((self.ntimes, self.ntotal, 6), dtype='float32')
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
         headers = self.get_headers()
-        if self.nonlinear_factor is not None:
+        if self.nonlinear_factor not in (None, np.nan):
+            # Time                               0.02        0.04        0.06
+            # ElementID Item
+            #104       element_force       38.633198  113.462921  220.903046
+            #          axial_displacement   0.000194    0.000761    0.001673
+            #          axial_velocity       0.019220    0.037323    0.053638
+            #          axial_stress              NaN         NaN         NaN
+            #          axial_strain              NaN         NaN         NaN
+            #          plastic_strain       0.000000    0.000000    0.000000
             column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'Item']
+            data_frame = self._build_pandas_transient_elements(
+                column_values, column_names,
+                headers, self.element, self.data)
         else:
-            self.data_frame = pd.Panel(self.data, major_axis=self.element, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'Item']
+            #Static     element_force  axial_displacement  axial_velocity  axial_stress  axial_strain  plastic_strain
+            #ElementID
+            #17801                1.0                 0.1             0.0           0.0           0.0             0.0
+            #17807                1.0                 0.1             0.0           0.0           0.0             0.0
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=self.element)
+            data_frame.index.name = 'ElementID'
+            data_frame.columns.names = ['Static']
+        self.data_frame = data_frame
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
 
@@ -113,46 +125,27 @@ class RealBush1DStressArray(OES_Object):
             msg += '%s\n' % str(self.code_information())
             ntimes = self.data.shape[0]
 
-            if self.table_name_str == 'OESNLXD':
-                if self.is_sort1:
-                    for itime in range(ntimes):
-                        for ieid, eid, in enumerate(self.element):
-                            t1 = self.data[itime, ieid, [0, 1, 2, 5]]  # these are nan
-                            t2 = table.data[itime, ieid, [0, 1, 2, 5]]  # these are nan
-                            (axial_stress1, equiv_stress1, total_strain1, linear_torsional_stress1) = t1
-                            (axial_stress2, equiv_stress2, total_strain2, linear_torsional_stress2) = t2
-                            if not np.allclose(t1, t2):
-                            #if not np.array_equal(t1, t2):
-                                msg += '%s\n  (%s, %s, %s, %s)\n  (%s, %s, %s, %s)\n' % (
-                                    eid,
-                                    axial_stress1, equiv_stress1, total_strain1, linear_torsional_stress1,
-                                    axial_stress2, equiv_stress2, total_strain2, linear_torsional_stress2)
-                                i += 1
-                            if i > 10:
-                                print(msg)
-                                raise ValueError(msg)
-                else:
-                    raise NotImplementedError(self.is_sort2)
+            if self.is_sort1:
+                for itime in range(ntimes):
+                    for ieid, eid, in enumerate(self.element):
+                        t1 = self.data[itime, ieid, :]
+                        t2 = table.data[itime, ieid, :]
+                        #i_not_nan = np.isnp.where(t1 != np.nan)[0]
+                        i_not_nan = np.isfinite(t1)
+                        (axial_stress1, equiv_stress1, total_strain1, eff_plastic_creep_strain1, eff_creep_strain1, linear_torsional_stress1) = t1
+                        (axial_stress2, equiv_stress2, total_strain2, eff_plastic_creep_strain2, eff_creep_strain2, linear_torsional_stress2) = t2
+                        if not np.allclose(t1[i_not_nan], t2[i_not_nan]):
+                        #if not np.array_equal(t1, t2):
+                            msg += '%s\n  (%s, %s, %s, %s, %s, %s)\n  (%s, %s, %s, %s, %s, %s)\n' % (
+                                eid,
+                                axial_stress1, equiv_stress1, total_strain1, eff_plastic_creep_strain1, eff_creep_strain1, linear_torsional_stress1,
+                                axial_stress2, equiv_stress2, total_strain2, eff_plastic_creep_strain2, eff_creep_strain2, linear_torsional_stress2)
+                            i += 1
+                        if i > 10:
+                            print(msg)
+                            raise ValueError(msg)
             else:
-                if self.is_sort1:
-                    for itime in range(ntimes):
-                        for ieid, eid, in enumerate(self.element):
-                            t1 = self.data[itime, ieid, :]
-                            t2 = table.data[itime, ieid, :]
-                            (axial_stress1, equiv_stress1, total_strain1, effective_plastic_creep_strain1, effective_creep_strain1, linear_torsional_stress1) = t1
-                            (axial_stress2, equiv_stress2, total_strain2, effective_plastic_creep_strain2, effective_creep_strain2, linear_torsional_stress2) = t2
-                            if not np.allclose(t1, t2):
-                            #if not np.array_equal(t1, t2):
-                                msg += '%s\n  (%s, %s, %s, %s, %s, %s)\n  (%s, %s, %s, %s, %s, %s)\n' % (
-                                    eid,
-                                    axial_stress1, equiv_stress1, total_strain1, effective_plastic_creep_strain1, effective_creep_strain1, linear_torsional_stress1,
-                                    axial_stress2, equiv_stress2, total_strain2, effective_plastic_creep_strain2, effective_creep_strain2, linear_torsional_stress2)
-                                i += 1
-                            if i > 10:
-                                print(msg)
-                                raise ValueError(msg)
-                else:
-                    raise NotImplementedError(self.is_sort2)
+                raise NotImplementedError(self.is_sort2)
         if i > 0:
             print(msg)
             raise ValueError(msg)
@@ -161,7 +154,7 @@ class RealBush1DStressArray(OES_Object):
     def add_sort1(self, dt, eid, element_force, axial_displacement, axial_velocity,
                   axial_stress, axial_strain, plastic_strain, is_failed):
         """unvectorized method for adding SORT1 transient data"""
-        assert isinstance(eid, ints)
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         # pyNastran_examples\move_tpl\ar29scb1.op2
         #print('dt=%s eid=%s force=%s' % (dt, eid, element_force))
         #print('element.shape=%s' % self.element.shape)
@@ -177,7 +170,7 @@ class RealBush1DStressArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return ['<%s>\n' % self.__class__.__name__,
                     '  ntimes: %i\n' % self.ntimes,
@@ -186,11 +179,11 @@ class RealBush1DStressArray(OES_Object):
 
         nelements = self.ntotal
         ntimes = self.ntimes
-        ntotal = self.ntotal
+        #ntotal = self.ntotal
         nelements = self.ntotal
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msg.append('  type=%s ntimes=%i nelements=%i\n'
                        % (self.__class__.__name__, ntimes, nelements))
             ntimes_word = 'ntimes'
@@ -240,18 +233,22 @@ class RealBush1DStressArray(OES_Object):
             plastic_strain = self.data[itime, :, 5]
             is_failed = self.is_failed[itime, :, 0]
 
-            for (i, eid, element_forcei, axial_displacementi, axial_velocityi, axial_stressi, axial_straini, plastic_straini, is_failedi) in zip(
-                count(), eids, element_force, axial_displacement, axial_velocity, axial_stress, axial_strain, plastic_strain, is_failed):
+            for (i, eid, element_forcei, axial_displacementi, axial_velocityi, axial_stressi,
+                 axial_straini, plastic_straini, is_failedi) in zip(
+                    count(), eids, element_force, axial_displacement, axial_velocity,
+                    axial_stress, axial_strain, plastic_strain, is_failed):
 
-                vals = [element_forcei, axial_displacementi, axial_velocityi, axial_stressi, axial_straini, plastic_straini, is_failedi]
+                vals = [element_forcei, axial_displacementi, axial_velocityi, axial_stressi,
+                        axial_straini, plastic_straini, is_failedi]
                 vals2 = write_floats_13e(vals)
-                [element_forcei, axial_displacementi, axial_velocityi, axial_stressi, axial_straini, plastic_straini, is_failedi] = vals2
+                [element_forcei, axial_displacementi, axial_velocityi, axial_stressi,
+                 axial_straini, plastic_straini, is_failedi] = vals2
                 f06_file.write(
                     '0%8i   %-13s  %-13s  %-13s  %-13s  %-13s  %-13s  %s\n'
                     % (eid, element_forcei, axial_displacementi, axial_velocityi, axial_stressi,
                        axial_straini, plastic_straini, is_failedi))
             f06_file.write(page_stamp % page_num)
             page_num += 1
-        if self.nonlinear_factor is None:
+        if self.nonlinear_factor in (None, np.nan):
             page_num -= 1
         return page_num

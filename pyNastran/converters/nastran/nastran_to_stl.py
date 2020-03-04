@@ -4,9 +4,8 @@ defines:
                                  log=None)
  - stl = nastran_to_stl(bdf_filename, stl_filename, is_binary=False,
                         log=None, stop_on_failure=False)
+
 """
-from __future__ import print_function
-from six import iteritems
 import numpy as np
 from pyNastran.bdf.bdf import read_bdf
 from pyNastran.converters.stl.stl import STL
@@ -32,6 +31,7 @@ def nastran_to_stl(bdf_filename, stl_filename, is_binary=False, log=None, stop_o
         a Python logging object
     stop_on_failure : bool; default=False
         should the code stop if an error is encountered
+
     """
     if isinstance(bdf_filename, str):
         model = read_bdf(bdf_filename, log=log)
@@ -52,13 +52,13 @@ def nastran_to_stl(bdf_filename, stl_filename, is_binary=False, log=None, stop_o
         xyz0 = model.nodes[nid].get_position()
     else:
         xyz0 = np.zeros(3, dtype='float64')
-    for node_id, node in sorted(iteritems(model.nodes)):
+    for node_id, node in sorted(model.nodes.items()):
         xyz = node.get_position()
         nodes[i, :] = xyz - xyz0
         nodeid_to_i_map[node_id] = i
         i += 1
     assert len(model.nodes) == i, 'model.nodes=%s i=%s' % (len(model.nodes), i)
-    for unused_eid, element in sorted(iteritems(model.elements)):
+    for unused_eid, element in sorted(model.elements.items()):
         if element.type in ['CQUADR']:
             continue
         elif element.type in ['CBAR', 'CBEAM', 'CONM2', 'RBE2', 'RBE3',
@@ -82,7 +82,7 @@ def nastran_to_stl(bdf_filename, stl_filename, is_binary=False, log=None, stop_o
             i1, i2, i3 = nodeid_to_i_map[n1], nodeid_to_i_map[n2], nodeid_to_i_map[n3]
             elements.append([i1, i2, i3])
         else:
-            print(element.type)
+            model.log.warning('skipping %s' % element.type)
     elements = np.array(elements, dtype='int32')
     stl = STL(log=model.log)
     stl.nodes = nodes

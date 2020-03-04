@@ -1,17 +1,19 @@
-from __future__ import print_function
-
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from numpy import array
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 #from pyNastran.bdf.bdf_interface.assign_type import (integer, integer_or_blank,
                                                     #double_or_blank, integer_double_or_blank, blank, string_or_blank)
 from pyNastran.bdf.bdf_interface.assign_type import integer, double_or_blank, string_or_blank, integer_or_blank
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.field_writer import print_card
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class BaseCard(object):
+class BaseCard:
     def __init__(self):
         pass
 
@@ -76,7 +78,7 @@ class Property_i(BaseCard):
         else:
             return self.mid_ref.mid
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -89,7 +91,7 @@ class Property_i(BaseCard):
         self.mid = model.Material(self.mid, msg)
         self.mid_ref = self.mid
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
         self.mid = self.Mid()
         del self.mid_ref
 
@@ -98,7 +100,7 @@ class ShellProperty(Property_i):
     def __init__(self):
         Property_i.__init__(self)
 
-class DeprecatedCompositeShellProperty(object):
+class DeprecatedCompositeShellProperty:
     def MassPerArea(self, iply='all', method='nplies'):
         return self.get_mass_per_area(iply, method)
 
@@ -212,7 +214,7 @@ class CompositeShellProperty(ShellProperty, DeprecatedCompositeShellProperty):
             for iply in range(nplies):
                 t += self.get_thickness(iply)
 
-            if self.is_symmetrical():
+            if self.is_symmetrical:
                 return t * 2.
             return t
         else:
@@ -233,7 +235,7 @@ class CompositeShellProperty(ShellProperty, DeprecatedCompositeShellProperty):
             returns nplies
         """
         nplies = len(self.plies)
-        if self.is_symmetrical():
+        if self.is_symmetrical:
             return nplies * 2
         return nplies
 
@@ -472,7 +474,7 @@ class CompositeShellProperty(ShellProperty, DeprecatedCompositeShellProperty):
                 t = self.plies[iply][1]
                 mass_per_area += rho * t
 
-            if self.is_symmetrical():
+            if self.is_symmetrical:
                 return 2. * mass_per_area + self.nsm
             return mass_per_area + self.nsm
         else:
@@ -748,7 +750,7 @@ class PCOMPi(CompositeShellProperty):
             list_fields += [mid, t, theta, sout]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 

@@ -1,10 +1,8 @@
-from __future__ import print_function
-
-from six import string_types
 import numpy as np
 
 from pyNastran.converters.stl.stl import STL, read_stl
 from pyNastran.converters.cart3d.cart3d import Cart3D
+
 
 def stl_to_cart3d(stl_filename, cart3d_filename=None, log=None, debug=False,
                   is_binary=False, float_fmt='%6.7f'):
@@ -31,8 +29,9 @@ def stl_to_cart3d(stl_filename, cart3d_filename=None, log=None, debug=False,
     -------
     stl : STL()
         an STL object
+
     """
-    if isinstance(stl_filename, string_types):
+    if isinstance(stl_filename, str):
         stl = read_stl(stl_filename, log=log, debug=debug)
     elif isinstance(stl_filename, STL):
         stl = stl_filename

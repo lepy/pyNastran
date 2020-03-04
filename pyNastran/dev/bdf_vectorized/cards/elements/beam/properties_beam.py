@@ -1,6 +1,4 @@
-from __future__ import print_function
-
-class PropertiesBeam(object):
+class PropertiesBeam:
     def __init__(self, model):
         """
         Defines the PropertiesBeam object.
@@ -9,6 +7,7 @@ class PropertiesBeam(object):
         ----------
         model : BDF
            the BDF object
+
         """
         self.model = model
 

@@ -1,9 +1,8 @@
 """
 defines:
  - FakeBDFVectorized
+
 """
-from __future__ import print_function
-from six import itervalues
 from pyNastran.bdf.bdf import BDF as BDF
 
 class FakeBDFVectorized(BDF):
@@ -11,6 +10,7 @@ class FakeBDFVectorized(BDF):
     Renumbers the element ids to be in the same order as the BDFVectorized
 
     Intended for GUI testing, not anything serious.
+
     """
     #def __init__(self, debug=True, log=None, mode='msc'):
         #"""see ``BDF.read_bdf``"""
@@ -55,8 +55,8 @@ class FakeBDFVectorized(BDF):
                     #self.elements[eid] =
                     eid0 += 1
 
-        failed_types = set([])
-        for elem in itervalues(self.elements):
+        failed_types = set()
+        for elem in self.elements.values():
             if elem.type not in etypes:
                 failed_types.add(elem.type)
         self.elements = elements2
@@ -74,5 +74,5 @@ class FakeBDFVectorized(BDF):
 def create_vectorized_numbered(bdf_filename_in, bdf_filename_out, debug=True):
     model = FakeBDFVectorized()
     model.read_bdf(bdf_filename=bdf_filename_in, validate=True, xref=False, punch=False,
-                  read_includes=True, encoding=None)
+                   read_includes=True, encoding=None)
     model.write_bdf(bdf_filename_out)

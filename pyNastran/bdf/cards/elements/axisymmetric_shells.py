@@ -11,15 +11,14 @@ All axisymmetric shell elements are defined in this file.  This includes:
 
 All tris are TriShell, ShellElement, and Element objects.
 All quads are QuadShell, ShellElement, and Element objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six.moves import range
 
-from numpy import cross
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+import numpy as np
 from numpy.linalg import norm  # type: ignore
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import (
     set_blank_if_default, set_default_if_blank,
     print_card_8, print_field_8)
@@ -29,6 +28,8 @@ from pyNastran.bdf.bdf_interface.assign_type import (
 from pyNastran.bdf.cards.utils import wipe_empty_fields
 from pyNastran.bdf.cards.elements.shell import TriShell, _triangle_area_centroid_normal, _normal
 from pyNastran.bdf.cards.base_card import Element
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 __all__ = ['CTRAX3', 'CTRAX6', 'CTRIAX', 'CTRIAX6',
            'CQUADX', 'CQUADX4', 'CQUADX8']
@@ -56,11 +57,14 @@ class AxisymmetricTri(Element):
         Get the centroid.
 
         .. math::
-          CG = \frac{1}{3} (n_0+n_1+n_2)
+          CG = \frac{1}{3} (n_1+n_2+n_3)
         """
         n1, n2, n3 = self.get_node_positions(nodes=self.nodes_ref[:3])
         centroid = (n1 + n2 + n3) / 3.
         return centroid
+
+    def center_of_mass(self):
+        return self.Centroid()
 
     def Mass(self):
         unused_n1, unused_n2, unused_n3 = self.get_node_positions(nodes=self.nodes_ref[:3])
@@ -89,6 +93,20 @@ class AxisymmetricQuad(Element):
             nodes=self.nodes_ref[:4])
         return 0.
 
+    def Centroid(self):
+        r"""
+        Get the centroid.
+
+        .. math::
+          CG = \frac{1}{4} (n_1+n_2+n_3+n_4)
+        """
+        n1, n2, n3, n4 = self.get_node_positions(nodes=self.nodes_ref[:4])
+        centroid = (n1 + n2 + n3 + n4) / 4.
+        return centroid
+
+    def center_of_mass(self):
+        return self.Centroid()
+
 class CTRAX3(AxisymmetricTri):
     """
     +--------+------------+-------+----+----+----+-------+
@@ -109,11 +127,32 @@ class CTRAX3(AxisymmetricTri):
         #: Property ID
         self.pid = pid
         self.theta = theta
-        self.nodes = nids
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(nids) == 3, 'error on CTRAX3'
 
-    def validate(self):
-        self.validate_node_ids(allow_empty_nodes=True)
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        thetas = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            #nids = list(nid  if nid is not None else 0
+                        #for nid in element.nodes)
+            nodes.append(element.nodes)
+            thetas.append(element.theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('theta', data=thetas)
+
+    #def validate(self):
+        #self.validate_node_ids(allow_empty_nodes=True)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -183,10 +222,10 @@ class CTRAX3(AxisymmetricTri):
         (n1, n2, n3) = self.get_node_positions()
         a = n1 - n2
         b = n1 - n3
-        area = 0.5 * norm(cross(a, b))
+        area = 0.5 * norm(np.cross(a, b))
         return area
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -195,11 +234,25 @@ class CTRAX3(AxisymmetricTri):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CTRIAX eid=%s' % self.eid
+        msg = ', which is required by CTRAX eid=%s' % self.eid
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CTRAX eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None  # type: Optional[List[Any]]
@@ -221,7 +274,7 @@ class CTRAX3(AxisymmetricTri):
         list_fields = ['CTRAX3', self.eid, self.Pid()] + nodeIDs + [theta]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = wipe_empty_fields(self.repr_fields())
         if size == 8 or len(card) == 8: # to last node
             msg = self.comment + print_card_8(card)
@@ -252,11 +305,32 @@ class CTRAX6(AxisymmetricTri):
         #: Property ID
         self.pid = pid
         self.theta = theta
-        self.nodes = nids
-        assert len(nids) == 6, 'error on CTRAX6'
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
+        assert len(nids) == 6, f'nids={nids}'
 
-    def validate(self):
-        self.validate_node_ids(allow_empty_nodes=True)
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        thetas = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            #nids = list(nid  if nid is not None else 0
+                        #for nid in element.nodes)
+            nodes.append(element.nodes)
+            thetas.append(element.theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('theta', data=thetas)
+
+    #def validate(self):
+        #self.validate_node_ids(allow_empty_nodes=True)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -326,10 +400,10 @@ class CTRAX6(AxisymmetricTri):
         (n1, n2, n3) = self.get_node_positions(nodes=self.nodes[:3])
         a = n1 - n2
         b = n1 - n3
-        area = 0.5 * norm(cross(a, b))
+        area = 0.5 * norm(np.cross(a, b))
         return area
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -338,11 +412,25 @@ class CTRAX6(AxisymmetricTri):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CTRAX6 eid=%s' % self.eid
+        msg = ', which is required by CTRAX6 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CTRAX6 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None
@@ -364,7 +452,7 @@ class CTRAX6(AxisymmetricTri):
         list_fields = ['CTRAX6', self.eid, self.Pid()] + nodeIDs + [theta]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = wipe_empty_fields(self.repr_fields())
         if size == 8 or len(card) == 8: # to last node
             msg = self.comment + print_card_8(card)
@@ -386,6 +474,38 @@ class CTRIAX(AxisymmetricTri):
     Theta/Mcid is MSC only!
     """
     type = 'CTRIAX'
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        mcids = []
+        thetas = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nids = list(nid  if nid is not None else 0
+                        for nid in element.nodes)
+            nodes.append(nids)
+            if isinstance(element.theta_mcid, int):
+                mcid = element.theta_mcid
+                theta = 0.
+            else:
+                assert isinstance(element.theta_mcid, float), type(element.theta_mcid)
+                mcid = -1
+                theta = element.theta_mcid
+            mcids.append(mcid)
+            thetas.append(theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('mcid', data=mcids)
+        h5_file.create_dataset('theta', data=thetas)
+
     def __init__(self, eid, pid, nids, theta_mcid=0., comment=''):
         AxisymmetricTri.__init__(self)
         if comment:
@@ -395,11 +515,11 @@ class CTRIAX(AxisymmetricTri):
         #: Property ID of a PLPLANE or PAXSYMH entry
         self.pid = pid
         self.theta_mcid = theta_mcid
-        self.nodes = nids
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(nids) == 6, 'error on CTRIAX'
 
-    def validate(self):
-        self.validate_node_ids(allow_empty_nodes=True)
+    #def validate(self):
+        #self.validate_node_ids(allow_empty_nodes=True)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -474,10 +594,10 @@ class CTRIAX(AxisymmetricTri):
         (n1, n2, n3) = self.get_node_positions(nodes=self.nodes_ref[:3])
         a = n1 - n2
         b = n1 - n3
-        area = 0.5 * norm(cross(a, b))
+        area = 0.5 * norm(np.cross(a, b))
         return area
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -486,11 +606,25 @@ class CTRIAX(AxisymmetricTri):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CTRIAX eid=%s' % self.eid
+        msg = ', which is required by CTRIAX eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CTRIAX eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None  # type: Optional[List[Any]]
@@ -512,7 +646,7 @@ class CTRIAX(AxisymmetricTri):
         list_fields = ['CTRIAX', self.eid, self.Pid()] + nodeIDs + [theta_mcid]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = wipe_empty_fields(self.repr_fields())
         if size == 8 or len(card) == 8: # to last node
             msg = self.comment + print_card_8(card)
@@ -544,6 +678,27 @@ class CTRIAX6(TriShell):
     """
     type = 'CTRIAX6'
     pid = -53 # uses element type from OP2
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        neids = len(eids)
+        mids = []
+        nodes = np.zeros((neids, 6), dtype='int32')
+        thetas = []
+        for i, eid in enumerate(eids):
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            mids.append(element.mid)
+            nodes[i, :] = [eid if eid is not None else 0 for eid in element.nodes]
+            thetas.append(element.theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('mid', data=mids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('theta', data=thetas)
+
     def __init__(self, eid, mid, nids, theta=0., comment=''):
         TriShell.__init__(self)
         if comment:
@@ -554,8 +709,9 @@ class CTRIAX6(TriShell):
         self.mid = mid
         #: theta
         self.theta = theta
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(nids) == 6, 'error on CTRIAX6'
+        self.mid_ref = None
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -590,7 +746,7 @@ class CTRIAX6(TriShell):
         nids = [n1, n2, n3, n4, n5, n6]
         return CTRIAX6(eid, mid, nids, theta=theta, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -599,11 +755,25 @@ class CTRIAX6(TriShell):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CTRIAX6 eid=%s' % self.eid
+        msg = ', which is required by CTRIAX6 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.mid_ref = model.Material(self.mid)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CTRIAX6 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.mid_ref = model.safe_material(self.mid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.mid = self.Mid()
         self.nodes_ref = None  # type: Optional[List[Any]]
@@ -647,7 +817,7 @@ class CTRIAX6(TriShell):
         (n1, unused_n2, n3, unused_n4, n5, unused_n6) = self.get_node_positions()
         a = n1 - n3
         b = n1 - n5
-        area = 0.5 * norm(cross(a, b))
+        area = 0.5 * norm(np.cross(a, b))
         return area
 
     def Centroid(self):
@@ -672,7 +842,7 @@ class CTRIAX6(TriShell):
         return 0.
 
     def Mid(self):
-        if isinstance(self.mid, integer_types):
+        if self.mid_ref is None:
             return self.mid
         return self.mid_ref.mid
 
@@ -751,7 +921,7 @@ class CTRIAX6(TriShell):
         list_fields = ['CTRIAX6', self.eid, self.Mid()] + self.node_ids + [theta]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = wipe_empty_fields(self.repr_fields())
         if size == 8 or len(card) == 8: # to last node
             msg = self.comment + print_card_8(card)
@@ -778,6 +948,38 @@ class CQUADX(AxisymmetricQuad):
     Theta/Mcid is MSC only!
     """
     type = 'CQUADX'
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        mcids = []
+        thetas = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodesi = [node if node is not None else 0
+                      for node in element.nodes]
+            nodes.append(nodesi)
+            if isinstance(element.theta_mcid, int):
+                mcid = element.theta_mcid
+                theta = 0.
+            else:
+                assert isinstance(element.theta_mcid, float), type(element.theta_mcid)
+                mcid = -1
+                theta = element.theta_mcid
+            mcids.append(mcid)
+            thetas.append(theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('mcid', data=mcids)
+        h5_file.create_dataset('theta', data=thetas)
+
     def __init__(self, eid, pid, nids, theta_mcid=0., comment=''):
         AxisymmetricQuad.__init__(self)
         if comment:
@@ -787,7 +989,7 @@ class CQUADX(AxisymmetricQuad):
         #: Property ID
         self.pid = pid
         self.theta_mcid = theta_mcid
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(self.nodes) == 9
 
     @classmethod
@@ -813,13 +1015,35 @@ class CQUADX(AxisymmetricQuad):
             integer_or_blank(card, 8, 'n6'),
             integer_or_blank(card, 9, 'n7'),
             integer_or_blank(card, 10, 'n8'),
-            integer_or_blank(card, 11, 'n9')
+            integer_or_blank(card, 11, 'n9'),
         ]
         theta_mcid = integer_double_or_blank(card, 12, 'theta/mcid', 0.)
-        assert len(card) <= 12, 'len(CQUADX card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 13, 'len(CQUADX card) = %i\ncard=%s' % (len(card), card)
         return CQUADX(eid, pid, nids, theta_mcid=theta_mcid, comment=comment)
 
-    def cross_reference(self, model):
+    @classmethod
+    def add_op2_data(cls, data, comment=''):
+        """
+        Adds a CQUADX card from the OP2
+
+        Parameters
+        ----------
+        data : List[varies]
+            a list of fields defined in OP2 format
+        comment : str; default=''
+            a comment for the card
+
+        """
+        eid = data[0]
+        pid = data[1]
+        nids = data[2:11]
+        if len(data) == 11:
+            theta_mcid = 0. #  msc specific
+        else:
+            raise RuntimeError(f'theta_mcid is defined; data={data}')
+        return CQUADX(eid, pid, nids, theta_mcid=theta_mcid, comment=comment)
+
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -828,11 +1052,25 @@ class CQUADX(AxisymmetricQuad):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CQUADX eid=%s' % self.eid
+        msg = ', which is required by CQUADX eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CQUADX eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None  # type: Optional[List[Any]]
@@ -881,7 +1119,7 @@ class CQUADX(AxisymmetricQuad):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes[:4]
         theta_mcid = set_blank_if_default(self.theta_mcid, 0.0)
@@ -917,8 +1155,27 @@ class CQUADX4(AxisymmetricQuad):
         #: Property ID
         self.pid = pid
         self.theta = theta
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(self.nodes) == 4
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        thetas = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+            thetas.append(element.theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('theta', data=thetas)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -944,7 +1201,7 @@ class CQUADX4(AxisymmetricQuad):
         assert len(card) <= 8, 'len(CQUADX4 card) = %i\ncard=%s' % (len(card), card)
         return CQUADX4(eid, pid, nids, theta=theta, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -953,11 +1210,25 @@ class CQUADX4(AxisymmetricQuad):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CQUADX eid=%s' % self.eid
+        msg = ', which is required by CQUADX4 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CQUADX4 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None  # type: Optional[List[Any]]
@@ -998,7 +1269,7 @@ class CQUADX4(AxisymmetricQuad):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
         data = ['CQUADX4', self.eid, self.Pid()] + nodes + [self.theta]
         return self.comment + print_card_8(data)
@@ -1029,8 +1300,27 @@ class CQUADX8(AxisymmetricQuad):
         #: Property ID
         self.pid = pid
         self.theta = theta
-        self.prepare_node_ids(nids, allow_empty_nodes=True)
+        self.nodes = self.prepare_node_ids(nids, allow_empty_nodes=True)
         assert len(self.nodes) == 8
+
+    @classmethod
+    def export_to_hdf5(cls, h5_file, model, eids):
+        """exports the elements in a vectorized way"""
+        #comments = []
+        pids = []
+        nodes = []
+        thetas = []
+        for eid in eids:
+            element = model.elements[eid]
+            #comments.append(element.comment)
+            pids.append(element.pid)
+            nodes.append(element.nodes)
+            thetas.append(element.theta)
+        #h5_file.create_dataset('_comment', data=comments)
+        h5_file.create_dataset('eid', data=eids)
+        h5_file.create_dataset('pid', data=pids)
+        h5_file.create_dataset('nodes', data=nodes)
+        h5_file.create_dataset('theta', data=thetas)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -1060,7 +1350,7 @@ class CQUADX8(AxisymmetricQuad):
         assert len(card) <= 12, 'len(CQUADX8 card) = %i\ncard=%s' % (len(card), card)
         return CQUADX8(eid, pid, nids, theta=theta, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1069,11 +1359,25 @@ class CQUADX8(AxisymmetricQuad):
         model : BDF()
             the BDF object
         """
-        msg = ' which is required by CQUADX8 eid=%s' % self.eid
+        msg = ', which is required by CQUADX8 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def uncross_reference(self):
+    def safe_cross_reference(self, model, xref_errors):
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by CQUADX8 eid=%s' % self.eid
+        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.pid = self.Pid()
         self.nodes_ref = None  # type: Optional[List[Any]]
@@ -1121,7 +1425,7 @@ class CQUADX8(AxisymmetricQuad):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes[:6]
         theta = set_blank_if_default(self.theta, 0.0)

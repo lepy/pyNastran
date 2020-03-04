@@ -1,14 +1,9 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-from six import integer_types
-from six.moves import range
+from typing import List
 import numpy as np
 from numpy import zeros, allclose
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pass
 
+from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 from pyNastran.f06.f06_formatting import write_imag_floats_13e, _eigenvalue_header # get_key0,
 
@@ -20,12 +15,16 @@ class ComplexRodArray(OES_Object):
         self.nelements = 0  # result specific
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
+
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
 
     def _reset_indices(self):
         self.itotal = 0
@@ -39,9 +38,6 @@ class ComplexRodArray(OES_Object):
 
     def build(self):
         """sizes the vectorized attributes of the ComplexRodArray"""
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -52,23 +48,30 @@ class ComplexRodArray(OES_Object):
         self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
+        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
+
         self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.nelements, dtype='int32')
+        self.element = zeros(self.nelements, dtype=idtype)
 
         #[axial, torsion]
-        self.data = zeros((self.ntimes, self.nelements, 2), dtype='complex64')
+        self.data = zeros((self.ntimes, self.nelements, 2), dtype=cfdtype)
 
     def build_dataframe(self):
+        """creates a pandas dataframe"""
         headers = self.get_headers()
         column_names, column_values = self._build_dataframe_transient_header()
-        self.data_frame = pd.Panel(self.data, items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
-        self.data_frame.columns.names = column_names
-        self.data_frame.index.names = ['ElementID', 'Item']
 
-    def __eq__(self, table):
+        #Freq              0.00001  10.00000 20.00000 30.00000 40.00000 50.00000 60.00000
+        #ElementID Item
+        #14        axial         0j       0j       0j       0j       0j       0j       0j
+        #          torsion       0j       0j       0j       0j       0j       0j       0j
+        #15        axial         0j       0j       0j       0j       0j       0j       0j
+        #          torsion       0j       0j       0j       0j       0j       0j       0j
+        self.data_frame = self._build_pandas_transient_elements(
+            column_values, column_names,
+            headers, self.element, self.data)
+
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.element, table.element):
@@ -114,12 +117,13 @@ class ComplexRodArray(OES_Object):
 
     def add_sort1(self, dt, eid, axial, torsion):
         """unvectorized method for adding SORT1 transient data"""
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [axial, torsion]
         self.ielement += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -132,13 +136,13 @@ class ComplexRodArray(OES_Object):
         assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
-            msg.append('  type=%s ntimes=%i nelements=%i\n'
-                       % (self.__class__.__name__, ntimes, nelements))
+        if self.nonlinear_factor not in (None, np.nan):  # transient
+            msg.append('  type=%s ntimes=%i nelements=%i; table_name=%r\n' % (
+                self.__class__.__name__, ntimes, nelements, self.table_name))
             ntimes_word = 'ntimes'
         else:
-            msg.append('  type=%s nelements=%i\n'
-                       % (self.__class__.__name__, nelements))
+            msg.append('  type=%s nelements=%i; table_name=%r\n'
+                       % (self.__class__.__name__, nelements, self.table_name))
             ntimes_word = '1'
         msg.append('  eType\n')
         headers = self.get_headers()
@@ -158,8 +162,9 @@ class ComplexRodArray(OES_Object):
         ind = np.searchsorted(eids, self.element)
         return ind
 
-    def get_f06_header(self):
+    def get_f06_header(self, is_mag_phase=True):
         raise NotImplementedError('overwrite this')
+
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s', page_num=1, is_mag_phase=False, is_sort1=True):
         if header is None:
             header = []
@@ -191,13 +196,81 @@ class ComplexRodArray(OES_Object):
             page_num += 1
         return page_num - 1
 
+    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+                  is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        if itable == -1:
+            self._write_table_header(op2, op2_ascii, date)
+            itable = -3
+
+        eids = self.element
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        nelements = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
+
+        device_code = self.device_code
+        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+
+        eids_device = self.element * 10 + self.device_code
+
+        if self.is_sort1:
+            struct1 = Struct(endian + b'i4f')
+        else:
+            raise NotImplementedError('SORT2')
+
+        op2_ascii.write('nelements=%i\n' % nelements)
+
+        for itime in range(self.ntimes):
+            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            itable -= 1
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+
+            axial = self.data[itime, :, 0]
+            torsion = self.data[itime, :, 1]
+
+            for eid_device, axiali, torsioni in zip(eids_device, axial, torsion):
+                data = [eid_device, axiali.real, torsioni.real, axiali.imag, torsioni.imag]
+                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, tuple(data)))
+                op2.write(struct1.pack(*data))
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
+
 
 class ComplexRodStressArray(ComplexRodArray, StressObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         ComplexRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['axial', 'torsion']
         return headers
 
@@ -231,7 +304,7 @@ class ComplexRodStrainArray(ComplexRodArray, StrainObject):
         ComplexRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         headers = ['axial', 'torsion']
         return headers
 

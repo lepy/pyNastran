@@ -5,10 +5,9 @@ defines the LAMA class to read:
  - BucklingEigenvalues
 
 from the OP2
+
 """
-from __future__ import print_function
 from struct import Struct
-from six.moves import range
 
 from pyNastran.op2.op2_interface.op2_common import OP2Common
 from pyNastran.op2.tables.lama_eigenvalues.lama_objects import (
@@ -32,7 +31,7 @@ class LAMA(OP2Common):
             '???', '???', '???', '???']
         #self.show_data(data)
 
-        three = self.parse_approach_code(data)
+        unused_three = self.parse_approach_code(data)
         self.six = self.add_data_parameter(data, 'six', b'i', 10, False)  # seven
         self._read_title(data)
 
@@ -51,7 +50,7 @@ class LAMA(OP2Common):
             '???', '???', '???', '???']
         #self.show_data(data)
 
-        three = self.parse_approach_code(data)
+        unused_three = self.parse_approach_code(data)
 
         self.seven = self.add_data_parameter(data, 'seven', b'i', 10, False)  # seven
         #: residual vector augmentation flag
@@ -66,13 +65,14 @@ class LAMA(OP2Common):
         if self.read_mode == 1:
             return ndata
 
-        ntotal = 4 * 6
+        ntotal = 24 # 4 * 6
         nmodes = ndata // ntotal
         n = 0
         #assert self.isubcase != 0, self.isubcase
-        clama = ComplexEigenvalues(self.title, nmodes)
+        clama = ComplexEigenvalues(self.title, self.table_name, nmodes)
+        #assert self.title not in self.eigenvalues, f'table={self.table_name_str} title={self.title} optimization_count={self._count}'
         self.eigenvalues[self.title] = clama
-        #self.eigenvalues[self.isubcase] = lama
+        #self.eigenvalues[self.isubcase] = clama
         structi = Struct(self._endian + b'ii4f')
         for i in range(nmodes):
             edata = data[n:n+ntotal]
@@ -82,7 +82,7 @@ class LAMA(OP2Common):
             #(imode, order, eigr, eigc, freq, damping) = out # CLAMA
             #print('imode=%s order=%s eigr=%s eigc=%s freq=%s damping=%s' %
                   #(imode, order, eigr, eigc, freq, damping))
-            clama.add_f06_line(out, i)
+            clama.add_op2_line(out, i)
             n += ntotal
         assert n == ndata, 'clama length error'
         return n
@@ -95,11 +95,12 @@ class LAMA(OP2Common):
         if self.read_mode == 1:
             return ndata
 
-        ntotal = 4 * 7
+        ntotal = 28 # 4 * 7
         nmodes = ndata // ntotal
         n = 0
         #assert self.isubcase != 0, self.isubcase
-        blama = BucklingEigenvalues(self.title, nmodes)
+        blama = BucklingEigenvalues(self.title, self.table_name, nmodes)
+        #assert self.title not in self.eigenvalues, f'table={self.table_name_str} title={self.title} optimization_count={self._count}'
         self.eigenvalues[self.title] = blama
         #self.eigenvalues[self.isubcase] = lama
         structi = Struct(self._endian + b'ii5f')
@@ -111,7 +112,7 @@ class LAMA(OP2Common):
             #(imode, order, eigen, omega, freq, mass, stiff) = out # BLAMA??
             #(mode_num, extract_order, eigenvalue, radian, cycle, genM, genK) = line  # LAMA
             #(root_num, extract_order, eigr, eigi, cycle, damping) = data  # CLAMA
-            blama.add_f06_line(out, i)
+            blama.add_op2_line(out, i)
             n += ntotal
         return n
 
@@ -127,7 +128,7 @@ class LAMA(OP2Common):
             '???', '???', '???', '???']
         #self.show_data(data)
 
-        three = self.parse_approach_code(data)
+        unused_three = self.parse_approach_code(data)
 
         self.seven = self.add_data_parameter(data, 'seven', b'i', 10, False)  # seven
         ## residual vector augmentation flag
@@ -157,13 +158,22 @@ class LAMA(OP2Common):
         """parses the Real Eigenvalues Table 4 Data"""
         if self.read_mode == 1:
             return ndata
-        #self.show_data(data)
         nmodes = ndata // 28
         n = 0
         ntotal = 28
         #assert self.isubcase != 0, self.isubcase
-        lama = RealEigenvalues(self.title, nmodes=nmodes)
-        self.eigenvalues[self.title] = lama
+        lama = RealEigenvalues(self.title, self.table_name, nmodes=nmodes)
+
+        if self.table_name in [b'LAMA', b'LAMAS']:
+            result_name = 'eigenvalues'
+        elif self.table_name == b'LAMAF':
+            result_name = 'eigenvalues_fluid'
+        else:  # pragma: no cover
+            raise NotImplementedError(self.table_name)
+        slot = getattr(self, result_name)
+        #assert self.title not in slot, f'{result_name}: table={self.table_name_str} title={self.title!r} optimization_count={self._count}'
+        slot[self.title] = lama
+
         structi = Struct(self._endian + b'ii5f')
         for i in range(nmodes):
             edata = data[n:n+28]

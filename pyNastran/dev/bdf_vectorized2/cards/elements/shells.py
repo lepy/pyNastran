@@ -1,16 +1,19 @@
-from __future__ import print_function
+from __future__ import annotations
 from collections import defaultdict
+from typing import TYPE_CHECKING
 import numpy as np
-from pyNastran.utils import integer_types
 
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank, blank,
     integer_double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_field_8, print_card_8, set_blank_if_default
 from pyNastran.bdf.cards.base_card import _format_comment
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
-class ShellElement(object):
+class ShellElement:
     """base class for CTRIA3, CQUAD4"""
     card_name = ''
     def __init__(self, model):
@@ -114,7 +117,7 @@ class ShellElement(object):
             #self._cd = []
             self.is_current = True
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """does this do anything?"""
         self.make_current()
 
@@ -352,12 +355,12 @@ def ctria3_quality(nelements, xyz_cid0, i123):
 
 
     # TODO: the stuff below needs work...
-    #cos_skew1 = np.dot(e2_p1,  e31) / (np.linalg.norm(e2_p1, axis=1) * np.linalg.norm(e31, axis=1))
-    #cos_skew2 = np.dot(e2_p1, -e31) / (np.linalg.norm(e2_p1, axis=1) * np.linalg.norm(e31, axis=1))
-    #cos_skew3 = np.dot(e3_p2,  e21) / (np.linalg.norm(e3_p2, axis=1) * np.linalg.norm(e21, axis=1))
-    #cos_skew4 = np.dot(e3_p2, -e21) / (np.linalg.norm(e3_p2, axis=1) * np.linalg.norm(e21, axis=1))
-    #cos_skew5 = np.dot(e1_p3,  e32) / (np.linalg.norm(e1_p3, axis=1) * np.linalg.norm(e32, axis=1))
-    #cos_skew6 = np.dot(e1_p3, -e32) / (np.linalg.norm(e1_p3, axis=1) * np.linalg.norm(e32, axis=1))
+    #cos_skew1 = (e2_p1 @  e31) / (np.linalg.norm(e2_p1, axis=1) * np.linalg.norm(e31, axis=1))
+    #cos_skew2 = (e2_p1 @ -e31) / (np.linalg.norm(e2_p1, axis=1) * np.linalg.norm(e31, axis=1))
+    #cos_skew3 = (e3_p2 @  e21) / (np.linalg.norm(e3_p2, axis=1) * np.linalg.norm(e21, axis=1))
+    #cos_skew4 = (e3_p2 @ -e21) / (np.linalg.norm(e3_p2, axis=1) * np.linalg.norm(e21, axis=1))
+    #cos_skew5 = (e1_p3 @  e32) / (np.linalg.norm(e1_p3, axis=1) * np.linalg.norm(e32, axis=1))
+    #cos_skew6 = (e1_p3 @ -e32) / (np.linalg.norm(e1_p3, axis=1) * np.linalg.norm(e32, axis=1))
     #max_skew = np.pi / 2. - np.abs(np.arccos(np.clip([
         #cos_skew1, cos_skew2, cos_skew3,
         #cos_skew4, cos_skew5, cos_skew6], -1., 1.))).min()
@@ -370,9 +373,9 @@ def ctria3_quality(nelements, xyz_cid0, i123):
     #assert len(cos_skew1) == nelements, 'len(cos_skew1)=%s nelements=%s' % (len(cos_skew1), nelements)
     cos_skew1 = None
 
-    #cos_theta1 = np.dot(v21, -v13) / (length21 * length13)
-    #cos_theta2 = np.dot(v32, -v21) / (length32 * length21)
-    #cos_theta3 = np.dot(v13, -v32) / (length13 * length32)
+    #cos_theta1 = (v21 @ -v13) / (length21 * length13)
+    #cos_theta2 = (v32 @ -v21) / (length32 * length21)
+    #cos_theta3 = (v13 @ -v32) / (length13 * length32)
     #thetas = np.arccos(np.clip([cos_theta1, cos_theta2, cos_theta3], -1., 1.))
     thetas = np.array([60.])
     min_thetai = thetas.min()
@@ -1096,7 +1099,7 @@ class CQUADv(ShellElement):
             else:
                 self.eid = np.array(self._eid, dtype='int32')
                 self.pid = np.array(self._pid, dtype='int32')
-                self.nids = np.array(self._nids, dtype='int32')
+                self.nids = int_array(self._nids, dtype='int32')
                 self.theta = np.array(self._theta, dtype='float64')
                 self.mcid = np.array(self._mcid, dtype='int32')
             assert len(self.eid) == len(np.unique(self.eid))
@@ -1335,7 +1338,7 @@ class CQUADRv(ShellElement):
         return msg
 
 
-class Shells(object):
+class Shells:
     """
     Stores shell elements that exist in 3D space
     (e.g., not axisysmmetric elements).
@@ -1349,7 +1352,7 @@ class Shells(object):
         self.ctriar = model.ctriar
         self.cquadr = model.cquadr
         self.cquad = model.cquad
-        self._eids = set([])
+        self._eids = set()
 
     def add(self, eid):
         if eid not in self._eids:
@@ -1412,3 +1415,14 @@ class Shells(object):
 
     def __repr__(self):
         return self.repr_indent(indent='')
+
+def int_array(array_, dtype='int32'):
+    try:
+        new_array = np.array(array_, dtype=dtype)
+    except TypeError:
+        # TODO: potentially risky...check...
+        float_array = np.array(array_, dtype='float64')
+        new_array = float_array.astype(dtype)
+        i0 = np.where(new_array < 0)
+        new_array[i0] = 0
+    return new_array

@@ -11,22 +11,25 @@ from h5Nastran import H5Nastran
 db = H5Nastran('./models/model_001.h5', 'w')  # , in_memory=True)
 db.load_bdf('./models/model_001.bdf')
 db.load_punch('./models/model_001.pch')
+db.close()
+db = H5Nastran('./models/model_001.h5', 'r')
+db.load_bdf()
 
-print(db.input.node.grid.identity)  # or db.input.node.grid.grid
+print(db.nastran.input.node.grid.identity)  # or db.input.node.grid.grid
 
 domain_ids = range(10)
 elements = [1, 5, 75]
-f = db.result.elemental.element_force.quad4.search(elements, domain_ids)
+f = db.nastran.result.elemental.element_force.quad4.search(elements, domain_ids)
 
 print(f)
 
 print(2 * f + 3 * f)
 
-f = db.result.elemental.element_force.search(elements, domain_ids)
+f = db.nastran.result.elemental.element_force.search(elements, domain_ids)
 
 print(f.quad4)
 
-# vec = db.input.coordinate_system.h5n_transformation.vector_to_basic([1, 1, 1], 1)
+# vec = db.nastran.input.coordinate_system.h5n_transformation.vector_to_basic([1, 1, 1], 1)
 
 # print(vec)
 

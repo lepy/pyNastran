@@ -20,25 +20,29 @@ All dynamic control cards are defined in this file.  This includes:
  * TF
 
 All cards are BaseCard objects.
+
 """
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
+from __future__ import annotations
 from math import log, exp
-from six.moves import zip, range
+from typing import TYPE_CHECKING
+
 import numpy as np
 from numpy import unique, hstack
 
-from pyNastran.utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank,
     string_or_blank, blank, fields, components_or_blank,
-    integer_string_or_blank, integer_or_double, parse_components,
-    modal_components,
+    integer_string_or_blank, integer_or_double, #parse_components,
+    modal_components_or_blank,
 )
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
+
 
 class DELAY(BaseCard):
     """
@@ -49,6 +53,15 @@ class DELAY(BaseCard):
     +-------+-----+-----------+-----+--------+------+-----+--------+
     """
     type = 'DELAY'
+    _properties = ['node_id1', 'node_id2', 'node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nodes = [1]
+        components = [1]
+        delays = [1.]
+        return DELAY(sid, nodes, components, delays, comment='')
 
     def __init__(self, sid, nodes, components, delays, comment=''):
         """
@@ -69,7 +82,9 @@ class DELAY(BaseCard):
             len(nodes) = len(delays)
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
 
@@ -101,6 +116,7 @@ class DELAY(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         nodes = [integer(card, 2, 'node')]
@@ -128,7 +144,7 @@ class DELAY(BaseCard):
     def get_delay_at_freq(self, freq):
         return self.nodes, self.components, self.delays
 
-    def cross_reference(self, model):
+    def cross_reference(self, model, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -136,11 +152,13 @@ class DELAY(BaseCard):
         ----------
         model : BDF()
             the BDF object
+
         """
         msg = ', which is required by DELAY sid=%s' % self.sid
         self.nodes_ref = model.Node(self.node_ids, msg=msg)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.nodes_ref = None
 
@@ -173,7 +191,7 @@ class DELAY(BaseCard):
             list_fields += [nidi, comp, delay]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
         if size == 8:
@@ -195,8 +213,18 @@ class DPHASE(BaseCard):
     +========+=====+===========+=====+======+======+=====+=====+
     | DPHASE | SID | POINT ID1 | C1  | TH1  |  P2  | C2  | TH2 |
     +--------+-----+-----------+-----+------+------+-----+-----+
+
     """
     type = 'DPHASE'
+    _properties = ['node_id1', 'node_id2', 'node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nodes = [1]
+        components = [1]
+        phase_leads = [1.]
+        return DPHASE(sid, nodes, components, phase_leads, comment='')
 
     def __init__(self, sid, nodes, components, phase_leads, comment=''):
         """
@@ -217,7 +245,9 @@ class DPHASE(BaseCard):
             len(nodes) = len(delays)
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         if isinstance(nodes, integer_types):
@@ -244,6 +274,7 @@ class DPHASE(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         nodes = [integer(card, 2, 'node')]
@@ -268,7 +299,7 @@ class DPHASE(BaseCard):
         self.components += dphase.components
         self.phase_leads += dphase.phase_leads
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -276,14 +307,16 @@ class DPHASE(BaseCard):
         ----------
         model : BDF()
             the BDF object
+
         """
         msg = ', which is required by DPHASE sid=%s' % self.sid
         self.nodes_ref = model.Nodes(self.node_ids, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model, xref_errors):
         return self.cross_reference(model)
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         self.nodes = self.node_ids
         self.nodes_ref = None
 
@@ -317,7 +350,7 @@ class DPHASE(BaseCard):
             list_fields += [nid, comp, delay]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
         if size == 8:
@@ -339,8 +372,15 @@ class FREQ(BaseCard):
     +======+=====+=====+=====+======+=====+=====+=====+=====+
     | FREQ | SID | F1  | F2  | etc. |     |     |     |     |
     +------+-----+-----+-----+------+-----+-----+-----+-----+
+
     """
     type = 'FREQ'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        freqs = [1., 2., 3.]
+        return FREQ(sid, freqs, comment='')
 
     def __init__(self, sid, freqs, comment=''):
         """
@@ -354,7 +394,9 @@ class FREQ(BaseCard):
             the frequencies for a FREQx object
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -373,6 +415,7 @@ class FREQ(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         freqs = fields(double, card, 'freq', i=2, j=len(card))
@@ -389,8 +432,9 @@ class FREQ(BaseCard):
 
         Parameters
         ----------
-        freqs : ???
+        freqs : List[float] / (nfreq, ) float ndarray
             the frequencies for a FREQx object
+
         """
         #print("self.freqs = ",self.freqs)
         #print("freqs = ",freqs)
@@ -401,6 +445,7 @@ class FREQ(BaseCard):
         :param freq: a FREQx object
 
         .. seealso:: :func:`addFrequencies`
+
         """
         self.add_frequencies(freq.freqs)
 
@@ -408,7 +453,7 @@ class FREQ(BaseCard):
         list_fields = ['FREQ', self.sid] + list(self.freqs)
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -428,8 +473,16 @@ class FREQ1(BaseCard):
     +-------+-----+-----+-----+-----+
 
     .. note:: this card rewrites as a FREQ card
+
     """
     type = 'FREQ1'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        f1 = 1.
+        df = 10.
+        return FREQ1(sid, f1, df, ndf=1, comment='')
 
     def __init__(self, sid, f1, df, ndf=1, comment=''):
         """
@@ -447,7 +500,9 @@ class FREQ1(BaseCard):
             number of frequency increments
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -471,6 +526,7 @@ class FREQ1(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         f1 = double_or_blank(card, 2, 'f1', 0.0)
@@ -483,7 +539,7 @@ class FREQ1(BaseCard):
         list_fields = ['FREQ1', self.sid, self.f1, self.df, self.ndf]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -503,8 +559,16 @@ class FREQ2(BaseCard):
     +-------+-----+-----+-----+-----+
 
     .. note:: this card rewrites as a FREQ card
+
     """
     type = 'FREQ2'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        f1 = 1.
+        f2 = 2.
+        return FREQ2(sid, f1, f2, nf=1, comment='')
 
     def __init__(self, sid, f1, f2, nf=1, comment=''):
         """
@@ -522,7 +586,9 @@ class FREQ2(BaseCard):
             number of logorithmic intervals
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -549,6 +615,7 @@ class FREQ2(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         f1 = double(card, 2, 'f1')  # default=0.0 ?
@@ -562,7 +629,7 @@ class FREQ2(BaseCard):
         list_fields = ['FREQ2', self.sid, self.f1, self.f2, self.nf]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -577,12 +644,19 @@ class FREQ3(FREQ):
     +-------+-----+------+-------+--------+-----+---------+
     | FREQ3 |  6  | 20.0 | 200.0 | LINEAR | 10  |   2.0   |
     +-------+-----+------+-------+--------+-----+---------+
+
     """
     type = 'FREQ3'
 
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        f1 = 1.
+        return FREQ3(sid, f1, f2=None, freq_type='LINEAR', nef=10, cluster=1.0, comment='')
+
     def __init__(self, sid, f1, f2=None, freq_type='LINEAR', nef=10, cluster=1.0, comment=''):
         """
-        Creates a FREQ4 card
+        Creates a FREQ3 card
 
         Parameters
         ----------
@@ -600,6 +674,7 @@ class FREQ3(FREQ):
             ???
         comment : str; default=''
             a comment for the card
+
         """
         if comment:
             self.comment = comment
@@ -628,6 +703,7 @@ class FREQ3(FREQ):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         f1 = double(card, 2, 'f1')
@@ -641,7 +717,7 @@ class FREQ3(FREQ):
     def raw_fields(self):
         return ['FREQ3', self.sid, self.f1, self.f2, self.freq_type, self.nef, self.cluster]
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -663,8 +739,14 @@ class FREQ4(FREQ):
 
     .. note:: this card rewrites as a FREQ card
     .. todo:: not done...
+
     """
     type = 'FREQ4'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        return FREQ4(sid, f1=0., f2=1e20, fspread=0.1, nfm=3, comment='')
 
     def __init__(self, sid, f1=0., f2=1e20, fspread=0.1, nfm=3, comment=''):
         """
@@ -682,6 +764,7 @@ class FREQ4(FREQ):
             Number of evenly spaced frequencies per 'spread' mode.
         comment : str; default=''
             a comment for the card
+
         """
         if comment:
             self.comment = comment
@@ -702,6 +785,7 @@ class FREQ4(FREQ):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         f1 = double_or_blank(card, 2, 'f1', 0.0)
@@ -712,14 +796,13 @@ class FREQ4(FREQ):
         return FREQ4(sid, f1=f1, f2=f2, fspread=fspread, nfm=nfm, comment=comment)
 
     def raw_fields(self):
-        list_fields = ['FREQ4', self.sid, self.f1, self.f2, self.fspread,
-                       self.nfm]
+        list_fields = ['FREQ4', self.sid, self.f1, self.f2, self.fspread, self.nfm]
         return list_fields
 
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -741,8 +824,15 @@ class FREQ5(FREQ):
     +-------+------+------+--------+------+-----+-----+-----+------+
     |       | 1.05 | 1.1  |  1.2   |      |     |     |     |      |
     +-------+------+------+--------+------+-----+-----+-----+------+
+
     """
     type = 'FREQ5'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        fractions = [0.1, 0.2, 0.3]
+        return FREQ5(sid, fractions, f1=0., f2=1e20, comment='')
 
     def __init__(self, sid, fractions, f1=0., f2=1e20, comment=''):
         """
@@ -764,6 +854,7 @@ class FREQ5(FREQ):
         .. note:: FREQ5 is only valid in modal frequency-response
                   solutions (SOLs 111, 146, and 200) and is ignored in
                   direct frequency response solutions.
+
         """
         if comment:
             self.comment = comment
@@ -797,7 +888,7 @@ class FREQ5(FREQ):
     def raw_fields(self):
         return ['FREQ5', self.sid, self.f1, self.f2] + list(self.fractions)
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -818,8 +909,19 @@ class NLPARM(BaseCard):
     +--------+--------+------+------+---------+-------+---------+---------+--------+
     |        | MAXBIS |      |      |         | MAXR  |         | RTOLB   | CONV   |
     +--------+--------+------+------+---------+-------+---------+---------+--------+
+
     """
     type = 'NLPARM'
+    _properties = ['nlparm_id']
+
+    @classmethod
+    def _init_from_empty(cls):
+        nlparm_id = 1
+        return NLPARM(nlparm_id, ninc=None, dt=0.0, kmethod='AUTO', kstep=5,
+                      max_iter=25, conv='PW', int_out='NO', eps_u=0.01,
+                      eps_p=0.01, eps_w=0.01, max_div=3, max_qn=None,
+                      max_ls=4, fstress=0.2, ls_tol=0.5, max_bisect=5,
+                      max_r=20., rtol_b=20., comment='')
 
     def __init__(self, nlparm_id, ninc=None, dt=0.0, kmethod='AUTO', kstep=5,
                  max_iter=25, conv='PW', int_out='NO',
@@ -873,7 +975,9 @@ class NLPARM(BaseCard):
             ???
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
 
@@ -918,6 +1022,7 @@ class NLPARM(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         nlparm_id = integer(card, 1, 'nlparm_id')
 
@@ -971,46 +1076,48 @@ class NLPARM(BaseCard):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         (nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv, int_out, eps_u, eps_p,
          eps_w, max_div, max_qn, max_ls, fstress, ls_tol, max_bisect, max_r,
          rtol_b) = data
 
-        if kmethod == 1:
-            kmethod = 'AUTO'
-        elif kmethod == 2:
-            kmethod = 'ITER'
-        elif kmethod == 4:
-            kmethod = 'SEMI'
-        else:
+        kmethod_map = {
+            1 : 'AUTO',
+            2 : 'ITER',
+            3 : 'ADAPT',
+            4 : 'SEMI',
+        }
+        try:
+            kmethod = kmethod_map[kmethod]
+        except KeyError:
             msg = 'nlparm_id=%s kmethod=%r data=%s' % (nlparm_id, kmethod, data)
             raise NotImplementedError(msg)
 
-        if conv == 1:
-            conv = 'W'
-        elif conv == 2:
-            conv = 'P'
-        elif conv == 3:
-            conv = 'PW'
-        elif conv == 4:
-            conv = 'U'
-        elif conv == 5:
-            conv = 'UW'
-        elif conv == 6:
-            conv = 'UP'
-        elif conv == 7:
-            conv = 'UPW'
-        else:
+        conv_map = {
+            1 : 'W',
+            2 : 'P',
+            3 : 'PW',
+            4 : 'U',
+            5 : 'UW',
+            6 : 'UP',
+            7 : 'UPW',
+            -1 : 'PW',  # Nastran-CoFE : blank -> assuming default
+        }
+        try:
+            conv = conv_map[conv]
+        except KeyError:
             msg = 'nlparm_id=%s conv=%r data=%s' % (nlparm_id, conv, data)
             raise NotImplementedError(msg)
 
-        if int_out == 0:
-            int_out = 'NO'
-        elif int_out == 1:
-            int_out = 'YES'
-        elif int_out == 2:
-            int_out = 'ALL'
-        else:
+        int_out_map = {
+            0 : 'NO',
+            1 : 'YES',
+            2 : 'ALL',
+        }
+        try:
+            int_out = int_out_map[int_out]
+        except KeyError:
             msg = 'nlparm_id=%s int_out=%r data=%s' % (nlparm_id, int_out, data)
             raise NotImplementedError(msg)
         return NLPARM(nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv,
@@ -1056,7 +1163,7 @@ class NLPARM(BaseCard):
                        rtol_b]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card) # having trouble with double precision...
@@ -1065,9 +1172,17 @@ class NLPARM(BaseCard):
 
 class NLPCI(BaseCard):
     type = 'NLPCI'
+    _properties = ['nlpci_id']
+
+    @classmethod
+    def _init_from_empty(cls):
+        nlpci_id = 1
+        return NLPCI(nlpci_id, Type='CRIS', minalr=0.25, maxalr=4.,
+                     scale=0., desiter=12, mxinc=20, comment='')
 
     def __init__(self, nlpci_id, Type='CRIS', minalr=0.25, maxalr=4.,
                  scale=0., desiter=12, mxinc=20, comment=''):
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.nlpci_id = nlpci_id
@@ -1089,6 +1204,7 @@ class NLPCI(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         nlpci_id = integer(card, 1, 'nlpci_id')
         Type = string_or_blank(card, 2, 'Type', 'CRIS')
@@ -1110,7 +1226,7 @@ class NLPCI(BaseCard):
         #minalr = set_blank_if_default(self.minalr, 0.25)
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1169,8 +1285,29 @@ class ROTORD(BaseCard):
     +--------+--------+--------+----------+---------+--------+--------+----------+----------+
     |        |   10   |  20    |   1      |   0.0   |  0.0   |  10    |   110    |          |
     +--------+--------+--------+----------+---------+--------+--------+----------+----------+
+
     """
     type = 'ROTORD'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        rstart = 1
+        rstep = 1
+        numstep = 1
+        rids = [1]
+        rsets = [1]
+        rspeeds = [1]
+        rcords = [1]
+        w3s = [1]
+        w4s = [1]
+        rforces = [1]
+        brgsets = [1]
+        return ROTORD(sid, rstart, rstep, numstep, rids, rsets, rspeeds, rcords, w3s, w4s, rforces,
+                      brgsets, refsys='ROT', cmout=0.0, runit='RPM', funit='RPM', zstein='NO',
+                      orbeps=1.e-6, roprt=0, sync=1, etype=1, eorder=1.0, threshold=0.02,
+                      maxiter=10, comment='')
+
     def __init__(self, sid, rstart, rstep, numstep,
                  rids, rsets, rspeeds, rcords, w3s, w4s, rforces, brgsets,
                  refsys='ROT', cmout=0.0, runit='RPM', funit='RPM',
@@ -1178,6 +1315,8 @@ class ROTORD(BaseCard):
                  etype=1, eorder=1.0, threshold=0.02, maxiter=10,
                  comment=''):
         """
+        Adds a ROTORD card
+
         Parameters
         ----------
         sid : int
@@ -1189,9 +1328,6 @@ class ROTORD(BaseCard):
             Step-size of reference rotor speed. See Remark 3. (Real ≠ 0.0)
         numstep : int
             Number of steps for reference rotor speed including RSTART.
-
-        Parameter Lists
-        ---------------
         rids : List[int]
             Identification number of rotor i.
             (Integer > 0 with RID(i+1) > RIDi; Default = i)
@@ -1212,9 +1348,6 @@ class ROTORD(BaseCard):
             ???
         brgsets : List[int]
             ???
-
-        Optional
-        --------
         refsys : str; default='ROT'
             Reference system
                 'FIX' analysis is performed in the fixed reference system.
@@ -1243,7 +1376,9 @@ class ROTORD(BaseCard):
             ???
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -1291,7 +1426,7 @@ class ROTORD(BaseCard):
                 assert rset is not None, self.rsets
         #assert len(self.grids1) > 0, 'ngrids1=%s\n%s' % (len(self.grids1), str(self))
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         self.rspeeds_ref = []
         for rspeed in self.rspeeds:
             if isinstance(rspeed, integer_types):
@@ -1315,6 +1450,7 @@ class ROTORD(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         rstart = double(card, 2, 'rstart')
@@ -1390,7 +1526,7 @@ class ROTORD(BaseCard):
         #print(print_card_8(list_fields))
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         # double precision?
         card = self.repr_fields()
         if size == 8:
@@ -1416,9 +1552,18 @@ class ROTORG(BaseCard):
     +--------+--------+------+------+-----+----+----+----+----+
     |        |   93   | 94   |  95  | 97  |    |    |    |    |
     +--------+--------+------+------+-----+----+----+----+----+
+
     """
     type = 'ROTORG'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nids = [2, 3]
+        return ROTORG(sid, nids, comment='')
+
     def __init__(self, sid, nids, comment=''):
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -1524,17 +1669,18 @@ class ROTORG(BaseCard):
 
         return ROTORG(sid, nids, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
-    def uncross_reference(self):
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
         pass
 
     def raw_fields(self):
         list_fields = ['ROTORG', self.sid] + self.nids
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         # double precision?
         card = self.repr_fields()
         if size == 8:
@@ -1552,12 +1698,28 @@ class TF(BaseCard):
     +====+=====+=====+======+======+======+========+====+====+
     | TF | SID | GD  |  CD  |  B0  |  B1  |   B2   |    |    |
     +----+-----+-----+------+------+------+--------+----+----+
-    |    | G_1 | C_1 | A0_1 | A1_1 | A2_1 | -etc.- |    |    |
+    |    | G_1 | C_1 | A0_1 | A1_1 | A2_1 |  etc.  |    |    |
     +----+-----+-----+------+------+------+--------+----+----+
 
     """
     type = 'TF'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nid0 = 2
+        c = '3'
+        b0 = 1.
+        b1 = 2.
+        b2 = 3.
+        nids = [2, 3]
+        components = ['4', '5']
+        a = []
+        #f2 = 2.
+        return TF(sid, nid0, c, b0, b1, b2, nids, components, a, comment='')
+
     def __init__(self, sid, nid0, c, b0, b1, b2, nids, components, a, comment=''):
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -1574,7 +1736,7 @@ class TF(BaseCard):
         pass
         #assert len(self.grids1) > 0, 'ngrids1=%s\n%s' % (len(self.grids1), str(self))
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     @classmethod
@@ -1588,6 +1750,7 @@ class TF(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         nid0 = integer(card, 2, 'nid0')
@@ -1625,7 +1788,7 @@ class TF(BaseCard):
             list_fields += [grid, c, a0, a1, a2, None, None, None]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         # double precision?
         card = self.repr_fields()
         if size == 8:
@@ -1656,8 +1819,17 @@ class TSTEP(BaseCard):
     +-------+------+------+------+------+-----+-----+-----+-----+
     |       |      | 1000 | .001 | 1    |     |     |     |     |
     +-------+------+------+------+------+-----+-----+-----+-----+
+
     """
     type = 'TSTEP'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        N = 4
+        DT = 1.
+        NO = None
+        return TSTEP(sid, N, DT, NO, comment='')
 
     def __init__(self, sid, N, DT, NO, comment=''):
         """
@@ -1668,14 +1840,17 @@ class TSTEP(BaseCard):
         sid : int
             the time step id
         N : List[int/None]
-            ???
+            List of number of time steps for each step section.
         DT : List[float/None]
-            ???
+            List of time steps for each step section.
         NO : List[int/None]
-            ???
+            List of step frequency for each step section.
+            Every N steps, results will be printed.
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
 
@@ -1709,6 +1884,7 @@ class TSTEP(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         N = []
@@ -1743,7 +1919,7 @@ class TSTEP(BaseCard):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1775,8 +1951,17 @@ class TSTEP1(BaseCard):
     +--------+------+-------+-------+-------+-----+-----+-----+-----+
     |        |      | 100   |   2   |  ALL  |     |     |     |     |
     +--------+------+-------+-------+-------+-----+-----+-----+-----+
+
     """
     type = 'TSTEP1'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        ninc = 4
+        tend = 1.
+        nout = None
+        return TSTEP1(sid, tend, ninc, nout, comment='')
 
     def __init__(self, sid, tend, ninc, nout, comment=''):
         """
@@ -1794,7 +1979,9 @@ class TSTEP1(BaseCard):
             ???
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
@@ -1813,6 +2000,7 @@ class TSTEP1(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         tend = []
@@ -1844,7 +2032,7 @@ class TSTEP1(BaseCard):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1867,10 +2055,23 @@ class TSTEPNL(BaseCard):
     +---------+--------+--------+-------+--------+--------+-------+---------+------+
 
     method = None for NX, but apparently TSTEP as well, which is not in the QRG
+
     """
     type = 'TSTEPNL'
     allowed_methods = ['AUTO', 'ITER', 'ADAPT', 'SEMI', 'FNT', 'PFNT', # MSC
                        'TSTEP'] # NX
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        ndt = 10
+        dt = 0.1
+        no = 2
+        return TSTEPNL(sid, ndt, dt, no, method='ADAPT', kstep=None,
+                       max_iter=10, conv='PW', eps_u=1.e-2, eps_p=1.e-3,
+                       eps_w=1.e-6, max_div=2, max_qn=10, max_ls=2, fstress=0.2,
+                       max_bisect=5, adjust=5, mstep=None, rb=0.6, max_r=32.,
+                       utol=0.1, rtol_b=20., min_iter=None, comment='')
 
     def __init__(self, sid, ndt, dt, no, method='ADAPT', kstep=None,
                  max_iter=10, conv='PW', eps_u=1.e-2, eps_p=1.e-3,
@@ -1934,7 +2135,9 @@ class TSTEPNL(BaseCard):
             not listed in all QRGs
         comment : str; default=''
             a comment for the card
+
         """
+        BaseCard.__init__(self)
         if comment:
             self.comment = comment
 
@@ -1965,7 +2168,7 @@ class TSTEPNL(BaseCard):
         self.utol = utol
         self.rtol_b = rtol_b
         self.min_iter = min_iter
-        assert self.ndt >= 3, self
+        #assert self.ndt >= 3, self
         assert self.dt > 0.
 
     def validate(self):
@@ -1985,6 +2188,7 @@ class TSTEPNL(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         ndt = integer(card, 2, 'ndt')
@@ -2045,6 +2249,7 @@ class TSTEPNL(BaseCard):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         (sid, ndt, dt, no, method, kstep, max_iter, conv, eps_u, eps_p, eps_w,
          max_div, max_qn, max_ls, fstress, max_bisect,
@@ -2061,6 +2266,8 @@ class TSTEPNL(BaseCard):
 
         if conv == 1:
             conv = 'W'
+        #elif conv == 2:  # guess based on format
+            #conv = 'P'
         elif conv == 3:
             conv = 'PW'
         elif conv == 4:
@@ -2151,7 +2358,7 @@ class TSTEPNL(BaseCard):
                        max_r, utol, rtol_b, self.min_iter]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -2166,8 +2373,17 @@ class TIC(BaseCard):
     structural transient analysis. Both displacement and velocity
     values may be specified at independent degrees-of-freedom. This
     entry may not be used for heat transfer analysis.
+
     """
     type = 'TIC'
+    _properties = ['node_ids']
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        nodes = [1, 2]
+        components = [1, 2]
+        return TIC(sid, nodes, components, u0=0., v0=0., comment='')
 
     def __init__(self, sid, nodes, components, u0=0., v0=0., comment=''):
         """
@@ -2176,17 +2392,18 @@ class TIC(BaseCard):
         Parameters
         ----------
         sid : int
-            ???
+            Case Control IC id
         nodes : int / List[int]
             the nodes to which apply the initial conditions
         components : int / List[int]
             the DOFs to which apply the initial conditions
         u0 : float / List[float]
-            ???
+            Initial displacement.
         v0 : float / List[float]
-            ???
+            Initial velocity.
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
@@ -2205,6 +2422,7 @@ class TIC(BaseCard):
         self.components = components
         self.u0 = u0
         self.v0 = v0
+        self.nodes_ref = None
 
     def validate(self):
         for nid in self.nodes:
@@ -2221,10 +2439,11 @@ class TIC(BaseCard):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         nid = integer(card, 2, 'G')
-        comp = modal_components(card, 3, 'C')
+        comp = modal_components_or_blank(card, 3, 'C', 0)
         u0 = double_or_blank(card, 4, 'U0', 0.)
         v0 = double_or_blank(card, 5, 'V0', 0.)
         return TIC(sid, nid, comp, u0=u0, v0=v0, comment=comment)
@@ -2240,6 +2459,7 @@ class TIC(BaseCard):
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
+
         """
         sid = data[0]
         nid = data[1]
@@ -2251,7 +2471,12 @@ class TIC(BaseCard):
     @property
     def node_ids(self):
         #return _node_ids(self, self.nodes, )
-        return self.nodes
+        if self.nodes_ref is None:
+            return self.nodes
+        nodes = []
+        for node in self.nodes_ref:
+            nodes.append(node.nid)
+        return nodes
 
     def add(self, tic):
         assert self.sid == tic.sid, 'sid=%s tic.sid=%s' % (self.sid, tic.sid)
@@ -2265,8 +2490,16 @@ class TIC(BaseCard):
         self.u0 += tic.u0
         self.v0 += tic.v0
 
-    def cross_reference(self, model):
-        pass
+    def cross_reference(self, model: BDF) -> None:
+        self.nodes_ref = model.Nodes(self.nodes)
+
+    def safe_cross_reference(self, model, xref_errors):
+        return self.cross_reference(model)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        self.nodes = self.node_ids
+        self.nodes_ref = None
 
     def raw_fields(self):
         list_fields = []
@@ -2277,7 +2510,7 @@ class TIC(BaseCard):
     #def repr_fields(self):
         #return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
         if size == 8:

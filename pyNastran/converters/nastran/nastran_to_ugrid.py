@@ -2,8 +2,8 @@
 defines:
  - ugrid = nastran_to_ugrid(bdf_filename, ugrid_filename_out=None, properties=None,
                             check_shells=True, check_solids=True, log=None)
+
 """
-from six import iteritems
 from pyNastran.bdf.bdf import BDF, read_bdf
 from pyNastran.converters.aflr.ugrid.ugrid_reader import UGRID
 
@@ -21,7 +21,7 @@ def nastran_to_ugrid(bdf_filename, ugrid_filename_out=None, properties=None,
         BDF() : a BDF object
     ugrid_filename_out : str (default=None -> ???)
         the path to the ugrid_filename
-    properties : dict???
+    properties : Dict[pid_old]=pid_new???
         ???
     check_shells : bool (default=True)
         verify that there is at least one shell element
@@ -29,6 +29,7 @@ def nastran_to_ugrid(bdf_filename, ugrid_filename_out=None, properties=None,
         verify that there is at least one solid element
     log : Logger()
         a Python logging object
+
     """
     if isinstance(bdf_filename, str):
         bdf_model = read_bdf(bdf_filename, log=log)
@@ -37,11 +38,11 @@ def nastran_to_ugrid(bdf_filename, ugrid_filename_out=None, properties=None,
         log = bdf_model.log
 
     # pids_to_inlcude = []
-    # for pid, prop in iteritems(model.properties):
+    # for pid, prop in model.properties.items():
         # if prop.type == 'PSHELL':
             # pids_to_include.append(pid)
     if properties is not None:
-        for pid, pid_new in iteritems(properties):
+        for pid, pid_new in properties.items():
             bdf_model.properties[pid].pid = pid_new
 
     card_types = ['CQUAD4', 'CTRIA3', 'CTETRA', 'CHEXA', 'GRID', 'CPENTA', 'CPYRAM']
@@ -64,12 +65,17 @@ def nastran_to_ugrid(bdf_filename, ugrid_filename_out=None, properties=None,
     npenta = len(cpenta)
     nhexa = len(chexa)
     nsolids = ntetra + npyram + npenta + nhexa
+    msg = ''
     if nnodes == 0:
-        raise RuntimeError('nnodes=%i nshells=%i nsolids=%i' % (nnodes, nshells, nsolids))
+        msg += 'nnodes=0, '
     if nshells == 0 and check_shells:
-        raise RuntimeError('nnodes=%i nshells=%i nsolids=%i' % (nnodes, nshells, nsolids))
+        msg += 'nshells=0, '
     if nsolids == 0 and check_solids:
-        raise RuntimeError('nnodes=%i nshells=%i nsolids=%i' % (nnodes, nshells, nsolids))
+        msg += 'nsolids=0'
+    if msg:
+        msg2 = 'ERROR: ' + msg.strip(' ,') + '\nnnodes=%i nshells=%i nsolids=%i' % (
+            nnodes, nshells, nsolids)
+        raise RuntimeError(msg2)
 
     nodes = bdf_model.nodes
     elements = bdf_model.elements
@@ -122,6 +128,7 @@ def main():  # pragma: no cover
     """
     Converts a Nastran model to UGRID model and renumbers the properties.
     Also creates a fun3d.mapbc file.
+
     """
     properties_orig = {
         'bay' : ('viscous', [13, 15, 17, 17]),
@@ -147,7 +154,7 @@ def main():  # pragma: no cover
     pid = 1
     properties = {}
     with open('fun3d.mapbc', 'wb') as mapbc:
-        for name, (bcname, pids) in sorted(iteritems(properties_orig)):
+        for name, (bcname, pids) in sorted(properties_orig.items()):
             for pidi in pids:
                 properties[pidi] = pid
             bc = bcname_to_bckey[bcname]

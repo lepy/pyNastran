@@ -1,12 +1,9 @@
-from __future__ import print_function
-from six.moves import zip
 from numpy import array, arange, zeros, unique, searchsorted, full, nan
 from numpy.linalg import norm  # type: ignore
 
-from pyNastran.utils import integer_types
-from pyNastran.bdf.field_writer_8 import print_card_8
+from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.bdf.field_writer_8 import print_card_8, set_blank_if_default
 from pyNastran.bdf.field_writer_16 import print_card_16
-from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank,
     double_or_blank, integer_double_or_blank, string_or_blank)
@@ -64,7 +61,7 @@ class CBAR(Element):
             self.is_g0 = zeros(ncards, 'bool')
             self.g0 = full(ncards, nan, 'int32')
             self.x = full((ncards, 3), nan, float_fmt)
-            self.offt = full(ncards, nan, '|S3')
+            self.offt = full(ncards, nan, '|U3')
             self.pin_flags = zeros((ncards, 2), 'int32')
             self.wa = zeros((ncards, 3), float_fmt)
             self.wb = zeros((ncards, 3), float_fmt)
@@ -276,5 +273,5 @@ class CBAR(Element):
         obj.wb = self.wb[i]
         return obj
 
-    def get_stiffness_matrix(self, model, node_ids, index0s, fnorm=1.0):
-        return K, dofs, n_ijv
+    #def get_stiffness_matrix(self, model, node_ids, index0s, fnorm=1.0):
+        #return K, dofs, n_ijv

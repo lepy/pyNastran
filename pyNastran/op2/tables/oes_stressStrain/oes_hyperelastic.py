@@ -1,19 +1,15 @@
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 from itertools import cycle
-from six import integer_types
-from six.moves import range
+from typing import List
 import numpy as np
-ints = (int, np.int32)
 
+from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
 
 
 class HyperelasticQuadArray(OES_Object):
     def __init__(self, data_code, is_sort1, isubcase, dt):
-        HyperelasticQuad
-        OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)
+        OES_Object.__init__(self, data_code, isubcase, apply_data_code=True)
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
         #self.ntimes = 0  # or frequency/mode
@@ -44,7 +40,7 @@ class HyperelasticQuadArray(OES_Object):
     #def get_headers(self):
         #raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
 
-    def get_headers(self):
+    def get_headers(self) -> List[str]:
         return ['oxx', 'oyy', 'txy', 'angle', 'majorp', 'minorp']
 
     #def is_bilinear(self):
@@ -59,9 +55,6 @@ class HyperelasticQuadArray(OES_Object):
         """sizes the vectorized attributes of the HyperelasticQuadArray"""
         #print("self.ielement = %s" % self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-        if self.is_built:
-            return
-
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
@@ -80,7 +73,10 @@ class HyperelasticQuadArray(OES_Object):
         #elif self.element_type == 75:  # CTRIA6
             #nnodes_per_element = 4
         #else:
-        raise NotImplementedError('name=%r type=%s' % (self.element_name, self.element_type))
+        if self.element_type == 139: # QUAD4FD
+            nnodes_per_element = 4
+        else:
+            raise NotImplementedError('name=%r type=%s' % (self.element_name, self.element_type))
 
         #print('nnodes_per_element[%s, %s] = %s' % (self.isubcase, self.element_type, nnodes_per_element))
         #self.nnodes = nnodes_per_element
@@ -99,7 +95,7 @@ class HyperelasticQuadArray(OES_Object):
         if isinstance(self.nonlinear_factor, integer_types):
             dtype = 'int32'
         self._times = np.zeros(self.ntimes, dtype=dtype)
-        #self.element_node = np.zeros((self.ntotal, 2), dtype='int32')
+        self.element_node = np.zeros((self.ntotal, 2), dtype='int32')
 
         #self.Type[eid] = Type
         #self.oxx[dt] = {eid: [oxx]}
@@ -114,6 +110,8 @@ class HyperelasticQuadArray(OES_Object):
         self.data = np.zeros((self.ntimes, self.ntotal, 6), dtype='float32')
 
     #def build_dataframe(self):
+        #"""creates a pandas dataframe"""
+        #import pandas as pd
         #headers = self.get_headers()
 
         #nelements = self.element_node.shape[0] // 2
@@ -124,7 +122,7 @@ class HyperelasticQuadArray(OES_Object):
         #fd = np.array(fiber_distance, dtype='unicode')
         #element_node = [self.element_node[:, 0], self.element_node[:, 1], fd]
 
-        #if self.nonlinear_factor is not None:
+        #if self.nonlinear_factor not in (None, np.nan):
             #column_names, column_values = self._build_dataframe_transient_header()
             #self.data_frame = pd.Panel(self.data, items=column_values, major_axis=element_node, minor_axis=headers).to_frame()
             #self.data_frame.columns.names = column_names
@@ -139,7 +137,7 @@ class HyperelasticQuadArray(OES_Object):
         #self.data_frame = self.data_frame.reset_index().replace({'NodeID': {0:'CEN'}}).set_index(['ElementID', 'NodeID', 'Location'])
         #print(self.data_frame)
 
-    def __eq__(self, table):
+    def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.data, table.data):
@@ -173,9 +171,9 @@ class HyperelasticQuadArray(OES_Object):
         #self._add_new_eid_sort1(dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm)
 
 
-    def _add_new_eid_sort1(self, dt, eid, Type, oxx, oyy, txy, angle, majorP, minorP):
-        assert isinstance(eid, ints), eid
-        assert isinstance(node_id, ints), node_id
+    def _add_new_eid_sort1(self, dt, eid, eype, node_id, oxx, oyy, txy, angle, majorP, minorP):
+        assert isinstance(eid, integer_types), eid
+        assert isinstance(node_id, integer_types), node_id
         self._times[self.itime] = dt
         #assert self.itotal == 0, oxx
         self.element_node[self.itotal, :] = [eid, node_id]
@@ -184,24 +182,24 @@ class HyperelasticQuadArray(OES_Object):
         self.ielement += 1
 
     #def _add_new_node(self, dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm):
-        #assert isinstance(node_id, ints), node_id
+        #assert isinstance(node_id, integer_types), node_id
         #self._add_sort1(dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm)
 
     #def _add(self, dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm):
-        #assert isinstance(node_id, ints), node_id
+        #assert isinstance(node_id, integer_types), node_id
         #self._add_sort1(dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm)
 
     #def _add_new_node_sort1(self, dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm):
         #self._add_sort1(dt, eid, node_id, fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm)
 
-    def _add_sort1(self, dt, eid, ID, oxx, oyy, txy, angle, majorP, minorP):
+    def _add_sort1(self, dt, eid, etype, node_id, oxx, oyy, txy, angle, majorP, minorP):
         assert eid is not None, eid
-        assert isinstance(node_id, ints), node_id
+        assert isinstance(node_id, integer_types), node_id
         self.element_node[self.itotal, :] = [eid, node_id]
         self.data[self.itime, self.itotal, :] = [oxx, oyy, txy, angle, majorP, minorP]
         self.itotal += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short=False) -> List[str]:
         if not self.is_built:
             return [
                 '<%s>\n' % self.__class__.__name__,
@@ -211,13 +209,13 @@ class HyperelasticQuadArray(OES_Object):
 
         nelements = self.nelements
         ntimes = self.ntimes
-        nnodes = self.nnodes
+        nnodes = 4
         ntotal = self.ntotal
         nlayers = 2
-        nelements = self.ntotal // self.nnodes // 2
+        nelements = self.ntotal // nnodes
 
         msg = []
-        if self.nonlinear_factor is not None:  # transient
+        if self.nonlinear_factor not in (None, np.nan):  # transient
             msgi = '  type=%s ntimes=%i nelements=%i nnodes_per_element=%i nlayers=%i ntotal=%i\n' % (
                 self.__class__.__name__, ntimes, nelements, nnodes, nlayers, ntotal)
             ntimes_word = 'ntimes'
@@ -290,12 +288,12 @@ class HyperelasticQuadArray(OES_Object):
                 if i == 1:
                     gauss = 'GAUS'  # TODO: update
                     f06_file.write(
-                        '0%8i %8s  %8i  %13E.6  %13E.6  %13E.6  %13E.6  %13E.6  %13E.6\n' % (
-                            eid, gauss, 1, oxxi, oyyi, txyi, angle, major, minor))
+                        '0%8i %8s  %8i  %13s  %13s  %13s  %13s  %13s  %13s\n' % (
+                            eid, gauss, 1, oxxi, oyyi, txyi, anglei, major, minor))
                 else:
                     f06_file.write(
-                        ' %8s %8s  %8i  %13E.6  %13E.6  %13E.6  %13E.6  %13E.6  %13E.6\n' % (
-                            '', '', i, oxxi, oyyi, txyi, angle, major, minor))
+                        ' %8s %8s  %8i  %13s  %13s  %13s  %13s  %13s  %13s\n' % (
+                            '', '', i, oxxi, oyyi, txyi, anglei, major, minor))
 
             f06_file.write(page_stamp % page_num)
             page_num += 1

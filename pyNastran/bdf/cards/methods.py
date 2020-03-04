@@ -9,12 +9,10 @@ All method cards are defined in this file.  This includes:
  * EIGRL
 
 All cards are Method objects.
-"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
-#import sys
-from six.moves import zip, range
 
+"""
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -23,22 +21,37 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     interpret_value)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
 
 class Method(BaseCard):
     """
     Generic class for all methods.
     Part of self.methods
+
     """
     def __init__(self):
         pass
 
 
 class EIGB(Method):
-    """
-    Defines data needed to perform buckling analysis
-    """
+    """Defines data needed to perform buckling analysis"""
     type = 'EIGB'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        method = 'INV'
+        G = 1
+        C = 1
+        norm = 'MAX'
+        L1 = 1.0
+        L2 = 2.0
+        nep = 10
+        ndp = 20
+        ndn = 30
+        return EIGB(sid, method, L1, L2, nep, ndp, ndn, norm, G, C, comment='')
 
     def __init__(self, sid, method, L1, L2, nep, ndp, ndn, norm, G, C, comment=''):
         Method.__init__(self)
@@ -88,6 +101,7 @@ class EIGB(Method):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         method = string_or_blank(card, 2, 'method')
@@ -110,7 +124,7 @@ class EIGB(Method):
         return EIGB(sid, method, L1, L2, nep, ndp, ndn, norm, G, C,
                     comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def raw_fields(self):
@@ -129,7 +143,7 @@ class EIGB(Method):
                        ndn, None, norm, self.G, self.C]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -141,8 +155,8 @@ class EIGC(Method):
     Defines data needed to perform complex eigenvalue analysis
     .. todo: not done
 
-    inverse power
-    =============
+    ``inverse power``
+
     +------+---------+---------+---------+---------+---------+---------+-----+
     |   1  |    2    |    3    |    4    |    5    |    6    |   7     |  8  |
     +======+=========+=========+=========+=========+=========+=========+=====+
@@ -151,23 +165,38 @@ class EIGC(Method):
     |      | ALPHAAj | OMEGAAj | ALPHABj | OMEGABj |   Lj    |   NEj   | NDj |
     +------+---------+---------+---------+---------+---------+---------+-----+
 
-    complex Lanczos
-    ===============
+    ``complex Lanczos``
+
     +------+---------+---------+---------+---------+---------+---------+-----+
     |   1  |    2    |    3    |    4    |    5    |    6    |   7     |  8  |
     +======+=========+=========+=========+=========+=========+=========+=====+
     |      | SHIFTRj | SHIFTIj | MBLKSZj | IBLKSZj | KSTEPSj |   NDj   |     |
     +------+---------+---------+---------+---------+---------+---------+-----+
 
-    iterative Schur-Rayleigh-Ritz
-    =============================
+    ``iterative Schur-Rayleigh-Ritz``
+
     +------+---------+---------+---------+---------+---------+---------+-----+
     |   1  |    2    |    3    |    4    |    5    |    6    |   7     |  8  |
     +======+=========+=========+=========+=========+=========+=========+=====+
     |      | SHIFTR1 | SHIFTI1 |         |         |         | ISRRFLG | ND1 |
     +------+---------+---------+---------+---------+---------+---------+-----+
+
     """
     type = 'EIGC'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        method = 'CLAN'
+        grid = 1
+        component = 1
+        epsilon = 0.1
+        neigenvalues = 10
+        return EIGC(sid, method, grid, component, epsilon, neigenvalues,
+                    norm='MAX', mblkszs=None, iblkszs=None, ksteps=None,
+                    NJIs=None, alphaAjs=None, omegaAjs=None, alphaBjs=None,
+                    omegaBjs=None, LJs=None, NEJs=None, NDJs=None,
+                    shift_r1=None, shift_i1=None, isrr_flag=None, nd1=None, comment='')
 
     def __init__(self, sid, method, grid, component, epsilon, neigenvalues,
                  norm='MAX', # common
@@ -191,9 +220,9 @@ class EIGC(Method):
              INV  : Inverse Power
              IRAM : Implicitly Restarted Arnoldi method
              ISRR : Iterative Schur-Rayleigh-Ritz method
-             CLAN : Complex Lanczos.  For linear perturbation of ANALYSIS= DCEIG
+             CLAN : Complex Lanczos.  For linear perturbation of ANALYSIS=DCEIG
                     with large displacement, CLAN is recommended.
-             HESS : Upper Hessenberg. For linear perturbation of ANALYSIS= DCEIG
+             HESS : Upper Hessenberg. For linear perturbation of ANALYSIS=DCEIG
                     with large displacement, please don't use HESS.
              ARNO: ???
         norm : str; default='MAX'
@@ -205,50 +234,41 @@ class EIGC(Method):
         component : int
             Required if norm='POINT'
         epsilon : float
-
         neigenvalues : int
             Number of Eigenvalues
-
-        CLAN Parameters
-        ---------------
-        mblkszs : ???; default=None
-            ???
-        iblkszs : ???; default=None
-            ???
-        ksteps : ???; default=None
-            ???
-        NJIs : ???; default=None
-            ???
-
-        HESS/INV Parameters
-        -------------------
-        alphaAjs : ???; default=None
-            ???
-        omegaAjs : ???; default=None
-            ???
-        alphaBjs : ???; default=None
-            ???
-        omegaBjs : ???; default=None
-            ???
-        LJs : ???; default=None
-            ???
-        NEJs : ???; default=None
-            ???
-        NDJs : ???; default=None
-            ???
-
-        ISSR Parameters
-        ---------------
-        shift_r1 : ???; default=None
-            ???
-        shift_i1 : ???; default=None
-            ???
-        isrr_flag : ???; default=None
-            ???
-        nd1 : ???; default=None
-            ???
+        mblkszs : List[float]; default=None
+            used by CLAN
+        iblkszs : List[int]; default=None
+            used by CLAN
+        ksteps : List[int]; default=None
+            used by CLAN
+        NJIs : List[int]; default=None
+            used by CLAN
+        alphaAjs : List[float]; default=None
+            used by HESS/INV
+        omegaAjs : List[float]; default=None
+            used by HESS/INV
+        alphaBjs : List[float]; default=None
+            used by HESS/INV
+        omegaBjs : List[float]; default=None
+            used by HESS/INV
+        LJs : List[float]; default=None
+            used by HESS/INV
+        NEJs : List[int]; default=None
+            used by HESS/INV
+        NDJs : List[int]; default=None
+            used by HESS/INV
+        shift_r1 : List[float]; default=None
+            used by ISSR
+        shift_i1 : List[float]; default=None
+            used by ISSR
+        isrr_flag : List[int]; default=None
+            used by ISSR
+        nd1 : List[int]; default=None
+            used by ISSR
         comment : str; default=''
             a comment for the card
+
         """
         Method.__init__(self)
         if comment:
@@ -295,6 +315,7 @@ class EIGC(Method):
             ksteps = []
         if NJIs is None:
             NJIs = []
+
         self.mblkszs = mblkszs
         self.iblkszs = iblkszs
         self.ksteps = ksteps
@@ -324,11 +345,6 @@ class EIGC(Method):
             omegaAjs = []
         self.alphaAjs = alphaAjs
         self.omegaAjs = omegaAjs
-        #self.alphaBjs = []
-        self.omegaBjs = []
-        #self.LJs = []
-        #self.NEJs = []
-        #self.NDJs = []
 
         #----------
         # ISRR
@@ -339,19 +355,27 @@ class EIGC(Method):
 
     def validate(self):
         assert self.norm in ['MAX', 'POINT'], 'norm=%r' % self.norm
-        assert len(self.alphaAjs) == len(self.omegaAjs), 'alphaAjs=%s omegaAj=%s' % (self.alphaAjs, self.omegaAjs)
+        nalpha_a = len(self.alphaAjs)
+        assert nalpha_a == len(self.omegaAjs), 'alphaAjs=%s omegaAj=%s' % (self.alphaAjs, self.omegaAjs)
         if self.method in ['HESS', 'INV']:
-            assert len(self.alphaAjs) == len(self.alphaBjs), 'alphaAjs=%s alphaBj=%s' % (self.alphaAjs, self.alphaBjs)
-            #assert len(self.alphaAjs) == len(self.omegaBjs), 'alphaAjs=%s omegaBjs=%s' % (self.alphaAjs, self.omegaBjs)
-            assert len(self.alphaAjs) == len(self.LJs), 'alphaAjs=%s LJs=%s' % (self.alphaAjs, self.LJs)
-            assert len(self.alphaAjs) == len(self.NEJs), 'alphaAjs=%s NEJs=%s' % (self.alphaAjs, self.NEJs)
-            assert len(self.alphaAjs) == len(self.NDJs), 'alphaAjs=%s NDJs=%s' % (self.alphaAjs, self.NDJs)
+            assert nalpha_a == len(self.alphaBjs), 'alphaAjs=%s alphaBj=%s' % (self.alphaAjs, self.alphaBjs)
+            #assert nalpha_a == len(self.omegaBjs), 'alphaAjs=%s omegaBjs=%s' % (self.alphaAjs, self.omegaBjs)
+            assert nalpha_a == len(self.LJs), 'alphaAjs=%s LJs=%s' % (self.alphaAjs, self.LJs)
+            assert nalpha_a == len(self.NEJs), 'alphaAjs=%s NEJs=%s' % (self.alphaAjs, self.NEJs)
+            assert nalpha_a == len(self.NDJs), 'alphaAjs=%s NDJs=%s' % (self.alphaAjs, self.NDJs)
         elif self.method == 'CLAN':
-            assert len(self.alphaAjs) == len(self.omegaAjs)
-            assert len(self.alphaAjs) == len(self.mblkszs), 'alphaAjs=%s mblkszs=%s' % (self.alphaAjs, self.mblkszs)
-            assert len(self.alphaAjs) == len(self.iblkszs)
-            assert len(self.alphaAjs) == len(self.ksteps)
-            assert len(self.alphaAjs) == len(self.NJIs)
+            if nalpha_a == len(self.alphaBjs):
+                assert nalpha_a == len(self.alphaBjs), f'nalpha_a={nalpha_a} nalpha_b={nalpha_b}'
+                assert nalpha_a == len(self.omegaBjs), f'nalpha_a={nalpha_a} nomega_b={len(self.omegaBjs)}'
+                assert nalpha_a == len(self.LJs)
+                assert nalpha_a == len(self.NEJs)
+                assert nalpha_a == len(self.NDJs)
+            else:
+                assert nalpha_a == len(self.omegaAjs)
+                assert nalpha_a == len(self.mblkszs), 'alphaAjs=%s mblkszs=%s' % (self.alphaAjs, self.mblkszs)
+                assert nalpha_a == len(self.iblkszs)
+                assert nalpha_a == len(self.ksteps)
+                assert nalpha_a == len(self.NJIs)
 
     @classmethod
     def add_card(cls, card, comment=''):
@@ -364,6 +388,7 @@ class EIGC(Method):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         method = string(card, 2, 'method')
@@ -420,15 +445,16 @@ class EIGC(Method):
             #raise RuntimeError(msg)
 
         if method == 'CLAN':
-            alphaAjs, omegaAjs, mblkszs, iblkszs, ksteps, NJIs = cls._load_clan(nrows, card)
+            out = _load_clan(nrows, card)
+            (alphaAjs, omegaAjs, mblkszs, iblkszs, ksteps, NJIs,
+             alphaBjs, omegaBjs, LJs, NEJs, NDJs) = out
         elif method in ['HESS', 'INV', 'DET']:  # HESS, INV
-            alphaAjs, omegaAjs, alphaBjs, omegaBjs, LJs, NEJs, NDJs = cls._load_hess_inv(
+            alphaAjs, omegaAjs, alphaBjs, omegaBjs, LJs, NEJs, NDJs = _load_hess_inv(
                 nrows, method, card)
         elif method == 'ISRR':
-            shift_r1, shift_i1, isrr_flag, nd1 = cls._load_isrr(nrows, card)
+            shift_r1, shift_i1, isrr_flag, nd1 = _load_isrr(nrows, card)
         else:
-            msg = 'invalid EIGC method...method=%r' % method
-            raise RuntimeError(msg)
+            raise RuntimeError(f'invalid EIGC method...method={method!r}')
         #assert card.nfields() < 8, 'card = %s' % card
         return EIGC(sid, method, grid, component, epsilon, neigenvalues,
                     norm, # common
@@ -437,96 +463,7 @@ class EIGC(Method):
                     shift_r1, shift_i1, isrr_flag, nd1, # ISRR
                     comment=comment)
 
-    @staticmethod
-    def _load_isrr(nrows, card):
-        """loads the iterative Schur-Rayleigh-Ritz"""
-        shift_r1 = []
-        shift_i1 = []
-        isrr_flag = []
-        nd1 = []
-        for irow in range(nrows):
-            i = 9 + 8 * irow
-            shift_r1i = double_or_blank(card, i, 'SHIFT_R1', 0.0)
-            shift_i1i = double_or_blank(card, i + 1, 'SHIFT_I1', 0.0)
-            #2
-            #3
-            #4
-            isrr_flagi = integer_or_blank(card, i + 5, 'ISRR_FLAG', 0)
-            nd1i = integer(card, i + 6, 'ND1')
-            shift_r1.append(shift_r1i)
-            shift_i1.append(shift_i1i)
-            isrr_flag.append(isrr_flagi)
-            nd1.append(nd1i)
-        return shift_r1, shift_i1, isrr_flag, nd1
-
-    @staticmethod
-    def _load_clan(nrows, card):
-        """loads complex Lanczos"""
-        alphaAjs = []
-        omegaAjs = []
-        mblkszs = []
-        iblkszs = []
-        ksteps = []
-        NJIs = []
-        for irow in range(nrows):
-            #NDJ_default = None
-            i = 9 + 8 * irow
-            alphaAjs.append(
-                double_or_blank(card, i, 'alpha' + str(irow), 0.0))
-            omegaAjs.append(
-                double_or_blank(card, i + 1, 'omega' + str(irow), 0.0))
-            mblkszs.append(
-                double_or_blank(card, i + 2, 'mblock' + str(irow), 7))
-
-            iblkszs.append(
-                integer_or_blank(card, i + 3, 'iblksz' + str(irow), 2))
-            ksteps.append(
-                integer_or_blank(card, i + 4, 'kstep' + str(irow), 5))
-            NJIs.append(
-                integer(card, i + 6, 'NJI' + str(irow)))
-        return alphaAjs, omegaAjs, mblkszs, iblkszs, ksteps, NJIs
-
-    @staticmethod
-    def _load_hess_inv(nrows, method, card):
-        """loads inverse power"""
-        alpha_omega_default = None
-        LJ_default = None
-        if method == 'INV':
-            alpha_omega_default = 0.0
-            LJ_default = 1.0
-
-        alphaAjs = []
-        alphaBjs = []
-        omegaAjs = []
-        omegaBjs = []
-        #mblkszs = []
-        #iblkszs = []
-        #ksteps = []
-        LJs = []
-        NEJs = []
-        NDJs = []
-        for irow in range(nrows):
-            NEj = integer_or_blank(card, 9 + 7 * irow + 5, 'NE%s' % str(irow), 0)
-            NDJ_default = None
-            if method == 'INV':
-                NDJ_default = 3 * NEj
-
-            i = 9 + 8 * irow
-            alphaAjs.append(
-                double_or_blank(card, i, 'alphaA' + str(irow), alpha_omega_default))
-            omegaAjs.append(
-                double_or_blank(card, i + 1, 'omegaA' + str(irow), alpha_omega_default))
-            alphaBjs.append(
-                double_or_blank(card, i + 2, 'alphaB' + str(irow), alpha_omega_default))
-            omegaBjs.append(
-                double_or_blank(card, i + 3, 'omegaB' + str(irow), alpha_omega_default))
-            LJs.append(
-                double_or_blank(card, i + 4, 'LJ' + str(irow), LJ_default))
-            NEJs.append(NEj)
-            NDJs.append(integer_or_blank(card, i + 6, 'NDJ' + str(irow), NDJ_default))
-        return alphaAjs, omegaAjs, alphaBjs, omegaBjs, LJs, NEJs, NDJs
-
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def raw_method(self):
@@ -542,30 +479,51 @@ class EIGC(Method):
                 list_fields += [alphaA, omegaA, alphaB, omegaB, Lj, NEj, NDj, None]
 
         elif self.method == 'CLAN':
-            assert len(self.alphaAjs) == len(self.omegaAjs)
-            assert len(self.alphaAjs) == len(self.mblkszs)
-            assert len(self.alphaAjs) == len(self.iblkszs)
-            assert len(self.alphaAjs) == len(self.ksteps)
-            assert len(self.alphaAjs) == len(self.NJIs)
-            for (alphaA, omegaA, mblksz, iblksz, kstep, Nj) in zip(
-                    self.alphaAjs, self.omegaAjs, self.mblkszs, self.iblkszs,
-                    self.ksteps, self.NJIs):
-                alphaA = set_blank_if_default(alphaA, 0.0)
-                omegaA = set_blank_if_default(omegaA, 0.0)
-                mblksz = set_blank_if_default(mblksz, 7)
-                iblksz = set_blank_if_default(iblksz, 2)
-                kstep = set_blank_if_default(kstep, 5)
+            nalpha_a = len(self.alphaAjs)
+            assert nalpha_a == len(self.omegaAjs)
+            if nalpha_a == len(self.alphaBjs):  # pragma:no cover
+                assert nalpha_a == len(self.alphaBjs), f'nalpha_a={nalpha_a} nalpha_b={nalpha_b}'
+                assert nalpha_a == len(self.omegaBjs), f'nalpha_a={nalpha_a} nomega_b={len(self.omegaBjs)}'
+                assert nalpha_a == len(self.LJs)
+                assert nalpha_a == len(self.NEJs)
+                assert nalpha_a == len(self.NDJs)
+                for (alphaA, omegaA, alphaB, omegaB, Lj, Nej, Ndj) in zip(
+                        self.alphaAjs, self.omegaAjs,
+                        self.alphaBjs, self.omegaBjs,
+                        self.LJs, self.NEJs, self.NDJs):
+                    #alphaA = set_blank_if_default(alphaA, 0.0)
+                    #omegaA = set_blank_if_default(omegaA, 0.0)
+                    #mblksz = set_blank_if_default(mblksz, 7)
+                    #iblksz = set_blank_if_default(iblksz, 2)
+                    #kstep = set_blank_if_default(kstep, 5)
+                    list_fields += [alphaA, omegaA, alphaB, omegaB, Lj,
+                                    Nej, Ndj, None]
+            else:
+                assert nalpha_a == len(self.mblkszs)
+                assert nalpha_a == len(self.iblkszs)
+                assert nalpha_a == len(self.ksteps)
+                assert nalpha_a == len(self.NJIs)
+                for (alphaA, omegaA, mblksz, iblksz, kstep, Nj) in zip(
+                        self.alphaAjs, self.omegaAjs, self.mblkszs, self.iblkszs,
+                        self.ksteps, self.NJIs):
+                    alphaA = set_blank_if_default(alphaA, 0.0)
+                    omegaA = set_blank_if_default(omegaA, 0.0)
+                    mblksz = set_blank_if_default(mblksz, 7)
+                    iblksz = set_blank_if_default(iblksz, 2)
+                    kstep = set_blank_if_default(kstep, 5)
 
-                list_fields += [alphaA, omegaA, mblksz, iblksz,
-                                kstep, None, Nj, None]
+                    list_fields += [alphaA, omegaA, mblksz, iblksz,
+                                    kstep, None, Nj, None]
         elif self.method == 'ISRR':
+            assert self.shift_r1 is not None, self.get_stats()
+            assert len(self.shift_r1) > 0, self.get_stats()
             for shift_r1i, shift_i1i, isrr_flagi, nd1i in zip(
                 self.shift_r1, self.shift_i1, self.isrr_flag, self.nd1):
                 list_fields += [shift_r1i, shift_i1i, None, None, None, isrr_flagi, nd1i, None]
 
         else:
-            msg = 'invalid EIGC method...method=%r' % self.method
-            raise RuntimeError(msg)
+            raise RuntimeError(f'invalid EIGC method.  method={self.method!r} '
+                               'expected=[HESS, INV, DET, CLAN, ISRR]')
         return list_fields
 
     def repr_method(self):
@@ -587,7 +545,7 @@ class EIGC(Method):
         list_fields += self.repr_method()
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -609,6 +567,17 @@ class EIGP(Method):
 
     """
     type = 'EIGP'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        alpha1 = 1.
+        omega1 = 1.
+        m1 = 1.
+        alpha2 = 1.
+        omega2 = 1.
+        m2 = 1.
+        return EIGP(sid, alpha1, omega1, m1, alpha2, omega2, m2, comment='')
 
     def __init__(self, sid, alpha1, omega1, m1, alpha2, omega2, m2, comment=''):
         Method.__init__(self)
@@ -643,6 +612,7 @@ class EIGP(Method):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
 
@@ -656,7 +626,7 @@ class EIGP(Method):
         assert len(card) == 8, 'len(EIGP card) = %i\ncard=%s' % (len(card), card)
         return EIGP(sid, alpha1, omega1, m1, alpha2, omega2, m2, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def raw_fields(self):
@@ -667,7 +637,7 @@ class EIGP(Method):
     def repr_fields(self):
         return self.raw_fields()
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -683,6 +653,12 @@ class EIGR(Method):
         'LAN', 'AHOU', # recommended
         'INV', 'SINV', 'GIV', 'MGIV', 'HOU', 'MHOU', 'AGIV' # obsolete
     ]
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        return EIGR(sid, method='LAN', f1=None, f2=None, ne=None, nd=None,
+                    norm='MASS', G=None, C=None, comment='')
 
     def __init__(self, sid, method='LAN', f1=None, f2=None, ne=None, nd=None,
                  norm='MASS', G=None, C=None, comment=''):
@@ -720,6 +696,7 @@ class EIGR(Method):
             component for normalization (1-6); only for POINT
         comment : str; default=''
             a comment for the card
+
         """
         Method.__init__(self)
         if comment:
@@ -776,6 +753,7 @@ class EIGR(Method):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         method = string_or_blank(card, 2, 'method', 'LAN')
@@ -809,7 +787,7 @@ class EIGR(Method):
         assert len(card) <= 12, 'len(EIGR card) = %i\ncard=%s' % (len(card), card)
         return EIGR(sid, method, f1, f2, ne, nd, norm, G, C, comment=comment)
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
 
     def raw_fields(self):
@@ -824,7 +802,7 @@ class EIGR(Method):
                        self.nd, None, None, norm, self.G, self.C]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -843,8 +821,15 @@ class EIGRL(Method):
     +-------+-----+----+----+----+--------+--------+--------+------+
     |        option_1 = value_1 option_2 = value_2, etc.           |
     +--------------------------------------------------------------+
+
     """
     type = 'EIGRL'
+
+    @classmethod
+    def _init_from_empty(cls):
+        sid = 1
+        return EIGRL(sid, v1=None, v2=None, nd=None, msglvl=0, maxset=None,
+                     shfscl=None, norm=None, options=None, values=None, comment='')
 
     def __init__(self, sid, v1=None, v2=None, nd=None, msglvl=0, maxset=None, shfscl=None,
                  norm=None, options=None, values=None, comment=''):
@@ -875,6 +860,7 @@ class EIGRL(Method):
             ???
         comment : str; default=''
             a comment for the card
+
         """
         Method.__init__(self)
         if comment:
@@ -920,7 +906,7 @@ class EIGRL(Method):
                                                          self.options, self.values))
         for option, value in zip(self.options, self.values):
             if option == 'NORM':
-                assert value in ['MAX'], 'option=%r value=%r' % (option, value)
+                assert value in ['MAX', ], 'option=%r value=%r' % (option, value)
             elif option == 'ALPH':
                 # float
                 pass
@@ -941,6 +927,7 @@ class EIGRL(Method):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         sid = integer(card, 1, 'sid')
         v1 = double_or_blank(card, 2, 'v1')
@@ -985,7 +972,7 @@ class EIGRL(Method):
                      options, values, comment=comment)
 
 
-    def cross_reference(self, model):
+    def cross_reference(self, model: BDF) -> None:
         pass
         #if self.norm is None:
             #if model.is_modal_solution():
@@ -1008,8 +995,161 @@ class EIGRL(Method):
             list_fields += [option + '=' + str(value)]
         return list_fields
 
-    def write_card(self, size=8, is_double=False):
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
+
+def _load_isrr(nrows, card):
+    """loads the iterative Schur-Rayleigh-Ritz"""
+    shift_r1 = []
+    shift_i1 = []
+    isrr_flag = []
+    nd1 = []
+    for irow in range(nrows):
+        i = 9 + 8 * irow
+        shift_r1i = double_or_blank(card, i, 'SHIFT_R1', 0.0)
+        shift_i1i = double_or_blank(card, i + 1, 'SHIFT_I1', 0.0)
+        #2
+        #3
+        #4
+        isrr_flagi = integer_or_blank(card, i + 5, 'ISRR_FLAG', 0)
+        nd1i = integer(card, i + 6, 'ND1')
+        shift_r1.append(shift_r1i)
+        shift_i1.append(shift_i1i)
+        isrr_flag.append(isrr_flagi)
+        nd1.append(nd1i)
+    return shift_r1, shift_i1, isrr_flag, nd1
+
+def _load_clan(nrows, card):
+    """loads complex Lanczos"""
+    alphaAjs = []
+    omegaAjs = []
+    mblkszs = []
+    iblkszs = []
+    ksteps = []
+    NJIs = []
+
+    alphaBjs = []
+    omegaBjs = []
+    ljs = []
+    nejs = []
+    ndjs = []
+    is_nej = None
+    for irow in range(nrows):
+        #NDJ_default = None
+        i = 9 + 8 * irow
+        alphaAjs.append(
+            double_or_blank(card, i, 'alpha' + str(irow), 0.0))
+        omegaAjs.append(
+            double_or_blank(card, i + 1, 'omega' + str(irow), 0.0))
+
+        nej_blank = integer_or_blank(card, i + 6, 'NEJ_blank')
+        if nej_blank is not None and 0:  # pragma: no cover
+            assert is_nej in [True, None], is_nej
+            is_nej = True
+            # ALPHAAJ OMEGAAJ ALPHABJ OMEGABJ LJ NEJ NDJ
+            assert isinstance(nej_blank, int), nej_blank
+            alpha_bj = double(card, i + 2, 'alpha_bj' + str(irow))
+            omega_bj = double(card, i + 3, 'omega_bj' + str(irow))
+            lj = double_or_blank(card, i + 4, 'LJ' + str(irow), 1.0)
+            nej = integer_or_blank(card, i + 5, 'NEJ' + str(irow))
+            ndj = integer(card, i + 6, 'NDJ' + str(irow))
+            alphaBjs.append(alpha_bj)
+            omegaBjs.append(omega_bj)
+            ljs.append(lj)
+            nejs.append(nej)
+            ndjs.append(ndj)
+        else:
+            assert is_nej in [False, None], is_nej
+            is_nej = False
+            # ALPHAAJ OMEGAAJ MBLKSZ IBLKSZ KSTEPS blank NJi
+            mblock_size = double_or_blank(card, i + 2, 'mblock' + str(irow), 7)
+
+            # iblkszs is an integer, but entered as a float...
+            iblock_size = double_or_blank(card, i + 3, 'iblksz' + str(irow), 2.0)
+            kstep = integer_or_blank(card, i + 4, 'kstep' + str(irow), 5)
+            nji = integer(card, i + 6, 'NJI' + str(irow))
+
+            mblkszs.append(mblock_size)
+            iblkszs.append(iblock_size)
+            ksteps.append(kstep)
+            NJIs.append(nji)
+
+    out = (
+        alphaAjs, omegaAjs, mblkszs, iblkszs, ksteps, NJIs,
+        alphaBjs, omegaBjs, ljs, nejs, ndjs,
+    )
+    return out
+
+def _load_hess_inv(nrows, method, card):
+    """loads inverse power"""
+    alpha_omega_default = None
+    LJ_default = None
+    if method == 'INV':
+        alpha_omega_default = 0.0
+        LJ_default = 1.0
+
+    alphaAjs = []
+    alphaBjs = []
+    omegaAjs = []
+    omegaBjs = []
+    #mblkszs = []
+    #iblkszs = []
+    #ksteps = []
+    LJs = []
+    NEJs = []
+    NDJs = []
+    for irow in range(nrows):
+        NEj = integer_or_blank(card, 9 + 7 * irow + 5, 'NE%s' % str(irow), 0)
+        NDJ_default = None
+        if method == 'INV':
+            NDJ_default = 3 * NEj
+
+        i = 9 + 8 * irow
+        alphaAjs.append(
+            double_or_blank(card, i, 'alphaA' + str(irow), alpha_omega_default))
+        omegaAjs.append(
+            double_or_blank(card, i + 1, 'omegaA' + str(irow), alpha_omega_default))
+        alphaBjs.append(
+            double_or_blank(card, i + 2, 'alphaB' + str(irow), alpha_omega_default))
+        omegaBjs.append(
+            double_or_blank(card, i + 3, 'omegaB' + str(irow), alpha_omega_default))
+        LJs.append(
+            double_or_blank(card, i + 4, 'LJ' + str(irow), LJ_default))
+        NEJs.append(NEj)
+        NDJs.append(integer_or_blank(card, i + 6, 'NDJ' + str(irow), NDJ_default))
+    return alphaAjs, omegaAjs, alphaBjs, omegaBjs, LJs, NEJs, NDJs
+
+
+class MODTRAK(BaseCard):
+    """
+    MODTRAK SID LOWRNG HIGHRNG MTFILTER
+    MODTRAK 100   1      26      0.80
+    """
+    def __init__(self, sid, low_range, high_range, mt_filter, comment=''):
+        BaseCard.__init__(self)
+        self.sid = sid
+        self.low_range = low_range
+        self.high_range = high_range
+        self.mt_filter = mt_filter
+
+    @classmethod
+    def add_card(cls, card, comment=''):
+        sid = integer(card, 1, 'sid')
+        low_range = integer_or_blank(card, 2, 'low_range', 0)
+        high_range = integer(card, 3, 'high_range')
+        mt_filter = double_or_blank(card, 4, 'mt_filter', 0.9)
+        return MODTRAK(sid, low_range, high_range, mt_filter, comment=comment)
+
+    def raw_fields(self) -> List[Any]:
+        list_fields = ['MODTRAK', self.sid, self.low_range, self.high_range, self.mt_filter]
+        return list_fields
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        fields = self.raw_fields()
+        #if size == 8:
+        return self.comment + print_card_8(fields)
+        #return self.comment + print_card_16(fields)

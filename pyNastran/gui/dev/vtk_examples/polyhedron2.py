@@ -29,7 +29,7 @@ def box_faces(n1, n2):
         [0., 0., 1.],
     ]) # 3x3 unit matrix
 
-    points2 = np.dot(points, xform)  # 16x3
+    points2 = points @ xform  # 16x3
     points2[:12, :] += np.array(n1)
     points2[12:, :] += np.array(n2)
 
@@ -123,7 +123,7 @@ def i_faces(n1, n2):
         [0., 0., 1.],
     ]) # 3x3 unit matrix
 
-    points2 = np.dot(points, xform)  # 16x3
+    points2 = points @ xform  # 16x3
     points2[:12, :] += np.array(n1)
     points2[12:, :] += np.array(n2)
     return faces, points2
@@ -198,7 +198,7 @@ def chan_faces(n1, n2):
         [0., 0., 1.],
     ]) # 3x3 unit matrix
 
-    points2 = np.dot(points, xform)  # 16x3
+    points2 = points @ xform  # 16x3
     points2[:8, :] += np.array(n1)
     points2[8:, :] += np.array(n2)
     return faces, points2
@@ -274,7 +274,7 @@ def t_faces(n1, n2):
         [0., 0., 1.],
     ]) # 3x3 unit matrix
 
-    points2 = np.dot(points, xform)  # 16x3
+    points2 = points @ xform  # 16x3
     points2[:8, :] += np.array(n1)
     points2[8:, :] += np.array(n2)
     return faces, points2
@@ -483,12 +483,7 @@ if 1:
     ug = ugrid
     grid_mapper = vtk.vtkDataSetMapper()
     vtk_version = int(VTK_VERSION[0])
-    if vtk_version == 5 :
-        grid_mapper.SetInput(ug)
-    elif vtk_version in [6, 7]:
-        grid_mapper.SetInputData(ug)
-    else:
-        raise NotImplementedError(VTK_VERSION)
+    grid_mapper.SetInputData(ug)
 
 #-------------------------------------
 

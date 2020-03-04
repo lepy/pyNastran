@@ -1,17 +1,16 @@
-from __future__ import print_function
 import numpy as np
 from pyNastran.op2.op2 import read_op2
 from pyNastran.bdf.utils import parse_patran_syntax_dict
 
-def test_nodal_avg_stress():
-    op2 = None
-    subcase = None
-    eids = None
-    get_nodal_avg_stress(op2, subcase, eids)
-    get_centroid_stress(op2, subcase, eids)
+#def test_nodal_avg_stress():
+    #op2 = None
+    #subcase = None
+    #eids = None
+    #get_nodal_avg_stress(op2, subcase, eids)
+    #get_centroid_stress(op2, subcase, eids)
 
 def get_types_for_eids(bdf, eids):
-    elem_prop_types = set([])
+    elem_prop_types = set()
     for eid in eids:
         elem = bdf.elements[eid]
         etype = elem.type
@@ -71,8 +70,8 @@ def get_centroid_max_min_principal_stress(bdf, op2, subcase, eids):
                 if eid in obj.element:
                     i = np.where(obj.element == eid)[0]
                     print('eid=%s i=%s eid=%s nids=%s' % (eid, i, eids[i], nids[i]))
-                    maxi = obj.data[itime, i, imax]
-                    mini = obj.data[itime, i, imin]
+                    maxi = obj.data[itime, i, imaxp]
+                    mini = obj.data[itime, i, iminp]
                     if maxi is None or maxi > maxp:
                         eid_max = eid
                         maxp = maxi
@@ -101,9 +100,9 @@ def get_centroid_max_min_principal_stress(bdf, op2, subcase, eids):
                         assert obj.is_fiber_distance is True, obj.code_information()
                         if eid in obj.element:
                             i = np.where(obj.element == eid)[0]
-                            print('eid=%s i=%s eid=%s nids=%s' % (eid, i, eids[i], nids[i]))
-                            maxi = obj.data[itime, i, imax]
-                            mini = obj.data[itime, i, imin]
+                            #print('eid=%s i=%s eid=%s nids=%s' % (eid, i, eids[i], nids[i]))
+                            maxi = obj.data[itime, i, imaxp]
+                            mini = obj.data[itime, i, iminp]
                             if maxi is None or maxi > maxp:
                                 eid_max = eid
                                 maxp = maxi
@@ -137,15 +136,14 @@ def get_centroid_max_min_principal_stress(bdf, op2, subcase, eids):
 
     return eid_max, maxp, eid_min, minp
 
-def get_nodal_max_min_principal_stress(bdf, op2, subcase, eids):
-    return eid_max, maxp, eid_min, minp
+#def get_nodal_max_min_principal_stress(bdf, op2, subcase, eids):
+    #return eid_max, maxp, eid_min, minp
 
-def get_nodal_avg_min_principal_stress(bdf, op2, subcase, eids):
-    return eid_max, maxp, eid_min, minp
+#def get_nodal_avg_min_principal_stress(bdf, op2, subcase, eids):
+    #return eid_max, maxp, eid_min, minp
 
 
-def main():
-    print('main...')
+def main():  # pragma: no cover
     bdf = None
     #op2_filename = 'model.op2'
     op2 = read_op2(op2_filename=None, combine=True, log=None, debug=True,

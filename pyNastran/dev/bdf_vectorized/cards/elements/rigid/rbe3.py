@@ -1,5 +1,3 @@
-from six import iteritems, string_types
-from six.moves import zip, range
 from itertools import count
 from numpy import array, zeros, unique, searchsorted, asarray, int64, where
 
@@ -15,7 +13,7 @@ from pyNastran.bdf.field_writer_double import print_card_double
 
 
 #RigidElement
-class RBE3(object):
+class RBE3:
     type = 'RBE3'
 
     def __init__(self, model):
@@ -77,7 +75,7 @@ class RBE3(object):
 
         Gmi = {}
         j = 0
-        for ii, gmi in iteritems(self.gmi):
+        for ii, gmi in self.gmi.items():
             #print(gmi)
             if ii in i:
                 Gmi[j] = gmi
@@ -114,7 +112,7 @@ class RBE3(object):
         self.refc[i] = components_or_blank(card, 4, 'refc', 0)
         #iUM = fields.index('UM')
 
-        fields = [field.upper() if isinstance(field, string_types) else field for field in card[5:]]
+        fields = [field.upper() if isinstance(field, str) else field for field in card[5:]]
         iOffset = 5
         iWtMax = len(fields) + iOffset
         try:

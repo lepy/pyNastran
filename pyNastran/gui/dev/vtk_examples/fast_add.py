@@ -54,12 +54,12 @@ def mixed_type_unstructured_grid():
     unstructured grid.
     """
     pts = np.array([
-        [0,0,0], [1,0,0], [0,1,0], [0,0,1], # tetra
-        [2,0,0], [3,0,0], [3,1,0], [2,1,0],
-        [2,0,1], [3,0,1], [3,1,1], [2,1,1], # Hex
+        [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], # tetra
+        [2, 0, 0], [3, 0, 0], [3, 1, 0], [2, 1, 0],
+        [2, 0, 1], [3, 0, 1], [3, 1, 1], [2, 1, 1], # Hex
         ], dtype='float32')
     # shift the points so we can show both.
-    pts[:,1] += 2.0
+    pts[:, 1] += 2.0
     npoints = len(pts)
     forces = pts
 
@@ -135,13 +135,8 @@ def main():
     force_scalar_array = numpy_to_vtk(scalars, deep=1)
 
     grid_mapper = vtk.vtkDataSetMapper()
-    vtk_version = int(VTK_VERSION[0])
-    if vtk_version == 5 :
-        grid_mapper.SetInput(ug)
-    elif vtk_version in [6, 7]:
-        grid_mapper.SetInputData(ug)
-    else:
-        raise NotImplementedError(VTK_VERSION)
+    #vtk_version = int(VTK_VERSION[0])
+    grid_mapper.SetInputData(ug)
 
     if make_glyphs:
         glyphs = vtk.vtkGlyph3D()
@@ -160,12 +155,7 @@ def main():
 
         glyphSource = vtk.vtkArrowSource()
         glyphSource.InvertOn()  # flip this arrow direction
-        if vtk_version == 5 :
-            glyphs.SetInput(ug)
-        elif vtk_version in [6, 7]:
-            glyphs.SetInputData(ug)
-        else:
-            raise NotImplementedError(VTK_VERSION)
+        glyphs.SetInputData(ug)
 
         #glyphs.SetSource(glyphSource.GetOutput())
         glyphs.SetSourceConnection(glyphSource.GetOutputPort())
@@ -186,10 +176,7 @@ def main():
         #glyph.SetInputArrayToProcess(2,0,0,0,'nothing')             # normals
         #glyph.SetInputArrayToProcess(3,0,0,0,'RTData')              # colors
 
-        #if vtk.VTK_VERSION <= 5:
-        #    grid_mapper.SetInput(ug)
-        #else:
-        #    grid_mapper.SetInputData(ug)
+        #grid_mapper.SetInputData(ug)
 
         #if filter_small_forces:
             ## we need the data to be contiguous or VTK will fail

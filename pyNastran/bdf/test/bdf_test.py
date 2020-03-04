@@ -1,10 +1,7 @@
 # coding: utf-8
 """the interface for bdf_test"""
-from __future__ import (nested_scopes, generators, division, absolute_import,
-                        print_function, unicode_literals)
 import os
 import sys
-from six import PY2
 
 import pyNastran
 from pyNastran.bdf.test.test_bdf import run_lots_of_files
@@ -98,14 +95,13 @@ def run(regenerate=True, run_nastran=False, debug=False, sum_load=True, xref=Tru
         os.remove('skipped_cards.out')
 
     print("nfiles = %s" % len(files))
-    cid = None
     check = True
     debug = False
     size = [8]
     is_double = [False]
     post = -1
     failed_files = run_lots_of_files(files, debug=debug, xref=xref,
-                                     check=check, cid=cid,
+                                     check=check,
                                      nastran=nastran,
                                      size=size, is_double=is_double, post=post,
                                      encoding='latin1', crash_cards=crash_cards,
@@ -115,11 +111,7 @@ def run(regenerate=True, run_nastran=False, debug=False, sum_load=True, xref=Tru
     npassed = ntotal - nfailed
     sys.stderr.write('%i/%i passed\n' % (npassed, ntotal))
 
-    if PY2:
-        write = 'wb'
-    else:
-        write = 'w'
-    with open(failed_cases_filename, write) as failed_cases_file:
+    with open(failed_cases_filename, 'w') as failed_cases_file:
         for fname in failed_files:
             failed_cases_file.write('%s\n' % fname)
     sys.exit('finished...')
@@ -130,26 +122,25 @@ def main():
     from docopt import docopt
     ver = str(pyNastran.__version__)
 
-    msg = "Usage:\n"
-    is_release = False
-    msg += "bdf_test [-r] [-n] [-s S...] [-e E] [-L] [-x] [-c C]\n"
-    msg += "  bdf_test -h | --help\n"
-    msg += "  bdf_test -v | --version\n"
-    msg += "\n"
-    msg += "Tests to see if many BDFs will work with pyNastran %s.\n" % ver
-    msg += "\n"
-    #msg += "Positional Arguments:\n"
-    #msg += "  OP2_FILENAME         Path to OP2 file\n"
-    #msg += "\n"
-    msg += "Options:\n"
-    msg += "  -r, --regenerate     Resets the tests\n"
-    msg += '  -c C, --crash_cards  Crash on specific cards (e.g. CGEN,EGRID)\n'
-    msg += "  -n, --run_nastran    Runs Nastran\n"
-    msg += "  -L, --sum_loads      Disables static/dynamic loads sum\n"
-    msg += "  -s S, --size S       Sets the field size\n"
-    msg += '  -e E, --nerrors E    Allow for cross-reference errors (default=100)\n'
-    msg += '  -x, --xref           disables cross-referencing and checks of the BDF.\n'
-    msg += '                       (default=False -> on)\n'
+    #is_release = False
+    msg = (
+        'Usage:  bdf_test [-r] [-n] [-s S...] [-e E] [-L] [-x] [-c C] [--safe]\n'
+        '        bdf_test -h | --help\n'
+        '        bdf_test -v | --version\n'
+        '\n'
+        "Tests to see if many BDFs will work with pyNastran %s.\n"
+        '\n'
+        "Options:\n"
+        '  -r, --regenerate     Resets the tests\n'
+        '  -c C, --crash_cards  Crash on specific cards (e.g. CGEN,EGRID)\n'
+        '  -n, --run_nastran    Runs Nastran\n'
+        '  -L, --sum_loads      Disables static/dynamic loads sum\n'
+        '  -s S, --size S       Sets the field size\n'
+        '  -e E, --nerrors E    Allow for cross-reference errors (default=100)\n'
+        '  -x, --xref           disables cross-referencing and checks of the BDF.\n'
+        '                       (default=False -> on)\n'
+        '  --safe               Use safe cross-reference (default=False)\n' % ver
+    )
     if len(sys.argv) == 0:
         sys.exit(msg)
 

@@ -532,7 +532,7 @@ class WriteMesh(BDFAttributes):
     def _write_contact(self, bdf_file, size=8, is_double=False):
         """Writes the contact cards sorted by ID"""
         is_contact = (self.bcrparas or self.bctadds or self.bctparas
-                      or self.bctsets or self.bsurf or self.bsurfs)
+                      or self.bctsets or self.bgsets or self.bsurf or self.bsurfs)
         if is_contact:
             msg = ['$CONTACT\n']
             for (unused_id, bcrpara) in sorted(self.bcrparas.items()):
@@ -542,6 +542,8 @@ class WriteMesh(BDFAttributes):
             for (unused_id, bctpara) in sorted(self.bctparas.items()):
                 msg.append(bctpara.write_card(size, is_double))
 
+            for (unused_id, bgset) in sorted(self.bgsets.items()):
+                msg.append(bgset.write_card(size, is_double))
             for (unused_id, bctset) in sorted(self.bctsets.items()):
                 msg.append(bctset.write_card(size, is_double))
             for (unused_id, bsurfi) in sorted(self.bsurf.items()):

@@ -154,7 +154,7 @@ from pyNastran.bdf.cards.bdf_tables import (TABLED1, TABLED2, TABLED3, TABLED4,
                                             TABRND1, TABRNDG,
                                             DTABLE)
 from pyNastran.bdf.cards.contact import (
-    BCRPARA, BCTADD, BCTSET, BSURF, BSURFS, BCTPARA, BCONP, BLSEG)
+    BCRPARA, BCTADD, BCTSET, BGSET, BSURF, BSURFS, BCTPARA, BCONP, BLSEG)
 from pyNastran.bdf.case_control_deck import CaseControlDeck
 from pyNastran.bdf.bdf_methods import BDFMethods
 from pyNastran.bdf.bdf_interface.get_card import GetCard
@@ -662,6 +662,7 @@ class BDF_(BDFMethods, GetCard, AddCards, WriteMeshs, UnXrefMesh):
             'BCRPARA',  ## bcrpara
             'BCTADD',  ## bctadds
             'BCTSET',  ## bctsets
+            'BGSET',  ## bgsets
             'BSURF',  ## bsurf
             'BSURFS',  ## bsurfs
             'BCONP', ## bconp
@@ -2369,6 +2370,7 @@ class BDF_(BDFMethods, GetCard, AddCards, WriteMeshs, UnXrefMesh):
             'GRDSET' : self._prepare_grdset,
 
             'BCTSET' : self._prepare_bctset,
+            'BGSET': self._prepare_bgset,
         }
 
         new_reject_method = False
@@ -2479,6 +2481,13 @@ class BDF_(BDFMethods, GetCard, AddCards, WriteMeshs, UnXrefMesh):
         bctset = BCTSET.add_card(card_obj, comment=comment, sol=self.sol)
         self._add_bctset_object(bctset)
         return bctset
+
+    def _prepare_bgset(self, unused_card, card_obj, comment=''):
+        # type: (BDFCard, List[str], str) -> None
+        """adds a BGSET"""
+        bgset = BGSET.add_card(card_obj, comment=comment, sol=self.sol)
+        self._add_bgset_object(bgset)
+        return bgset
 
     def _prepare_grdset(self, unused_card, card_obj, comment=''):
         # type: (BDFCard, List[str], str) -> None

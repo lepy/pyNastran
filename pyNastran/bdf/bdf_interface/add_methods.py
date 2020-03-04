@@ -393,6 +393,12 @@ class AddMethods(BDFAttributes):
         self.bctsets[key] = card
         self._type_to_id_map[card.type].append(key)
 
+    def _add_bgset_object(self, card, allow_overwrites=False):
+        """adds an BGSET object"""
+        key = card.csid
+        self.bgsets[key] = card
+        self._type_to_id_map[card.type].append(key)
+
     def _add_bconp_object(self, bconp):
         """adds an BCONP object"""
         key = bconp.contact_id

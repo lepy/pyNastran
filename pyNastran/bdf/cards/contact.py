@@ -5,6 +5,7 @@
  - BCTPARA
  - BCTADD
  - BCTSET
+ - BGSET
  - BSURF
  - BSURFS
 """
@@ -347,6 +348,97 @@ class BSURFS(BaseCard):
     def write_card(self, size=8, is_double=False):
         card = self.repr_fields()
         return self.comment + print_card_8(card)
+
+
+class BGSET(BaseCard):
+    """
+    3D Contact Set Definition (SOLs 101, 601 and 701 only)
+    Defines contact pairs of a 3D contact set.
+
+    +--------+-------+------+-------+-------+-------+-------+
+    |   1    |   2   | 3    |  4    |   5   |   6   |   7   |
+    +========+=======+======+=======+=======+=======+=======+
+    | BGSET  | CSID  | SID1 | TID1  | FRIC1 | MIND1 | MAXD1 |
+    +--------+-------+------+-------+-------+-------+-------+
+    |        | SID2  | TID2 | FRIC2 | MIND2 | MAXD2 |       |
+    +--------+-------+------+-------+-------+-------+-------+
+    |        | -etc- |      |       |       |       |       |
+    +--------+-------+------+-------+-------+-------+-------+
+    """
+    type = 'BGSET'
+
+    @classmethod
+    def _init_from_empty(cls):
+        csid = 1
+        sids = [1]
+        tids = [1]
+        frictions = [0.01]
+        min_distances = [0.1]
+        max_distances = [1.]
+        return BGSET(csid, sids, tids, frictions, min_distances, max_distances, comment='', sol=101)
+
+    def __init__(self, csid, sids, tids, frictions, min_distances, max_distances,
+                 comment='', sol=101):
+        if comment:
+            self.comment = comment
+        #: CSID Contact set identification number. (Integer > 0)
+        self.csid = csid
+        #: SIDi Source region (contactor) identification number for contact pair i.
+        #: (Integer > 0)
+        self.sids = sids
+
+        #: TIDi Target region identification number for contact pair i. (Integer > 0)
+        self.tids = tids
+
+        #: FRICi Static coefficient of friction for contact pair i. (Real; Default=0.0)
+        self.frictions = frictions
+
+        #: MINDi Minimum search distance for contact. (Real) (Sol 101 only)
+        self.min_distances = min_distances
+
+        #: MAXDi Maximum search distance for contact. (Real) (Sol 101 only)
+        self.max_distances = max_distances
+
+    @classmethod
+    def add_card(cls, card, comment='', sol=101):
+        csid = integer(card, 1, 'csid')
+        sids = []
+        tids = []
+        frictions = []
+        min_distances = []
+        max_distances = []
+
+        nfields = card.nfields
+        i = 2
+        j = 1
+        while i < nfields:
+            sids.append(integer(card, i, 'sid%s' % j))
+            tids.append(integer(card, i + 1, 'tid%s' % j))
+            frictions.append(double_or_blank(card, i + 2, 'fric%s' % j, 0.0))
+            if sol == 101:
+                min_distances.append(double_or_blank(card, i + 3, 'mind%s' % j, 0.0))
+                max_distances.append(double_or_blank(card, i + 4, 'maxd%s' % j, 0.0))
+            else:
+                min_distances.append(None)
+                max_distances.append(None)
+            i += 8
+            j += 1
+        return BGSET(csid, sids, tids, frictions, min_distances,
+                      max_distances, comment=comment,
+                      sol=sol)
+
+    def raw_fields(self):
+        fields = ['BGSET', self.csid]
+        for sid, tid, fric, mind, maxd in zip(self.sids, self.tids, self.frictions,
+                                              self.min_distances, self.max_distances):
+            fields += [sid, tid, fric, mind, maxd, None, None, None]
+        return fields
+
+    def write_card(self, size=8, is_double=False):
+        card = self.repr_fields()
+        if size == 8:
+            return self.comment + print_card_8(card)
+        return self.comment + print_card_16(card)
 
 
 class BCTSET(BaseCard):

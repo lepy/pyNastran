@@ -93,7 +93,7 @@ from pyNastran.dev.bdf_vectorized.cards.bdf_sets import (
 # old cards
 from pyNastran.bdf.cards.params import PARAM
 from pyNastran.bdf.cards.elements.rigid import RBAR, RBAR1, RBE1, RBE2, RBE3, RROD, RSPLINE
-from pyNastran.bdf.cards.contact import BCRPARA, BCTADD, BCTSET, BSURF, BSURFS, BCTPARA
+from pyNastran.bdf.cards.contact import BCRPARA, BCTADD, BCTSET, BGSET, BSURF, BSURFS, BCTPARA
 from pyNastran.bdf.cards.elements.elements import PLOTEL #CFAST, CGAP, CRAC2D, CRAC3D,
 from pyNastran.bdf.cards.methods import EIGB, EIGC, EIGR, EIGP, EIGRL
 from pyNastran.bdf.cards.dmig import DMIG, DMI, DMIJ, DMIK, DMIJI, DMIG_UACCEL
@@ -719,6 +719,8 @@ class BDF(AddCard, CrossReference, WriteMesh, GetMethods):
             bctadd.validate()
         for key, bctpara in sorted(self.bctparas.items()):
             bctpara.validate()
+        for key, bgset in sorted(self.bgsets.items()):
+            bgset.validate()
         for key, bctset in sorted(self.bctsets.items()):
             bctset.validate()
         for key, bsurf in sorted(self.bsurf.items()):
@@ -2006,9 +2008,14 @@ class BDF(AddCard, CrossReference, WriteMesh, GetMethods):
         self.rejects.append([comment] + card_lines)
 
     def _prepare_bctset(self, card, card_obj, comment=''):
-        """adds a GRDSET"""
+        """adds a BCTSET"""
         card = BCTSET.add_card(card_obj, comment=comment, sol=self.sol)
         self._add_bctset_object(card)
+
+    def _prepare_bgset(self, card, card_obj, comment=''):
+        """adds a BGSET"""
+        card = BGSET.add_card(card_obj, comment=comment, sol=self.sol)
+        self._add_bgset_object(card)
 
     def _prepare_grdset(self, card, card_obj, comment=''):
         """adds a GRDSET"""

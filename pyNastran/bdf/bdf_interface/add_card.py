@@ -136,7 +136,7 @@ from pyNastran.bdf.cards.bdf_tables import (TABLED1, TABLED2, TABLED3, TABLED4,
                                             TABRND1, TABRNDG,
                                             DTABLE)
 from pyNastran.bdf.cards.contact import (
-    BCRPARA, BCTADD, BCTSET, BSURF, BSURFS, BCTPARA, BCONP, BLSEG)
+    BCRPARA, BCTADD, BCTSET, BGSET, BSURF, BSURFS, BCTPARA, BCONP, BLSEG)
 from pyNastran.utils.numpy_utils import integer_string_types
 
 CARD_MAP = {
@@ -479,6 +479,7 @@ CARD_MAP = {
     'DEQATN' : DEQATN,
     'DESVAR' : DESVAR,
     'BCTSET' : BCTSET,
+    'BGSET': BGSET,
 
     'TEMP' : TEMP,
     'QBDY1' : QBDY1,
@@ -6918,6 +6919,14 @@ class AddCards(AddMethods):
         bsurf = BSURF(sid, eids, comment=comment)
         self._add_bsurf_object(bsurf)
         return bsurf
+
+    def add_bgset(self, csid, sids, tids, frictions, min_distances,
+                   max_distances, comment='', sol=101):
+        """Creates a BGSET card"""
+        bgset = BGSET(csid, sids, tids, frictions, min_distances,
+                        max_distances, comment=comment, sol=sol)
+        self._add_bgset_object(bgset)
+        return bgset
 
     def add_bctset(self, csid, sids, tids, frictions, min_distances,
                    max_distances, comment='', sol=101):

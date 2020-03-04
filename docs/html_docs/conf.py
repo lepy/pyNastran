@@ -577,6 +577,7 @@ exclusions = (
     '_add_bctadd_object',
     '_add_bctpara_object',
     '_add_bctset_object',
+    '_add_bgset_object',
     '_add_bset_object',
     '_add_bsurf_object',
     '_add_bsurfs_object',
@@ -749,6 +750,7 @@ exclusions = (
     '_uncross_reference_coords',
 
     '_prepare_bctset',
+    '_prepare_bgset',
     '_prepare_cdamp4',
     '_prepare_chexa',
     '_prepare_cmass4',

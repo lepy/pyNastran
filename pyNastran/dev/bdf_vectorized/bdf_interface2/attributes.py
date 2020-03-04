@@ -510,6 +510,7 @@ class BDFAttributes(object):
         self.bctadds = {}  # type: Dict[key, Any]
         self.bctparas = {}  # type: Dict[key, Any]
         self.bctsets = {}  # type: Dict[key, Any]
+        self.bgsets = {}  # type: Dict[key, Any]
         self.bsurf = {}  # type: Dict[key, Any]
         self.bsurfs = {}  # type: Dict[key, Any]
 

@@ -208,6 +208,7 @@ def validate_bdf(model):
     _validate_dict(model, model.bctadds)
     _validate_dict(model, model.bctparas)
     _validate_dict(model, model.bctsets)
+    _validate_dict(model, model.bgsets)
     _validate_dict(model, model.bsurf)
     _validate_dict(model, model.bsurfs)
 

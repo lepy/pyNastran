@@ -48,7 +48,7 @@ dict_int_obj_attrs = [
 
     'aecomps', 'aefacts', 'aelists', 'aeparams',
     'aestats', 'aesurf', 'aesurfs', 'ao_element_flags', 'bconp', 'bcrparas', 'bctadds',
-    'bctparas', 'bctsets', 'blseg', 'bsurf', 'bsurfs', 'cMethods',
+    'bctparas', 'bctsets', 'bgsets', 'blseg', 'bsurf', 'bsurfs', 'cMethods',
     'convection_properties',
     'csuper', 'csupext', 'dareas',
     'dconadds', 'ddvals', 'delays', 'dequations', 'divergs', 'dlinks',

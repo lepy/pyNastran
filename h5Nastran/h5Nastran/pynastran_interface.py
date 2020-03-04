@@ -76,7 +76,7 @@ def get_bdf_cards(bdf):
         'aecomps', 'aefacts', 'aelinks', 'aeparams', 'aesurf', 'aesurfs', 'aestats', 'trims', 'divergs', 'csschds', 'mkaeros', 'monitor_points',
         'aero', 'flfacts', 'flutters', 'gusts',
         'bcs', 'phbdys', 'convection_properties', 'tempds',
-        'bcrparas', 'bctadds', 'bctparas', 'bctsets', 'bsurf', 'bsurfs',
+        'bcrparas', 'bctadds', 'bctparas', 'bctsets', 'bgsets', 'bsurf', 'bsurfs',
         'suport1', 'suport', 'se_suport',
         'spcadds', 'spcs', 'mpcadds', 'mpcs',
         'dareas', 'dphases', 'pbusht', 'pdampt', 'pelast', 'frequencies',

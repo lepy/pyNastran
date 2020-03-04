@@ -591,6 +591,7 @@ class BDFAttributes(object):
         self.bctadds = {}  # type: Dict[int, Any]
         self.bctparas = {}  # type: Dict[int, Any]
         self.bctsets = {}  # type: Dict[int, Any]
+        self.bgsets = {}  # type: Dict[int, Any]
         self.bsurf = {}  # type: Dict[int, Any]
         self.bsurfs = {}  # type: Dict[int, Any]
         self.bconp = {}  # type: Dict[int, Any]
@@ -868,6 +869,7 @@ class BDFAttributes(object):
             'bcrparas' : ['BCRPARA'],
             'bctadds' : ['BCTADD'],
             'bctsets' : ['BCTSET'],
+            'bgsets' : ['BGSET'],
             'bsurf' : ['BSURF'],
             'bsurfs' : ['BSURFS'],
             'bconp' : ['BCONP'],

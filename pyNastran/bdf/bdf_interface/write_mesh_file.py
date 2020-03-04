@@ -346,13 +346,14 @@ class WriteMeshs(WriteMesh):
         # type: (Any, int, bool, Optional[bool]) -> None
         """Writes the contact cards sorted by ID"""
         is_contact = (self.bcrparas or self.bctadds or self.bctparas
-                      or self.bctsets or self.bsurf or self.bsurfs
+                      or self.bctsets or self.bgsets or self.bsurf or self.bsurfs
                       or self.bconp or self.blseg)
         if is_contact:
             write_bdfs_dict(bdf_files, self.bcrparas, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bctadds, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bctparas, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bctsets, size, is_double, is_long_ids)
+            write_bdfs_dict(bdf_files, self.bgsets, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bsurf, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bsurfs, size, is_double, is_long_ids)
 

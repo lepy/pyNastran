@@ -2,13 +2,18 @@
 defines:
  - AnimationCallback
 """
+from __future__ import annotations
 from itertools import cycle
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.gui.main_window import MainWindow
+
 
 class AnimationCallback:
     """
     http://www.vtk.org/Wiki/VTK/Examples/Python/Animation
     """
-    def __init__(self, parent, scales, phases,
+    def __init__(self, parent: MainWindow, scales, phases,
                  icases_fringe, icases_disp, icases_vector,
                  animate_fringe, animate_vector,
                  min_value, max_value):
@@ -24,6 +29,7 @@ class AnimationCallback:
         self.icase_vector0 = -1
         self.ncases = len(icases_disp)
 
+        # print(f'animation callback: phases={phases}')
         self.scales = scales
         self.phases = phases
         self.icases_fringe = icases_fringe
@@ -47,13 +53,13 @@ class AnimationCallback:
         icase_vector = self.icases_vector[i]
         scale = self.scales[i]
         phase = self.phases[i]
-        normalized_frings_scale = scale / self.scale_max
+        normalized_fringe_scale = scale / self.scale_max
         is_valid = self.parent.animation_update(
             self.icase_fringe0, self.icase_disp0, self.icase_vector0,
             icase_fringe, icase_disp, icase_vector,
             scale, phase,
             self.animate_fringe, self.animate_vector,
-            normalized_frings_scale,
+            normalized_fringe_scale,
             self.min_value, self.max_value)
         if not is_valid:
             self.parent.stop_animation()

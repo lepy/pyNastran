@@ -1,10 +1,10 @@
-from typing import List
 import numpy as np
 from numpy import zeros, searchsorted, allclose
 
-from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
-    StressObject, StrainObject, OES_Object, SORT2_TABLE_NAME_MAP)
+    StressObject, StrainObject, OES_Object)
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header #, get_key0
 
 
@@ -14,6 +14,10 @@ class RandomRodArray(OES_Object):
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
         self.nelements = 0  # result specific
+
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
 
     @property
     def is_real(self) -> bool:
@@ -27,14 +31,11 @@ class RandomRodArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
-        raise NotImplementedError()
-
-    def get_headers(self):
         raise NotImplementedError()
 
     def build(self):
@@ -48,25 +49,32 @@ class RandomRodArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
+
+        if self.is_sort1:
+            ntimes = self.ntimes
+            nelements = self.ntotal
+        else:
+            nelements = self.ntimes
+            ntimes = self.ntotal
+            dtype = self._get_analysis_code_dtype()
+
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self.build_data(self.ntimes, self.nelements, dtype)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
 
-    def build_data(self, ntimes, nelements, dtype):
+        self.build_data(ntimes, nelements, dtype, idtype=idtype, fdtype=fdtype)
+
+    def build_data(self, ntimes, nelements, dtype, idtype='int32', fdtype='float32'):
         """actually performs the build step"""
-        self.ntimes = ntimes
-        self.nelements = nelements
-        self._times = zeros(ntimes, dtype=dtype)
-        self.element = zeros(nelements, dtype='int32')
+        #self.ntimes = ntimes
+        #self.nelements = nelements
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(nelements, dtype=idtype)
 
         #[axial, torsion]
-        self.data = zeros((ntimes, nelements, 2), dtype='float32')
+        self.data = np.zeros((ntimes, nelements, 2), dtype=fdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -85,19 +93,17 @@ class RandomRodArray(OES_Object):
             #          torsion  7.900725e-06  0.000000e+00
             #          axial    2.928574e-07  1.193838e-11
             #          torsion  6.618416e-13  0.000000e+00
-            column_names, column_values = self._build_dataframe_transient_header()
-            #if is_v25:
-                #print(f'skipping pandas {self.class_name}')
-                #return
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
-            #column_names, column_values = self._build_dataframe_transient_header()
+            #column_names, column_values = build_dataframe_transient_header(self)
             #self.data_frame = pd.Panel(self.data, items=column_values,
                                        #major_axis=self.element, minor_axis=headers).to_frame()
             #self.data_frame.columns.names = column_names
             #self.data_frame.index.names = ['ElementID', 'Item']
         else:
+            raise RuntimeError('replace pd.Panel')
             data_frame = pd.Panel(self.data, major_axis=self.element, minor_axis=headers).to_frame()
             data_frame.columns.names = ['Static']
             data_frame.index.names = ['ElementID', 'Item']
@@ -119,7 +125,7 @@ class RandomRodArray(OES_Object):
                         t2 = table.data[itime, ieid, :]
                         (axial1, torsion1) = t1
                         (axial2, torsion2) = t2
-                        if not allclose(t1, t2):
+                        if not np.allclose(t1, t2):
                         #if not np.array_equal(t1, t2):
                             msg += '%s\n  (%s, %s)\n  (%s, %s)\n' % (
                                 eid,
@@ -137,6 +143,7 @@ class RandomRodArray(OES_Object):
         return True
 
     def add_sort1(self, dt, eid, axial, torsion):
+        assert self.sort_method == 1, self
         self._times[self.itime] = dt
         #if self.itime == 0:
         #print('itime=%s eid=%s' % (self.itime, eid))
@@ -144,17 +151,28 @@ class RandomRodArray(OES_Object):
         self.data[self.itime, self.ielement, :] = [axial, torsion]
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_sort2(self, dt, eid, axial, torsion):
+        assert self.is_sort2, self
+        itime, ielement = self._get_sort2_itime_ielement_from_itotal()
+        #print(f'dt={dt} eid={eid}')
+        #print(self._times.shape)
+        self._times[itime] = dt
+        self.element[ielement] = eid
+        self.data[itime, ielement, :] = [axial, torsion]
+        self.ielement += 1
+        #print(self._times, type(self._times[0]), self.element)
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
-        assert self.ntimes == ntimes, 'ntimes=%s expected=%s' % (self.ntimes, ntimes)
-        assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
+        #assert self.ntimes == ntimes, 'ntimes=%s expected=%s' % (self.ntimes, ntimes)
+        #assert self.nelements == nelements, 'nelements=%s expected=%s' % (self.nelements, nelements)
 
         msg = []
         if self.nonlinear_factor not in (None, np.nan):  # transient
@@ -169,9 +187,9 @@ class RandomRodArray(OES_Object):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -189,17 +207,17 @@ class RandomRodArray(OES_Object):
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element)  #[0]
+        itot = np.searchsorted(eids, self.element)  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        #ind = ravel([searchsorted(self.element_node[:, 0] == eid) for eid in eids])
-        ind = searchsorted(eids, self.element)
+        #ind = np.ravel([np.searchsorted(self.element_node[:, 0] == eid) for eid in eids])
+        ind = np.searchsorted(eids, self.element)
         #ind = ind.reshape(ind.size)
         #ind.sort()
         return ind
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s', page_num=1, is_mag_phase=False, is_sort1=True):
+    def write_f06(self, f06_file, header=None, page_stamp: str='PAGE %s', page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         (elem_name, msg_temp) = self.get_f06_header(is_mag_phase)
@@ -248,7 +266,8 @@ class RandomBushStressArray(RandomRodArray, StressObject):
         RandomRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial', 'SMa', 'torsion', 'SMt']
         return headers
 
@@ -272,7 +291,8 @@ class RandomRodStressArray(RandomRodArray, StressObject):
         RandomRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial', 'torsion']
         return headers
 
@@ -292,7 +312,8 @@ class RandomRodStrainArray(RandomRodArray, StrainObject):
         RandomRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial', 'torsion']
         return headers
 

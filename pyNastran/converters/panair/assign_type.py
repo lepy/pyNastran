@@ -9,18 +9,16 @@ defines methods for writing panair values:
  - fortran_value(value)
 
 """
-from typing import List, Union, Optional
+from typing import Optional
 
-def double(value, name):
-    # type: (str, str) -> float
+def double(value: str, name: str) -> float:
     """casts to an float value"""
     if isinstance(value, float):
         return value
     fvalue = float(value)
     return fvalue
 
-def integer(value, name):
-    # type: (str, str) -> int
+def integer(value: str, name: str) -> int:
     """casts to an integer value"""
     if isinstance(value, int):
         return value
@@ -30,12 +28,11 @@ def integer(value, name):
         raise RuntimeError('%s=%r is not an integer' % (name, fvalue))
     return int(fvalue)
 
-def fortran_value(value):
-    # type: (float) -> str
+def fortran_value(value: float) -> str:
     return "%8.4E" % value
 
-def integer_or_blank(value, name, default=None):
-    # type: (str, str, Optional[Union[float, int]]) -> Optional[Union[float, int]]
+def integer_or_blank(value: str, name: str,
+                     default: Optional[float | int]=None) -> Optional[float | int]:
     value = value.strip()
     if not value:
         return default
@@ -45,8 +42,7 @@ def integer_or_blank(value, name, default=None):
         raise RuntimeError('%s=%r is not an integer' % (name, fvalue))
     return int(fvalue)
 
-def double_or_blank(value, name, default=None):
-    # type: (str, str, Optional[float]) -> Optional[float]
+def double_or_blank(value: str, name: str, default: Optional[float]=None) -> Optional[float]:
     value = value.strip()
     if not value:
         return default

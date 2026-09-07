@@ -12,11 +12,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
+from pyNastran.bdf.bdf_interface.internal_get import table_id
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 class SpringProperty(Property):
@@ -35,14 +37,14 @@ class PELAS(SpringProperty):
     """
     type = 'PELAS'
     _field_map = {
-        1: 'pid', 2:'k', 3:'ge', 4:'s',
+        1: 'pid', 2: 'k', 3: 'ge', 4: 's',
     }
     pname_fid_map = {
-        #2 : 'k', 'K' : 'k',
-        #3 : 'ge', 'GE' : 'ge',
-        #4 : 's', 'S' : 's',
-        'K1' : 'k',
-        'GE1' : 'ge',
+        # 2 : 'k', 'K' : 'k',
+        # 3 : 'ge', 'GE' : 'ge',
+        # 4 : 's', 'S' : 's',
+        'K1': 'k',
+        'GE1': 'ge',
     }
 
     @classmethod
@@ -51,7 +53,7 @@ class PELAS(SpringProperty):
         k = 1.
         return PELAS(pid, k, ge=0., s=0., comment='')
 
-    def __init__(self, pid, k, ge=0., s=0., comment=''):
+    def __init__(self, pid: int, k: float, ge: float=0., s: float=0., comment: str=''):
         """
         Creates a PELAS card
 
@@ -88,7 +90,7 @@ class PELAS(SpringProperty):
         self.pelast_ref = None
 
     @classmethod
-    def add_card(cls, card, icard=0, comment=''):
+    def add_card(cls, card: BDFCard, icard: int=0, comment: str=''):
         """
         Adds a PELAS card from ``BDF.add_card(...)``
 
@@ -110,13 +112,13 @@ class PELAS(SpringProperty):
         return PELAS(pid, k, ge, s, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data: list, comment: str=''):
         """
         Adds a PELAS card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -131,6 +133,9 @@ class PELAS(SpringProperty):
         #if model.sol in [108, 129]:
         if self.pid in model.pelast:
             self.pelast_ref = model.pelast[self.pid]
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        return self.cross_reference(model)
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -170,10 +175,10 @@ class PELAST(SpringProperty):
     """
     type = 'PELAST'
     _field_map = {
-        1: 'pid', 2:'tkid', 3:'tgeid', 4:'tknid',
+        1: 'pid', 2: 'tkid', 3: 'tgeid', 4: 'tknid',
     }
     pname_fid_map = {
-    'TKID' : 'tknid',
+        'TKID': 'tknid',
     }
 
     @classmethod
@@ -181,7 +186,8 @@ class PELAST(SpringProperty):
         pid = 1
         return PELAST(pid, tkid=0, tgeid=0, tknid=0, comment='')
 
-    def __init__(self, pid, tkid=0, tgeid=0, tknid=0, comment=''):
+    def __init__(self, pid, tkid: int=0, tgeid: int=0, tknid: int=0,
+                 comment: str=''):
         """
         Creates a PELAST card
 
@@ -189,11 +195,11 @@ class PELAST(SpringProperty):
         ----------
         pid : int
             property id
-        tkid : float
+        tkid : int; default=0
             TABLEDx that defines k vs. frequency
         tgeid : int; default=0
             TABLEDx that defines ge vs. frequency
-        s : float; default=0.
+        tknid : int; default=0
             TABLEDx that defines force vs. displacement
         comment : str; default=''
             a comment for the card
@@ -221,7 +227,7 @@ class PELAST(SpringProperty):
         self.tknid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a PELAST card from ``BDF.add_card(...)``
 
@@ -233,20 +239,20 @@ class PELAST(SpringProperty):
             a comment for the card
         """
         pid = integer(card, 1, 'pid')
-        tkid = integer_or_blank(card, 2, 'tkid', 0)
-        tgeid = integer_or_blank(card, 3, 'tgeid', 0)
-        tknid = integer_or_blank(card, 4, 'tknid', 0)
-        assert len(card) <= 5, 'len(PELAST card) = %i\ncard=%s' % (len(card), card)
+        tkid = integer_or_blank(card, 2, 'tkid', default=0)
+        tgeid = integer_or_blank(card, 3, 'tgeid', default=0)
+        tknid = integer_or_blank(card, 4, 'tknid', default=0)
+        assert len(card) <= 5, f'len(PELAST card) = {len(card):d}\ncard={card}'
         return PELAST(pid, tkid, tgeid, tknid, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data: list[int], comment: str=''):
         """
         Adds a PELAST card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[int]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -281,36 +287,30 @@ class PELAST(SpringProperty):
         self.tgeid_ref = None
         self.tknid_ref = None
 
-    def Pid(self):
+    def Pid(self) -> int:
         if self.pid_ref is None:
             return self.pid
         return self.pid_ref.pid
 
-    def Tkid(self):
+    def Tkid(self) -> int:
         """
         Returns the table ID for force per unit displacement vs frequency
         (k=F/d vs freq)
         """
-        if self.tkid_ref is None:
-            return self.tkid
-        return self.tkid_ref.tid
+        return table_id(self.tkid_ref, self.tkid)
 
-    def Tknid(self):
+    def Tknid(self) -> int:
         """
         Returns the table ID for nondimensional force vs. displacement
         """
-        if self.tknid_ref is None:
-            return self.tknid
-        return self.tknid_ref.tid
+        return table_id(self.tknid_ref, self.tknid)
 
-    def Tgeid(self):
+    def Tgeid(self) -> int:
         """
         Returns the table ID for nondimensional structural damping
         coefficient vs. frequency (c/c0 vs freq)
         """
-        if self.tgeid_ref is None:
-            return self.tgeid
-        return self.tgeid_ref.tid
+        return table_id(self.tgeid_ref, self.tgeid)
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         return ['PELAST', self.pid, self.Tkid(), self.Tgeid(), self.Tknid()]

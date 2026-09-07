@@ -10,14 +10,16 @@ Defines general coordinate system related functions including:
  - rtp_to_rtz_array(xyz)
 
  - coords = cylindrical_rotation_matrix(thetar, dtype='float64')
+ - coords = spherical_rotation_matrix(thetar, phir, dtype='float64')
 
 """
 # pylint: disable=C0103
 import numpy as np
 
+
 # xyz to xxx transforms
-def xyz_to_rtz_array(xyz):
-    """
+def xyz_to_rtz_array(xyz: np.ndarray) -> np.ndarray:
+    r"""
     xyz to R-theta-z transform::
 
       y       R
@@ -43,7 +45,8 @@ def xyz_to_rtz_array(xyz):
     R = np.sqrt(x * x + y * y)
     return np.array([R, theta, xyz[:, 2]], dtype=xyz.dtype).T
 
-def xyz_to_rtp_array(xyz):
+
+def xyz_to_rtp_array(xyz: np.ndarray) -> np.ndarray:
     """rho-theta-phi to xyz transform"""
     xyz = np.atleast_2d(xyz)
     assert len(xyz.shape) == 2, xyz.shape
@@ -60,9 +63,10 @@ def xyz_to_rtp_array(xyz):
     theta[ir] = np.degrees(np.arccos(z[ir] / rho[ir]))
     return np.array([rho, theta, phi], dtype=xyz.dtype).T
 
+
 #---------------------------------------------------------------
 # xxx to xyz transforms
-def rtz_to_xyz_array(rtz):
+def rtz_to_xyz_array(rtz: np.ndarray) -> np.ndarray:
     r"""
     R-theta-z to xyz transform::
 
@@ -90,7 +94,8 @@ def rtz_to_xyz_array(rtz):
     xyz = np.array([x, y, rtz[:, 2]], dtype=rtz.dtype).T
     return xyz
 
-def rtp_to_xyz_array(rtp):
+
+def rtp_to_xyz_array(rtp: np.ndarray) -> np.ndarray:
     """
     rho-theta-phi to xyz transform
 
@@ -110,9 +115,10 @@ def rtp_to_xyz_array(rtp):
     z = R * np.cos(theta)
     return np.array([x, y, z], dtype=rtp.dtype).T
 
+
 #---------------------------------------------------------------
 # rtz/rtp and rtp/rtz transforms
-def rtz_to_rtp_array(rtz):
+def rtz_to_rtp_array(rtz: np.ndarray) -> np.ndarray:
     """R-theta-z to rho-theta-phi transform"""
     rtz = np.atleast_2d(rtz)
     r = rtz[:, 0]
@@ -129,14 +135,15 @@ def rtz_to_rtp_array(rtz):
     # If we let x and y go to 0, we're left with z/z=1 and
     # phi = acos(1) = 0.  The other alternative is to let
     # z -> 0 and x/y be non-zero, but that leaves us with
-    # a 90 degree angle, which feels wrong.
+    # a 90-degree angle, which feels wrong.
     #
     phi = np.full(thetad.shape, 0., dtype=thetad.dtype)
 
     phi[irho0] = np.degrees(np.arccos(z[irho0] / rho[irho0]))
     return np.array([rho, thetad, phi], dtype=dtype).T
 
-def rtp_to_rtz_array(rtp):
+
+def rtp_to_rtz_array(rtp: np.ndarray) -> np.ndarray:
     """rho-theta-phi to R-theta-z transform"""
     rtp = np.atleast_2d(rtp)
     rho = rtp[:, 0]
@@ -147,7 +154,8 @@ def rtp_to_rtz_array(rtp):
     z = rho * np.cos(phi)
     return np.array([r, thetad, z], dtype=rtp.dtype).T
 
-def cylindrical_rotation_matrix(thetar, dtype='float64'):
+
+def cylindrical_rotation_matrix(thetar: np.ndarray, dtype: str='float64') -> np.ndarray:
     """
     Creates a series transformation matrices to rotate by some angle theta
 
@@ -187,4 +195,56 @@ def cylindrical_rotation_matrix(thetar, dtype='float64'):
     #for rot in rotation:
         #print(np.squeeze(rot))
         #print('---------')
+    return rotation
+
+
+def spherical_rotation_matrix(thetar: np.ndarray, phir: np.ndarray,
+                              dtype: str='float64') -> np.ndarray:
+    """Creates rotation matrices from spherical (r, theta, phi) to rectangular.
+
+    For a node at spherical position (r, theta, phi), this builds the matrix
+    that transforms a vector in spherical basis (e_r, e_theta, e_phi) to
+    the local rectangular basis (e_x, e_y, e_z).
+
+    Nastran convention: theta is the polar angle from +z, phi is the
+    azimuthal angle from +x in the x-y plane.
+
+    Parameters
+    ----------
+    thetar : (n,) float ndarray
+        polar angle theta in radians (from +z axis)
+    phir : (n,) float ndarray
+        azimuthal angle phi in radians (from +x axis in x-y plane)
+    dtype : str
+        output dtype
+
+    Returns
+    -------
+    rotation : (n, 3, 3) float ndarray
+        rotation[i] @ [v_r, v_theta, v_phi] = [v_x, v_y, v_z]
+
+    """
+    theta = np.asarray(thetar, dtype=dtype)
+    phi = np.asarray(phir, dtype=dtype)
+    n = len(theta)
+
+    sin_t = np.sin(theta)
+    cos_t = np.cos(theta)
+    sin_p = np.sin(phi)
+    cos_p = np.cos(phi)
+
+    # columns are e_r, e_theta, e_phi expressed in rectangular
+    rotation = np.zeros((n, 3, 3), dtype=dtype)
+    # e_r
+    rotation[:, 0, 0] = sin_t * cos_p
+    rotation[:, 1, 0] = sin_t * sin_p
+    rotation[:, 2, 0] = cos_t
+    # e_theta
+    rotation[:, 0, 1] = cos_t * cos_p
+    rotation[:, 1, 1] = cos_t * sin_p
+    rotation[:, 2, 1] = -sin_t
+    # e_phi
+    rotation[:, 0, 2] = -sin_p
+    rotation[:, 1, 2] = cos_p
+    rotation[:, 2, 2] = 0.
     return rotation

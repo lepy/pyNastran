@@ -1362,7 +1362,7 @@ def _get_coordinfo_byid(refid, uset):
         if np.size(pos) > 0:
             i = pv[pos]
             return uset[i:i+5, 3:]
-    except:
+    except Exception:
         raise ValueError('reference coordinate id {} not '
                          'found in `uset`.'.format(refid))
 
@@ -1563,7 +1563,7 @@ def get_coords(uset, gid, csys, coordref=None):
         A 6-column matrix as output by :func:`op2.rdn2cop2`.
     gid : integer or 3 element vector
         If integer, it is a grid id in `uset`.  Otherwise, it is a 3
-        element vector:  [x, y, z] specifiy location in basic.
+        element vector:  [x, y, z] specify location in basic.
     csys : integer or 4x3 matrix
         Specifies coordinate system to get coordinates of `gid` in.
         If integer, it is the id of the coordinate system which must
@@ -1796,7 +1796,7 @@ def get_loc_a_basic(coordinfo, a):
 
     `coordinfo` is 5x3 and `a` is [x, y, z]
     """
-    # tranformation from global to basic:
+    # transformation from global to basic:
     Tg = coordinfo[2:]
     coordloc = coordinfo[1]
     if coordinfo[0, 1] == 1:
@@ -2147,8 +2147,8 @@ def form_rbe3(uset, GRID_dep, DOF_dep, Ind_List, UM_List=None):
     wtdof = np.array([])
     usetdof = uset[:, :2].astype(np.int64)
     for j in range(0, len(Ind_List), 2):
-        DOF_ind = np.atleast_1d(Ind_List[j])
-        GRIDS_ind = np.atleast_1d(Ind_List[j+1])
+        DOF_ind = np.atleast_1d(Ind_list[j])
+        GRIDS_ind = np.atleast_1d(Ind_list[j+1])
         if len(DOF_ind) == 2:
             wtcur = DOF_ind[1]
             DOF_ind = DOF_ind[0]
@@ -2172,8 +2172,8 @@ def form_rbe3(uset, GRID_dep, DOF_dep, Ind_List, UM_List=None):
     if UM_List is not None:
         mdof = np.array([], dtype=np.int64).reshape(0, 2)
         for j in range(0, len(UM_List), 2):
-            GRID_MSET = np.atleast_1d(UM_List[j])
-            DOF_MSET = np.atleast_1d(UM_List[j+1])
+            GRID_MSET = np.atleast_1d(UM_list[j])
+            DOF_MSET = np.atleast_1d(UM_list[j+1])
             mdofcur = expand_trim(DOF_MSET)
             grids = np.dot(np.ones((len(mdofcur), 1), dtype=np.int64),
                            GRID_MSET.reshape(1, -1))
@@ -2206,7 +2206,7 @@ def form_rbe3(uset, GRID_dep, DOF_dep, Ind_List, UM_List=None):
     # need to scale rotation weights by characteristic length:
     rot = idof[:, 1] > 3
     if np.any(rot):
-        # get characterstic length of rbe3:
+        # get characteristic length of rbe3:
         deploc = uset[pv[0], 3:]
         n = np.size(uset, 0) // 6
         delta = uset[::6, 3:] - np.dot(np.ones((n, 1)),
@@ -2874,6 +2874,6 @@ def AddULVS(nas, *ses):
             nas['ulvs'][se] = formulvs(nas, se)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     import doctest
     doctest.testmod()

@@ -1,5 +1,6 @@
 import vtk
 from vtk.qt4.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from pyNastran.gui.vtk_rendering_core import vtkRenderer, vtkRenderWindow, vtkRenderWindowInteractor, vtkActor
 
 class myInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
     #def __init__(self, parent=None
@@ -20,12 +21,12 @@ class InteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
     def InteractorStyle(self):
         self.selected_mapper = vtk.vtkDataSetMapper()
-        self.selected_actor = vtk.vtkActor()
+        self.selected_actor = vtkActor()
         self.selected_actor.SetMapper(selected_mapper)
 
     def OnLeftButtonUp(self):
         # Forward events
-        vtkInteractorStyleRubberBandPick.OnLeftButtonUp()
+        vtk.vtkInteractorStyleRubberBandPick.OnLeftButtonUp()
 
         frustum = vtk.vtkAreaPicker(self.GetInteractor().GetPicker()).GetFrustum()
 
@@ -56,8 +57,9 @@ class InteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
         for i in range(ids.GetNumberOfTuples()):
             print("Id %s : %s" % (i, ids.GetValue(i)))
 
-        self.SelectedActor.GetProperty().SetColor(1.0, 0.0, 0.0) #(R,G,B)
-        self.SelectedActor.GetProperty().SetPointSize(3)
+        prop = self.SelectedActor.GetProperty()
+        prop.SetColor(1.0, 0.0, 0.0) #(R,G,B)
+        prop.SetPointSize(3)
 
         self.CurrentRenderer.AddActor(selected_actor)
         self.GetInteractor().GetRenderWindow().Render()
@@ -100,12 +102,12 @@ if 1:
         mapper.SetInputData(poly_input)
     mapper.ScalarVisibilityOff()
 
-    actor = vtk.vtkActor()
+    actor = vtkActor()
     actor.SetMapper(mapper)
 
     # Visualize
-    renderer = vtk.vtkRenderer()
-    render_window = vtk.vtkRenderWindow()
+    renderer = vtkRenderer()
+    render_window = vtkRenderWindow()
     render_window.AddRenderer(renderer)
 
     area_picker = vtk.vtkAreaPicker()
@@ -118,7 +120,7 @@ if 1:
 
     render_window.Render()
 
-    style = vtk.vtkRenderWindowInteractor()
+    style = vtkRenderWindowInteractor()
     #style = myInteractorStyle()
     #style = InteractorStyle()
     #style = QVTKRenderWindowInteractor()

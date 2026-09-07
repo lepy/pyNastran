@@ -5,29 +5,48 @@
 # standard library
 import sys
 import os.path
-import imp
+import importlib
 #import traceback
-#import webbrowser
+import webbrowser
 #webbrowser.open("http://xkcd.com/353/")
-
-
-from pyNastran.gui.qt_version import qt_version
-from qtpy import QtCore
-from qtpy.QtWidgets import QMessageBox, qApp
 import urllib
+from typing import Optional
+
+from pyNastran import DEV
+from pyNastran.gui.qt_version import qt_version
+from pyNastran.gui.utils.qt.qsettings import QSettingsLike2
+from qtpy import QtCore
+from qtpy.QtWidgets import QApplication
+
+#from qtpy.QtCore import QEvent
+
+#QtCore.Qt.WindowMinimized
+#QtCore.Qt.WindowMaximized
+#QtCore.Qt.WindowNoState
 
 # 3rd party
-import vtk  # if this crashes, make sure you ran setup.py
+import vtkmodules  # if this crashes, make sure you ran setup.py
+
+# hack to not break the gui
+#import vtk
+from vtkmodules import vtkRenderingOpenGL2
 
 # pyNastran
 import pyNastran
+from pyNastran import is_pynastrangui_exe
 from pyNastran.gui import SCRIPT_PATH, ICON_PATH
+from pyNastran.gui.utils.qt.qsettings import QSettingsLike2
 from pyNastran.gui.utils.version import check_for_newer_version
 from pyNastran.gui.plugins import plugin_name_to_path
 from pyNastran.gui.formats import NastranIO
 from pyNastran.gui.gui_common import GuiCommon
 from pyNastran.gui.menus.download import DownloadWindow
-
+from pyNastran.gui.menus.about.about import AboutWindow
+#try:
+    #import pyNastran2
+    #ISPY2 = True
+#except ModuleNotFoundError:
+ISPY2 = False
 # tcolorpick.png and tabout.png trefresh.png icons on LGPL license, see
 # http://openiconlibrary.sourceforge.net/gallery2/?./Icons/actions/color-picker-grey.png
 # http://openiconlibrary.sourceforge.net/gallery2/?./Icons/actions/help-hint.png
@@ -36,7 +55,7 @@ from pyNastran.gui.menus.download import DownloadWindow
 try:
     import qdarkstyle
     IS_DARK = True
-except ImportError:
+except ModuleNotFoundError:
     IS_DARK = False
 
 def get_stylesheet():
@@ -48,6 +67,7 @@ def get_stylesheet():
         #}
         #stylesheet = mapper[qt_version]()
     return stylesheet
+
 
 class MainWindow(GuiCommon, NastranIO):
     """
@@ -97,15 +117,18 @@ class MainWindow(GuiCommon, NastranIO):
         fmt_order = [
             # no results unless specified
             'nastran',  # results
+        ]
+        if DEV:
+            # fmt_order += ['h5nastran', 'nastran2']
+            fmt_order.append('nastran3')
+
+        fmt_order += [
             'abaqus',
-            'avus',
             'bedge', 'surf', 'ugrid', 'ugrid3d', # aflr
             'cart3d',  # results
-            'degen_geom',
+            'fld', 'fluent',
             'fast',
             'lawgs',
-            'obj',
-            'openfoam_hex', 'openfoam_shell', 'openfoam_faces', # openfoam - results
             'panair',  # results
             'shabp',  # results
             'stl',
@@ -114,8 +137,11 @@ class MainWindow(GuiCommon, NastranIO):
             'tetgen',
             'usm3d',  # results
             'avl', # no results
-            'vrml', # no results
+            'vtk',
         ]
+        if DEV:
+            # no results
+            fmt_order.extend(['avus', 'degen_geom', 'obj', 'vrml'])
         #GuiCommon2.__init__(self, fmt_order, html_logging, inputs, parent)
         kwds['inputs'] = inputs
         kwds['fmt_order'] = fmt_order
@@ -124,7 +150,7 @@ class MainWindow(GuiCommon, NastranIO):
         #fmt_order=fmt_order, inputs=inputs,
         #html_logging=html_logging,
 
-        if qt_version in ['pyqt5', 'pyside2']:
+        if qt_version in {'pyqt5', 'pyqt6', 'pyside2', 'pyside6'}:
             NastranIO.__init__(self)
         else:  # pragma: no cover
             raise NotImplementedError('qt_version=%r is not supported' % qt_version)
@@ -142,11 +168,110 @@ class MainWindow(GuiCommon, NastranIO):
         self.start_logging()
         self._load_plugins()
         self.setup_gui(is_gui)
+        self.setup_controls()
         self.setup_post(inputs)
+
+        if 0:  # pragma: no cover
+            print(f'is_pynastrangui_exe = {is_pynastrangui_exe}')
+            if is_pynastrangui_exe:
+                print(f'os.environ = {os.environ}')
+                print('_PYIBoot_SPLASH', '_PYIBoot_SPLASH' in os.environ)
+                if '_PYIBoot_SPLASH' in os.environ:
+                    is_pysplash = importlib.util.find_spec("pyi_splash")
+                    print(f'is_pysplash', is_pysplash)
+
+        if is_pynastrangui_exe: # and '_PYIBoot_SPLASH' in os.environ and importlib.util.find_spec("pyi_splash"):
+            import pyi_splash   # pip install py-splash
+            # Update the text on the splash screen
+            pyi_splash.update_text("PyInstaller is a great software!")
+            #pyi_splash.update_text("Second time's a charm!")
+
+            # Close the splash screen. It does not matter when the call
+            # to this function is made, the splash screen remains open until
+            # this function is called or the Python program is terminated.
+            pyi_splash.close()
+
         self._check_for_latest_version()
 
-    def _load_plugins(self):
-        """loads the plugins from pyNastran/gui/plugins.py"""
+    #def changeEvent(self, event):
+        # trying to fix the maximize bug by updating the window...doesn't work
+        #if event.type() == QEvent.WindowStateChange:
+            #if event.oldState() and QtCore.Qt.WindowMinimized:
+                #super().changeEvent(event)
+                #print("WindowMinimized")
+            #elif event.oldState() == QtCore.Qt.WindowNoState or self.windowState() == QtCore.Qt.WindowMaximized:
+                #super().changeEvent(event)
+                #self.repaint()
+                #self.update()
+                #print("WindowMaximized")
+
+    def setup_controls(self):
+        """
+        Catia
+        Pan:    Click and hold the middle mouse button, then drag
+        Zoom:   Press and hold the middle mouse button, then click and drag the left or right mouse button
+        Rotate: Press and hold the middle mouse button, then press and drag the left or right mouse button
+        Center a graph: Use the RH-click menu in the Navigation window
+        Return to pan mode: Release the mouse buttons and middle-click
+        Toggle between rotation and zoom mode: Press or release the side button
+
+        Solidworks
+        The middle mouse button can be used for various view commands, including:
+        Rotate view: Drag with the middle mouse button to rotate the model view
+        Pan: Hold down Ctrl and drag with the middle mouse button
+        Zoom in/out: Hold down Shift and drag with the middle mouse button
+
+        Femap
+        Rotate, pan, or zoom: Use the middle mouse button to rotate, pan, or zoom in a dialog box or when you're not in a command.
+        Select: Use the left mouse button to select in a dialog.
+          Scroll through the list of entities: Use the Next or Previous buttons to scroll through the list of entities.
+          Move to the next defined selection: Use Control and Shift with the middle mouse wheel to move to the next defined selection.
+          Access the Quick Access Menu: Hold down the Alt key while clicking the right mouse button.
+        Set the center of rotation:   Hold Ctrl and middle mouse click on the model.
+        Reset the center of rotation: Hold Ctrl and middle mouse click in empty space.
+        Control the model clipping:   Use the Alt key and the middle mouse
+             button to interactively slide the plane through the model.
+
+        Patran
+        Shift + Middle mouse button to Pan X/Y
+        Control + Middle mouse button to Zoom
+        Shift + Control + Middle mouse button to Rotate Z
+
+        NX
+        Deselect: Press and hold “Shift” and click the “Left Mouse Button”
+                  selected items to deselect.
+        Rotate:   Press and hold the “Middle Mouse Button” and drag to rotate.
+                  (Note: If the rotation velocity is too fast for you, you can
+                  decrease speed by activating “Precise Rotation”.   It is
+                  currently hidden. You can find it by using “Command Finder”.)
+        Pan:      Press and hold the “Middle Mouse Button” then press the
+                  “Right Mouse Button” and drag the mouse. Press and hold
+                  “Shift” then press and hold the “Middle Mouse Button”
+                  and drag the mouse to pan.
+        Zoom In /Out: Scroll the “Middle Mouse Button” forward/reverse to zoom in/out.
+                  Press and hold “CTRL” then press and hold the “Middle Mouse Button”
+                  and drag the mouse to zoom in/out. Press and hold the “Middle
+                  Mouse Button” then press the “Left Mouse Button” and drag the
+                  mouse. (I don’t use this method. Because I use the index
+                  finger for both “Left Mouse Button” and “Middle Mouse Button”.
+                  It might be hard for someone to press both “Left Mouse Button”
+                  and “Middle Mouse Button”. I use zoom in/out by scrolling the
+                  “Middle Mouse Button”. It is very fast and easy to use.)
+        """
+        pass
+
+    def _load_plugins(self, plugin_name_to_path: Optional[list[tuple[str, str, str]]]=None):
+        """loads the plugins from pyNastran/gui/plugins.py
+
+        plugin_name_to_path = [
+            ('auto_wireframe', os.path.join(PLUGIN_DIR, 'auto_wireframe.py'), 'AutoWireframe'),
+            ('rfs_viewer', os.path.join(PLUGIN_DIR, 'rfs', 'rfs_viewer.py'), 'RFSViewer'),
+        ]
+
+        .. see:: https://stackoverflow.com/questions/19009932/import-arbitrary-python-source-file-python-3-3
+        """
+        if plugin_name_to_path is None:
+            return
         for module_name, plugin_file, class_name in plugin_name_to_path:  # list
             if module_name in self.modules:
                 raise RuntimeError('module_name=%r is already defined' % module_name)
@@ -154,13 +279,23 @@ class MainWindow(GuiCommon, NastranIO):
             if not os.path.exists(plugin_file):
                 # auto_wireframe is a test module and is not intended to
                 # actually load unless you're testing
+                #print('Failed to load plugin %r because %s doesnt exist' % (
+                    #module_name, plugin_file))
+
                 if module_name != 'auto_wireframe':
                     self.log_warning('Failed to load plugin %r because %s doesnt exist' % (
                         module_name, plugin_file))
                 continue
 
-            module = imp.load_source(module_name, plugin_file)
-            my_class = getattr(module, class_name)
+            loader = importlib.machinery.SourceFileLoader(module_name, plugin_file)
+            module = loader.load_module()
+            try:
+                my_class = getattr(module, class_name)
+            except AttributeError:
+                self.log_warning('Failed to load plugin %r because class %s doesnt exist' % (
+                    module_name, class_name))
+                return
+
             class_obj = my_class(self)
             self.modules[module_name] = class_obj
 
@@ -170,7 +305,7 @@ class MainWindow(GuiCommon, NastranIO):
             for key, is_active in checkables.items():
                 self.checkables[key] = is_active
 
-    def _check_for_latest_version(self, check=True):
+    def _check_for_latest_version(self, check: bool=True) -> bool:
         """
         checks the website for information regarding the latest gui version
 
@@ -184,8 +319,10 @@ class MainWindow(GuiCommon, NastranIO):
             url = pyNastran.__website__
             win = DownloadWindow(url, version_latest, win_parent=self)
             win.show()
+            return True
         #dt = time.time() - time0
         #print('dt_version_check = %.2f' % dt)
+        return False
 
     def mousePressEvent(self, event):
         if not self.run_vtk:
@@ -209,7 +346,7 @@ class MainWindow(GuiCommon, NastranIO):
 
     def open_website(self):
         """loads the pyNastran main website"""
-        self._urlopen(pyNastran.__website__)
+        self._openbrowswer(pyNastran.__website__)
 
     def open_docs(self):
         """loads the pyNastran docs website"""
@@ -217,86 +354,29 @@ class MainWindow(GuiCommon, NastranIO):
         try:
             urllib.request.urlopen(url)
         except (urllib.error.HTTPError, urllib.error.URLError):
-            url = pyNastran.__docs_rtd__
-        self._urlopen(url)
+            return
+        self._openbrowswer(url)
 
     def open_issue(self):
         """loads the pyNastran issue tracker"""
-        self._urlopen(pyNastran.__issue__)
+        self._openbrowswer(pyNastran.__issue__)
 
     def open_discussion_forum(self):
         """loads the pyNastran discussion forum website"""
-        self._urlopen(pyNastran.__discussion_forum__)
+        self._openbrowswer(pyNastran.__discussion_forum__)
 
-    def _urlopen(self, url):
+    def _openbrowswer(self, url):
         """opens a URL"""
-        import webbrowser
         if self.is_gui:
             webbrowser.open(url)
 
     def about_dialog(self):
         """Display about dialog"""
-        copyright = pyNastran.__copyright__
-        if qt_version in ['pyside2']:
-            word = 'PySide'
-            copyright_qt = pyNastran.__pyside_copyright__
-        else:
-            word = 'PyQt'
-            copyright_qt = pyNastran.__pyqt_copyright__
-
-        about = [
-            'pyNastran %s GUI' % word,
-            '',
-            'pyNastran v%s' % pyNastran.__version__,
-            copyright,
-            copyright_qt,
-            pyNastran.__author__,
-            '',
-            '%s' % pyNastran.__website__,
-            '',
-            'Mouse',
-            'Left Click - Rotate',
-            'Middle Click - Pan/Recenter Rotation Point',
-            'Shift + Left Click - Pan/Recenter Rotation Point',
-            'Right Mouse / Wheel - Zoom',
-            '',
-            'Keyboard Controls',
-            'R   - reset camera view',
-            'Shift+X/X - snap to x axis',
-            'Shift+Y/Y - snap to y axis',
-            'Shift+Z/Z - snap to z axis',
-            #'',
-            #'h   - show/hide legend & info',
-
-            # shown on the menu
-            #'CTRL+I - take a screenshot (image)',
-            #'CTRL+W - clear the labels',
-            #'CTRL+L - Legend',
-            #'CTRL+A - Animation',
-            #'S      - view model as a surface',
-            #'W      - view model as a wireframe',
-
-            'L - cycle the results forwards',
-            'K - cycle the results backwards',
-            'm/Shift+M - scale up/scale down by 1.1 times',
-            'o/Shift+O - rotate counter-clockwise/clockwise 5 degrees',
-            'P      - pick node/element',
-            'F      - set rotation center (zoom out when picking',
-            '         to disable clipping)',
-            'E      - view model edges',
-            'B      - change edge color from scalar/black',
-            '',
-            'Reload Model:  using the same filename, reload the model',
-        ]
-
-        #message_box = QMessageBox()
-        #message_box.setStyleSheet(
-            #'QMessageBox {background-color: #2b5b84; color: white;}\n'
-            #'QPushButton{color: white; font-size: 16px; background-color: #1d1d1d; '
-            #'border-radius: 10px; padding: 10px; text-align: center;}\n'
-            #' QPushButton:hover{color: #2b5b84;}')
-        #message_box.setFont(self.font())
-        QMessageBox.about(self, "About pyNastran GUI", "\n".join(about))
+        data = {
+            'font_size': self.settings.font_size,
+        }
+        win = AboutWindow(data, win_parent=self, show_tol=True)
+        win.show()
 
     def on_reload(self):
         """
@@ -315,26 +395,32 @@ class MainWindow(GuiCommon, NastranIO):
         if hasattr(self, on_reload_name):
             getattr(self, on_reload_name)()  # on_reload_nastran
         else:
-            self.on_load_geometry(self.infile_name, self.format, raise_error=False)
+            self.on_load_geometry(self.infile_name, self.format, stop_on_failure=False)
 
         if self.out_filename is None:
             msg = '%s - %s' % (self.format, self.infile_name)
         else:
             msg = '%s - %s - %s' % (self.format, self.infile_name, self.out_filename)
         self.window_title = msg
-        self.log_command('on_reload()')
+        self.log_command('self.on_reload()')
         self.cycle_results(case)
         self.on_set_camera_data(camera, show_log=False)
+
+    def _save_settings(self):
+        """writes the json file"""
+        qsettings = QSettingsLike2()
+        qsettings.clear()
+        self.settings.save(qsettings)
+        if hasattr(qsettings, 'save_json'):
+            qsettings.save_json()
 
     def closeEvent(self, *args):
         """
         Handling saving state before application when application is
         being closed.
         """
-        settings = QtCore.QSettings()
-        settings.clear()
-        self.settings.save(settings)
-
-        if qApp is None:
+        self._save_settings()
+        q_app = QApplication.instance()
+        if q_app is None:
             sys.exit()
-        qApp.quit()
+        q_app.quit()

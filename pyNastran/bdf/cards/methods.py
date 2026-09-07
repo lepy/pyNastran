@@ -12,7 +12,7 @@ All cards are Method objects.
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
@@ -23,6 +23,7 @@ from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 class Method(BaseCard):
@@ -51,9 +52,9 @@ class EIGB(Method):
         nep = 10
         ndp = 20
         ndn = 30
-        return EIGB(sid, method, L1, L2, nep, ndp, ndn, norm, G, C, comment='')
+        return EIGB(sid, method, L1, L2, nep, ndp, ndn, norm, G, C)
 
-    def __init__(self, sid, method, L1, L2, nep, ndp, ndn, norm, G, C, comment=''):
+    def __init__(self, sid, method, L1, L2, nep, ndp, ndn, norm, G, C, comment: str=''):
         Method.__init__(self)
         if comment:
             self.comment = comment
@@ -84,14 +85,14 @@ class EIGB(Method):
         self.G = G
         self.C = C
         if not self.L1 < self.L2:
-            msg = 'L1=%s L2=%s; L1<L2 is requried' % (self.L1, self.L2)
+            msg = 'L1=%s L2=%s; L1<L2 is required' % (self.L1, self.L2)
             raise RuntimeError(msg)
         if self.method not in ['INV', 'SINV', None]:
             msg = 'method must be INV or SINV.  method=%r' % self.method
             raise RuntimeError(msg)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an EIGB card from ``BDF.add_card(...)``
 
@@ -116,11 +117,11 @@ class EIGB(Method):
         norm = string_or_blank(card, 9, 'norm', 'MAX')
         if norm == 'POINT':
             G = integer(card, 10, 'G')
-            C = parse_components(card, 11, 'C')
+            C = parse_components(card, 11, 'C', None)
         else:
             G = integer_or_blank(card, 10, 'G')
-            C = components_or_blank(card, 11, 'C')
-        assert len(card) <= 12, 'len(EIGB card) = %i\ncard=%s' % (len(card), card)
+            C = components_or_blank(card, 11, 'C', None)
+        assert len(card) <= 12, f'len(EIGB card) = {len(card):d}\ncard={card}'
         return EIGB(sid, method, L1, L2, nep, ndp, ndn, norm, G, C,
                     comment=comment)
 
@@ -196,7 +197,7 @@ class EIGC(Method):
                     norm='MAX', mblkszs=None, iblkszs=None, ksteps=None,
                     NJIs=None, alphaAjs=None, omegaAjs=None, alphaBjs=None,
                     omegaBjs=None, LJs=None, NEJs=None, NDJs=None,
-                    shift_r1=None, shift_i1=None, isrr_flag=None, nd1=None, comment='')
+                    shift_r1=None, shift_i1=None, isrr_flag=None, nd1=None)
 
     def __init__(self, sid, method, grid, component, epsilon, neigenvalues,
                  norm='MAX', # common
@@ -204,7 +205,7 @@ class EIGC(Method):
                  alphaAjs=None, omegaAjs=None, alphaBjs=None, omegaBjs=None, # HESS/INV
                  LJs=None, NEJs=None, NDJs=None, # HESS/INV
                  shift_r1=None, shift_i1=None, isrr_flag=None, nd1=None, # ISRR
-                 comment=''):
+                 comment: str=''):
         """
         Creates a EIGC card, which is required for a SOL 107 analysis
 
@@ -236,35 +237,35 @@ class EIGC(Method):
         epsilon : float
         neigenvalues : int
             Number of Eigenvalues
-        mblkszs : List[float]; default=None
+        mblkszs : list[float]; default=None
             used by CLAN
-        iblkszs : List[int]; default=None
+        iblkszs : list[int]; default=None
             used by CLAN
-        ksteps : List[int]; default=None
+        ksteps : list[int]; default=None
             used by CLAN
-        NJIs : List[int]; default=None
+        NJIs : list[int]; default=None
             used by CLAN
-        alphaAjs : List[float]; default=None
+        alphaAjs : list[float]; default=None
             used by HESS/INV
-        omegaAjs : List[float]; default=None
+        omegaAjs : list[float]; default=None
             used by HESS/INV
-        alphaBjs : List[float]; default=None
+        alphaBjs : list[float]; default=None
             used by HESS/INV
-        omegaBjs : List[float]; default=None
+        omegaBjs : list[float]; default=None
             used by HESS/INV
-        LJs : List[float]; default=None
+        LJs : list[float]; default=None
             used by HESS/INV
-        NEJs : List[int]; default=None
+        NEJs : list[int]; default=None
             used by HESS/INV
-        NDJs : List[int]; default=None
+        NDJs : list[int]; default=None
             used by HESS/INV
-        shift_r1 : List[float]; default=None
+        shift_r1 : list[float]; default=None
             used by ISSR
-        shift_i1 : List[float]; default=None
+        shift_i1 : list[float]; default=None
             used by ISSR
-        isrr_flag : List[int]; default=None
+        isrr_flag : list[int]; default=None
             used by ISSR
-        nd1 : List[int]; default=None
+        nd1 : list[int]; default=None
             used by ISSR
         comment : str; default=''
             a comment for the card
@@ -358,14 +359,16 @@ class EIGC(Method):
         nalpha_a = len(self.alphaAjs)
         assert nalpha_a == len(self.omegaAjs), 'alphaAjs=%s omegaAj=%s' % (self.alphaAjs, self.omegaAjs)
         if self.method in ['HESS', 'INV']:
-            assert nalpha_a == len(self.alphaBjs), 'alphaAjs=%s alphaBj=%s' % (self.alphaAjs, self.alphaBjs)
+            nalpha_b = len(self.alphaBjs)
+            assert nalpha_a == nalpha_b, 'alphaAjs=%s alphaBj=%s' % (self.alphaAjs, self.alphaBjs)
             #assert nalpha_a == len(self.omegaBjs), 'alphaAjs=%s omegaBjs=%s' % (self.alphaAjs, self.omegaBjs)
             assert nalpha_a == len(self.LJs), 'alphaAjs=%s LJs=%s' % (self.alphaAjs, self.LJs)
             assert nalpha_a == len(self.NEJs), 'alphaAjs=%s NEJs=%s' % (self.alphaAjs, self.NEJs)
             assert nalpha_a == len(self.NDJs), 'alphaAjs=%s NDJs=%s' % (self.alphaAjs, self.NDJs)
         elif self.method == 'CLAN':
-            if nalpha_a == len(self.alphaBjs):
-                assert nalpha_a == len(self.alphaBjs), f'nalpha_a={nalpha_a} nalpha_b={nalpha_b}'
+            nalpha_b = len(self.alphaBjs)
+            if nalpha_a == nalpha_b:
+                assert nalpha_a == nalpha_b, f'nalpha_a={nalpha_a} nalpha_b={nalpha_b}'
                 assert nalpha_a == len(self.omegaBjs), f'nalpha_a={nalpha_a} nomega_b={len(self.omegaBjs)}'
                 assert nalpha_a == len(self.LJs)
                 assert nalpha_a == len(self.NEJs)
@@ -376,9 +379,11 @@ class EIGC(Method):
                 assert nalpha_a == len(self.iblkszs)
                 assert nalpha_a == len(self.ksteps)
                 assert nalpha_a == len(self.NJIs)
+        for kstep in self.ksteps:
+            assert isinstance(kstep, int), self.ksteps
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an EIGC card from ``BDF.add_card(...)``
 
@@ -400,8 +405,10 @@ class EIGC(Method):
             grid = integer(card, 4, 'G')
             component = parse_components(card, 5, 'C')
         else:
-            grid = blank(card, 4, 'G')
-            component = blank(card, 5, 'C')
+            grid = None
+            component = None
+            blank(card, 4, 'G')
+            blank(card, 5, 'C')
 
         epsilon = double_or_blank(card, 6, 'epsilon')
         neigenvalues = integer_double_string_or_blank(card, 7, 'ND0/neigenvalues')
@@ -468,7 +475,7 @@ class EIGC(Method):
 
     def raw_method(self):
         list_fields = []
-        if self.method in ['HESS', 'INV', 'DET']:
+        if self.method in {'HESS', 'INV', 'DET'}:
             for (alphaA, omegaA, alphaB, omegaB, Lj, NEj, NDj) in zip(
                     self.alphaAjs, self.omegaAjs, self.alphaBjs, self.omegaBjs,
                     self.LJs, self.NEJs, self.NDJs):
@@ -480,8 +487,9 @@ class EIGC(Method):
 
         elif self.method == 'CLAN':
             nalpha_a = len(self.alphaAjs)
+            nalpha_b = len(self.alphaBjs)
             assert nalpha_a == len(self.omegaAjs)
-            if nalpha_a == len(self.alphaBjs):  # pragma:no cover
+            if nalpha_a == nalpha_b:  # pragma:no cover
                 assert nalpha_a == len(self.alphaBjs), f'nalpha_a={nalpha_a} nalpha_b={nalpha_b}'
                 assert nalpha_a == len(self.omegaBjs), f'nalpha_a={nalpha_a} nomega_b={len(self.omegaBjs)}'
                 assert nalpha_a == len(self.LJs)
@@ -506,11 +514,11 @@ class EIGC(Method):
                 for (alphaA, omegaA, mblksz, iblksz, kstep, Nj) in zip(
                         self.alphaAjs, self.omegaAjs, self.mblkszs, self.iblkszs,
                         self.ksteps, self.NJIs):
-                    alphaA = set_blank_if_default(alphaA, 0.0)
-                    omegaA = set_blank_if_default(omegaA, 0.0)
-                    mblksz = set_blank_if_default(mblksz, 7)
-                    iblksz = set_blank_if_default(iblksz, 2)
-                    kstep = set_blank_if_default(kstep, 5)
+                    alphaA = set_blank_if_default(alphaA, default=0.0)
+                    omegaA = set_blank_if_default(omegaA, default=0.0)
+                    mblksz = set_blank_if_default(mblksz, default=7)
+                    iblksz = set_blank_if_default(iblksz, default=2)
+                    kstep = set_blank_if_default(kstep, default=5)
 
                     list_fields += [alphaA, omegaA, mblksz, iblksz,
                                     kstep, None, Nj, None]
@@ -577,9 +585,9 @@ class EIGP(Method):
         alpha2 = 1.
         omega2 = 1.
         m2 = 1.
-        return EIGP(sid, alpha1, omega1, m1, alpha2, omega2, m2, comment='')
+        return EIGP(sid, alpha1, omega1, m1, alpha2, omega2, m2)
 
-    def __init__(self, sid, alpha1, omega1, m1, alpha2, omega2, m2, comment=''):
+    def __init__(self, sid, alpha1, omega1, m1, alpha2, omega2, m2, comment: str=''):
         Method.__init__(self)
         if comment:
             self.comment = comment
@@ -602,7 +610,7 @@ class EIGP(Method):
         self.m2 = m2
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an EIGPX card from ``BDF.add_card(...)``
 
@@ -623,7 +631,7 @@ class EIGP(Method):
         alpha2 = double(card, 5, 'alpha2')
         omega2 = double(card, 6, 'omega2')
         m2 = integer(card, 7, 'm2')
-        assert len(card) == 8, 'len(EIGP card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 8, f'len(EIGP card) = {len(card):d}\ncard={card}'
         return EIGP(sid, alpha1, omega1, m1, alpha2, omega2, m2, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
@@ -647,6 +655,14 @@ class EIGP(Method):
 class EIGR(Method):
     """
     Defines data needed to perform real eigenvalue analysis
+
+    # msc/nx
+    | EIGR | SID  | METH| F1 | F2 | NE | ND |   |      |
+    |      | NORM |  G  |  C |    |    |    |   |      |
+
+    # mystran
+    | EIGR | SID  | METH| F1 | F2 | NE | ND |   | CRIT |
+    |      | NORM |  G  |  C |    |    |    |   |      |
     """
     type = 'EIGR'
     allowed_methods = [
@@ -657,11 +673,11 @@ class EIGR(Method):
     @classmethod
     def _init_from_empty(cls):
         sid = 1
-        return EIGR(sid, method='LAN', f1=None, f2=None, ne=None, nd=None,
-                    norm='MASS', G=None, C=None, comment='')
+        return EIGR(sid, method='LAN', f1=None, f2=None, ne=None, nd=None, crit=None,
+                    norm='MASS', G=None, C=None)
 
-    def __init__(self, sid, method='LAN', f1=None, f2=None, ne=None, nd=None,
-                 norm='MASS', G=None, C=None, comment=''):
+    def __init__(self, sid, method='LAN', f1=None, f2=None, ne=None, nd=None, crit=None,
+                 norm='MASS', G=None, C=None, comment: str=''):
         """
         Adds a EIGR card
 
@@ -681,6 +697,8 @@ class EIGR(Method):
             estimate of number of roots (used for INV)
         nd : int; default=None
             desired number of roots
+        crit : float; default=0.0
+            orthogonality criteria
         msglvl : int; default=0
             debug level; 0-4
         maxset : int; default=None
@@ -724,6 +742,9 @@ class EIGR(Method):
         #: Desired number of roots (default=600 for SINV 3*ne for INV)
         self.nd = nd
 
+        #: orthogonality criterion
+        self.crit = crit
+
         #: Method for normalizing eigenvectors. ('MAX' or 'POINT';
         #: Default='MAX')
         self.norm = norm
@@ -743,7 +764,7 @@ class EIGR(Method):
         assert norm in ['POINT', 'MASS', 'MAX']
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an EIGR card from ``BDF.add_card(...)``
 
@@ -768,24 +789,52 @@ class EIGR(Method):
             raise ValueError(msg)
 
         if method == 'SINV':
-            nd = integer_or_blank(card, 6, 'nd', 600)
+            nd = integer_or_blank(card, 6, 'nd', default=600)
         elif method == 'INV':
-            ne = integer(card, 5, 'ne')
-            nd = integer_or_blank(card, 6, 'nd', 3 * ne)
-        elif method in ['GIV', 'MGIV', 'HOU', 'MHOU']:
-            nd = integer_or_blank(card, 6, 'nd', 0)
+            ne = integer_or_blank(card, 5, 'ne', default=0)
+            nd = integer_or_blank(card, 6, 'nd', default=3 * ne)
+        elif method in {'GIV', 'MGIV', 'AGIV',
+                        'HOU', 'MHOU', 'AHOU'}:
+            # AHOU = automatic selection of HOU or MHOU
+            # AGIV = automatic selection of GIV or MGIV
+            nd = integer_or_blank(card, 6, 'nd', default=0)
+        elif method == 'LAN':
+            #The LAN method is the most general-purpose method, and may be used on
+            #both small- and large-size problems. It takes advantage of sparsity of input
+            #matrices, leading to greater efficiency on large-size problems. Because Lanczos
+            #performance is tuned for medium to large problems, this has caused difficulties
+            #with very small problems. Thus, by default, on problems with fewer than 20
+            #degrees-of-freedom when the LAN method is selected, the method is switched to
+            #AHOU. The criteria for automatic switching is controlled by SYSTEM(359) on the
+            #NASTRAN entry.
+            #The NE, G, and C fields are ignored for the LAN method. The
+            #NORM field may be set to MASS (the default value) or NORM.
+            #
+            # The conventions used when both the Fi and ND fields are specified are
+            # described in Table 1 of the IGRL entry description.
+            #
+            # The EIGRL entry is an alternate method to select the
+            # LAN method. It has several other input options for special cases.
+            #
+            # When both and EIGRL and EIGR have the same SID and that SID is
+            # selected by a METHOD ommand the EIGRL entry takes precedence.
+            nd = integer_or_blank(card, 6, 'nd')
         else:
             nd = integer(card, 6, 'nd')
-        norm = string_or_blank(card, 9, 'norm', 'MASS')
+        crit = double_or_blank(card, 8, 'crit')
+        norm = string_or_blank(card, 9, 'norm', default='MASS')
 
         if norm == 'POINT':
             G = integer(card, 10, 'G')
             C = parse_components(card, 11, 'C')
         else:
-            G = blank(card, 10, 'G')
-            C = blank(card, 11, 'C')
-        assert len(card) <= 12, 'len(EIGR card) = %i\ncard=%s' % (len(card), card)
-        return EIGR(sid, method, f1, f2, ne, nd, norm, G, C, comment=comment)
+            G = None
+            C = None
+            blank(card, 10, 'G')
+            blank(card, 11, 'C')
+        assert len(card) <= 12, f'len(EIGR card) = {len(card):d}\ncard={card}'
+        return EIGR(sid, method, f1, f2, ne, nd,
+                    crit=crit, norm=norm, G=G, C=C, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
         pass
@@ -796,9 +845,8 @@ class EIGR(Method):
         return list_fields
 
     def repr_fields(self):
-        method = set_blank_if_default(self.method, 'LAN')
         norm = set_blank_if_default(self.norm, 'MASS')
-        list_fields = ['EIGR', self.sid, method, self.f1, self.f2, self.ne,
+        list_fields = ['EIGR', self.sid, self.method, self.f1, self.f2, self.ne,
                        self.nd, None, None, norm, self.G, self.C]
         return list_fields
 
@@ -829,10 +877,11 @@ class EIGRL(Method):
     def _init_from_empty(cls):
         sid = 1
         return EIGRL(sid, v1=None, v2=None, nd=None, msglvl=0, maxset=None,
-                     shfscl=None, norm=None, options=None, values=None, comment='')
+                     shfscl=None, norm=None, options=None, values=None)
 
-    def __init__(self, sid, v1=None, v2=None, nd=None, msglvl=0, maxset=None, shfscl=None,
-                 norm=None, options=None, values=None, comment=''):
+    def __init__(self, sid: int, v1=None, v2=None, nd=None,
+                 msglvl: int=0, maxset=None, shfscl=None,
+                 norm: str='', options=None, values=None, comment: str=''):
         """
         Adds an EIGRL card
 
@@ -852,12 +901,12 @@ class EIGRL(Method):
             Number of vectors in block or set
         shfscl : float; default=None
             estimate of first flexible mode natural frequency
-        norm : str; default=None
+        norm : str; default=''
             {MAX, MASS, AF}
-        options : ???; default=None -> []
-            ???
-        values : ???; default=None -> []
-            ???
+        options : list[str]; default=None -> []
+            line 2 keys
+        values : list[int | float | str]; default=None -> []
+            line 2 values
         comment : str; default=''
             a comment for the card
 
@@ -865,6 +914,9 @@ class EIGRL(Method):
         Method.__init__(self)
         if comment:
             self.comment = comment
+
+        if norm is None:
+            norm = ''
         if options is None:
             options = []
         if values is None:
@@ -898,15 +950,15 @@ class EIGRL(Method):
         self.values = values
 
     def validate(self):
-        assert self.norm in [None, 'MAX', 'MASS', 'AF'], 'norm=%r' % self.norm
-        assert self.msglvl in [0, 1, 2, 3, 4], 'msglvl=%r' % self.msglvl
+        assert self.norm in ['', 'MAX', 'MASS', 'AF'], f'norm={self.norm!r}'
+        assert self.msglvl in [0, 1, 2, 3, 4, -999], f'msglvl={self.msglvl:d}'
         if len(self.options) != len(self.values):
             raise RuntimeError('len(options) != len(values); noptions=%s nvalues=%s\n'
                                'options=%s values=%s' % (len(self.options), len(self.values),
                                                          self.options, self.values))
         for option, value in zip(self.options, self.values):
             if option == 'NORM':
-                assert value in ['MAX', ], 'option=%r value=%r' % (option, value)
+                assert value in ['MAX', ], f'option={option!r} value={value}'
             elif option == 'ALPH':
                 # float
                 pass
@@ -914,10 +966,10 @@ class EIGRL(Method):
                 # integer
                 pass
             else:
-                raise NotImplementedError('option=%r value=%r' % (option, value))
+                raise NotImplementedError(f'option={option!r} value={value}')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an EIGRL card from ``BDF.add_card(...)``
 
@@ -933,10 +985,9 @@ class EIGRL(Method):
         v1 = double_or_blank(card, 2, 'v1')
         v2 = double_or_blank(card, 3, 'v2')
         nd = integer_or_blank(card, 4, 'nd')
-        msglvl = integer_or_blank(card, 5, 'msglvl', 0)
+        msglvl = integer_or_blank(card, 5, 'msglvl', default=0)
         maxset = integer_or_blank(card, 6, 'maxset')
         shfscl = double_or_blank(card, 7, 'shfscl')
-        norm = string_or_blank(card, 8, 'norm')
 
         option_values = [interpret_value(field) for field in card[9:]]
         options = []
@@ -960,14 +1011,14 @@ class EIGRL(Method):
             ## modal frequency response,cyclic buckling
             #self.norm = string_or_blank(card, 8, 'norm', 'MAX')
         #else:
-        norm = string_or_blank(card, 8, 'norm')
+        norm = string_or_blank(card, 8, 'norm', default='')
 
-        #assert len(card) <= 9, 'len(EIGRL card) = %i\ncard=%s' % (len(card), card)
-        assert len(card) <= 10, 'len(EIGRL card) = %i\ncard=%s' % (len(card), card)
+        #assert len(card) <= 9, f'len(EIGRL card) = {len(card):d}\ncard={card}'
+        assert len(card) <= 10, f'len(EIGRL card) = {len(card):d}\ncard={card}'
 
         #msg = 'norm=%s sol=%s' % (self.norm, sol)
         #assert self.norm in ['MASS', 'MAX'],msg
-        #assert card.nFields()<9,'card = %s' %(card.fields(0))
+        #assert len(card) < 9,'card = %s' % (card.fields(0))
         return EIGRL(sid, v1, v2, nd, msglvl, maxset, shfscl, norm,
                      options, values, comment=comment)
 
@@ -977,7 +1028,7 @@ class EIGRL(Method):
         #if self.norm is None:
             #if model.is_modal_solution():
                 #self.norm = 'MASS'
-            #elif mdoel.is_buckling_solution():
+            #elif model.is_buckling_solution():
                 #self.norm = 'MAX'
 
     def raw_fields(self):
@@ -1010,12 +1061,12 @@ def _load_isrr(nrows, card):
     nd1 = []
     for irow in range(nrows):
         i = 9 + 8 * irow
-        shift_r1i = double_or_blank(card, i, 'SHIFT_R1', 0.0)
-        shift_i1i = double_or_blank(card, i + 1, 'SHIFT_I1', 0.0)
+        shift_r1i = double_or_blank(card, i, 'SHIFT_R1', default=0.0)
+        shift_i1i = double_or_blank(card, i + 1, 'SHIFT_I1', default=0.0)
         #2
         #3
         #4
-        isrr_flagi = integer_or_blank(card, i + 5, 'ISRR_FLAG', 0)
+        isrr_flagi = integer_or_blank(card, i + 5, 'ISRR_FLAG', default=0)
         nd1i = integer(card, i + 6, 'ND1')
         shift_r1.append(shift_r1i)
         shift_i1.append(shift_i1i)
@@ -1054,7 +1105,7 @@ def _load_clan(nrows, card):
             assert isinstance(nej_blank, int), nej_blank
             alpha_bj = double(card, i + 2, 'alpha_bj' + str(irow))
             omega_bj = double(card, i + 3, 'omega_bj' + str(irow))
-            lj = double_or_blank(card, i + 4, 'LJ' + str(irow), 1.0)
+            lj = double_or_blank(card, i + 4, 'LJ' + str(irow), default=1.0)
             nej = integer_or_blank(card, i + 5, 'NEJ' + str(irow))
             ndj = integer(card, i + 6, 'NDJ' + str(irow))
             alphaBjs.append(alpha_bj)
@@ -1066,11 +1117,11 @@ def _load_clan(nrows, card):
             assert is_nej in [False, None], is_nej
             is_nej = False
             # ALPHAAJ OMEGAAJ MBLKSZ IBLKSZ KSTEPS blank NJi
-            mblock_size = double_or_blank(card, i + 2, 'mblock' + str(irow), 7)
+            mblock_size = double_or_blank(card, i + 2, 'mblock' + str(irow), default=7)
 
             # iblkszs is an integer, but entered as a float...
-            iblock_size = double_or_blank(card, i + 3, 'iblksz' + str(irow), 2.0)
-            kstep = integer_or_blank(card, i + 4, 'kstep' + str(irow), 5)
+            iblock_size = double_or_blank(card, i + 3, 'iblksz' + str(irow), default=2.0)
+            kstep = integer_or_blank(card, i + 4, 'kstep' + str(irow), default=5)
             nji = integer(card, i + 6, 'NJI' + str(irow))
 
             mblkszs.append(mblock_size)
@@ -1129,7 +1180,8 @@ class MODTRAK(BaseCard):
     MODTRAK SID LOWRNG HIGHRNG MTFILTER
     MODTRAK 100   1      26      0.80
     """
-    def __init__(self, sid, low_range, high_range, mt_filter, comment=''):
+    type = 'MODTRAK'
+    def __init__(self, sid: int, low_range: int, high_range: int, mt_filter: float, comment: str=''):
         BaseCard.__init__(self)
         self.sid = sid
         self.low_range = low_range
@@ -1137,14 +1189,23 @@ class MODTRAK(BaseCard):
         self.mt_filter = mt_filter
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def _init_from_empty(cls):
+        sid = 1
+        low_range = 0
+        high_range = 0
+        mt_filter = 0.0
+        return MODTRAK(sid, low_range, high_range, mt_filter)
+
+    @classmethod
+    def add_card(cls, card: BDFCard, comment: str=''):
         sid = integer(card, 1, 'sid')
-        low_range = integer_or_blank(card, 2, 'low_range', 0)
+        low_range = integer_or_blank(card, 2, 'low_range', default=0)
         high_range = integer(card, 3, 'high_range')
-        mt_filter = double_or_blank(card, 4, 'mt_filter', 0.9)
+        mt_filter = double_or_blank(card, 4, 'mt_filter', default=0.9)
+        assert len(card) <= 5, f'len(MODTRAK card) = {len(card):d}\ncard={card}'
         return MODTRAK(sid, low_range, high_range, mt_filter, comment=comment)
 
-    def raw_fields(self) -> List[Any]:
+    def raw_fields(self) -> list[Any]:
         list_fields = ['MODTRAK', self.sid, self.low_range, self.high_range, self.mt_filter]
         return list_fields
 

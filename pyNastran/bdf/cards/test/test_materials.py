@@ -530,6 +530,33 @@ class TestMaterials(unittest.TestCase):
         save_load_deck(model, xref='standard', punch=True,
                        run_remove_unused=False)
 
+    def test_mat11_02(self):
+        model = BDF(debug=None)
+        mid = 1
+        e1 = e2 = e3 = 1000.
+        nu12 = nu13 = nu23 = 0.3
+        g12 = g13 = g23 = 3000.
+        model.add_mat11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23)
+        tid = 42
+        x = [1., 2.]
+        y = [3., 4.]
+        model.add_matt11(mid, e1_table=tid)
+        model.add_tablem1(tid, x, y)
+        save_load_deck(model, xref='standard', punch=True,
+                       run_remove_unused=False)
+
+    def test_matcid_01(self):
+        """tests MATCID"""
+        model = BDF()
+        cid = 0
+        eids = [1, 2, 3]
+        model.add_matcid(cid, eids)
+        model.add_matcid(cid, eids=None, start=1, thru=2)
+        model.add_matcid(cid, eids=None, start=1, thru=2, by=1)
+        model.add_matcid(cid, eids=None, start=1, thru=-1)
+        save_load_deck(model, xref='standard', punch=True,
+                       run_remove_unused=False)
+
     def test_mat3d(self):
         """tests MAT3D"""
         log = get_logger(level='warning')
@@ -560,22 +587,84 @@ class TestMaterials(unittest.TestCase):
     def test_mats1(self):
         """tests MATS1"""
         log = get_logger(level='warning')
-        model = BDF(log=log)
+
+        # MAT1 card properties
         mid = 10
         E = 3.0e7
         G = None
         nu = 0.3
-        model.add_mat1(mid, E, G, nu)
 
-        tid = None
-        Type = 'NLELAST'
+        # MATS1 card properties
+        tid = 0
+        nl_type = 'NLELAST'
         h = None
         hr = None
         yf = None
         limit1 = None
         limit2 = None
-        unused_mats1 = model.add_mats1(mid, tid, Type, h, hr, yf, limit1, limit2,
-                                       comment='mats1')
+
+        # Test model with and without STRMEAS entry
+        for strmeas in ('ENG', None):
+            model = BDF(log=log)
+            model.add_mat1(mid, E, G, nu)
+            model.add_mats1(mid, nl_type, h, hr, yf, limit1, limit2, strmeas, tid=tid, comment='mats1')
+            deck = save_load_deck(model, xref='standard', punch=True, run_remove_unused=False)
+
+            self.assertEqual(strmeas, deck.MATS1[mid].strmeas)
+
+    def test_matdmg(self):
+        """tests MATDMG"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+
+        mid = 10
+        e1 = 1.3e8
+        e2 = 7707000.0
+        e3 = 7707000.0
+        nu12 = 0.234
+        nu13 = 0.234
+        nu23 = 0.391
+        g12 = 4154800.0
+        g13 = 4154800.0
+        g23 = 2770000.0
+        model.add_mat11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, 0.0, comment="mat11")
+
+        ppf_model = "UD"
+        y012 = 22.5
+        yc12 = 8526.4
+        ys12 = 1918.0
+        ys22 = 490.0
+        y11limt = 15840.0
+        y11limc = 15840.0
+        ksit = None
+        ksic = None
+        b2 = 2.5
+        b3 = 0.733
+        a = 0.5
+        litk = 20000.0
+        bigk = 518810.0
+        expn = 0.3648
+        tau = 0.0025
+        adel = 1.0
+        plyuni = 0
+        tid = None
+        hbar = 0.0001
+        dmax = 0.999
+        pe = 0
+        user = None
+        r01 = None
+        ds = None
+        gic = None
+        giic = None
+        giiic = None
+
+        model.add_matdmg(mid, ppf_model,
+                      y012, yc12, ys12, ys22, y11limt, y11limc, ksit, ksic,
+                      b2, b3, a, litk, bigk, expn, tau, adel,
+                      plyuni, tid, hbar, dmax, pe,
+                      user, r01, ds, gic, giic, giiic,
+                      comment='matdmg')
+
         save_load_deck(model, xref='standard', punch=True, run_remove_unused=False)
 
     def test_multiple_materials(self):

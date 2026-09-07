@@ -4,18 +4,21 @@ defines:
 
 """
 from copy import deepcopy
+from pyNastran.gui.qt_files.base_gui import BaseGui
 from pyNastran.gui.menus.camera.camera import CameraWindow
 
-class CameraObject:
+
+class CameraObject(BaseGui):
     """defines CameraObject"""
     def __init__(self, gui):
         """creates CameraObject"""
-        self.gui = gui
+        super().__init__(gui)
+        #self.gui = gui
         self.cameras = {}
         self._camera_window_shown = False
         self._camera_window = None
 
-    def set_font_size(self, font_size):
+    def set_font_size(self, font_size: int) -> None:
         """sets the font size for the camera window"""
         if self._camera_window_shown:
             self._camera_window.set_font_size(font_size)
@@ -27,7 +30,7 @@ class CameraObject:
         #clip_range = camera.GetClippingRange()
         #focal_point = camera.GetFocalPoint()
 
-        data = {'cameras' : self.cameras}
+        data = {'cameras': self.cameras}
         window = CameraWindow(data, win_parent=self.gui)
         window.show()
         window.exec_()
@@ -62,24 +65,24 @@ class CameraObject:
 
         # clip_range, view_up, distance
         camera_data = {
-            'position' : position,
-            'focal_point' : focal_point,
-            'view_angle' : view_angle,
-            'view_up' : view_up,
-            'clip_range' : clip_range,
-            'parallel_scale' : parallel_scale,
-            'prallel_proj' : parallel_proj,
-            'distance' : distance,
+            'position': position,
+            'focal_point': focal_point,
+            'view_angle': view_angle,
+            'view_up': view_up,
+            'clip_range': clip_range,
+            'parallel_scale': parallel_scale,
+            'prallel_proj': parallel_proj,
+            'distance': distance,
         }
         return camera_data
 
-    def on_set_camera_data(self, camera_data, show_log=True):
+    def on_set_camera_data(self, camera_data, show_log: bool=True):
         """
         Sets the current camera
 
         Parameters
         ----------
-        camera_data : Dict[key] : value
+        camera_data : dict[key] : value
             defines the camera
             position : (float, float, float)
                 where am I is xyz space
@@ -131,7 +134,7 @@ class CameraObject:
         camera.Modified()
         self.gui.vtk_interactor.Render()
         if show_log:
-            self.gui.log_command('on_set_camera_data(%s)' % str(camera_data))
+            self.gui.log_command('self.on_set_camera_data(%s)' % str(camera_data))
 
     def on_set_camera(self, name, show_log=True):
         """see ``set_camera_data`` for arguments"""

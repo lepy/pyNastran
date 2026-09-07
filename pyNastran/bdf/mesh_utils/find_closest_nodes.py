@@ -4,15 +4,44 @@ defines:
     * ieq = find_closest_nodes_index(nodes_xyz, xyz_compare, neq_max, tol)
 
 """
+from __future__ import annotations
 from itertools import count
-from typing import List, Optional
+from typing import Optional, Any, TYPE_CHECKING
 import numpy as np
 
-from pyNastran.bdf.mesh_utils.bdf_equivalence import (
-    _get_tree)
+from pyNastran.bdf.mesh_utils.bdf_equivalence import _get_tree
 
-def find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max=1, tol=None, msg=''):
-    # type: (np.ndarray, np.ndarray, np.ndarray, int, Optional[float], str) -> np.ndarray
+from pyNastran.nptyping_interface import NDArray3float, NDArrayNint
+
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
+
+
+def get_y_mirrored_nodes(model: BDF, nids: np.ndarray,
+                         neq_max: int=10, tol: float=0.0001) -> dict[int, int]:
+    """find the nodes mirrored about the y=0 / xz plane"""
+    out = model.get_xyz_in_coord_array(cid=0, fdtype='float64', idtype='int32')
+    nid_cp_cd, xyz_cid0, xyz_cp, icd_transform, icp_transform = out
+
+    all_nids = nid_cp_cd[:, 0]
+    assert np.array_equal(all_nids, np.unique(all_nids, ))
+    inid = np.searchsorted(all_nids, nids)
+    xyz_cid0_nids = xyz_cid0[inid, :]
+    xyz_cid0_compare = xyz_cid0_nids.copy()
+    xyz_cid0_compare[:, 1] *= -1.0
+    nids_opposite = find_closest_nodes(xyz_cid0, all_nids, xyz_cid0_compare, neq_max=neq_max, tol=tol)
+
+    nid_dict = {}
+    for nid, nid_opposite in zip(nids, nids_opposite):
+        nid_dict[int(nid)] = int(nid_opposite)
+    return nid_dict
+
+
+def find_closest_nodes(nodes_xyz: NDArray3float, nids: NDArrayNint,
+                       xyz_compare: NDArray3float,
+                       neq_max: int=1,
+                       tol: Optional[float]=None,
+                       msg: str='') -> NDArrayNint:
     """
     Finds the closest nodes to an arbitrary set of xyz points
 
@@ -27,7 +56,7 @@ def find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max=1, tol=None, msg=''
     tol : float; default=None
         the max spherical tolerance
         None : the whole model
-    neq_max : int; default=1.0
+    neq_max : int; default=1
         the number of "close" points
     msg : str; default=''
         custom message used for errors
@@ -71,7 +100,9 @@ def find_closest_nodes(nodes_xyz, nids, xyz_compare, neq_max=1, tol=None, msg=''
     return nids_out
 
 
-def find_closest_nodes_index(nodes_xyz, xyz_compare, neq_max, tol, msg=''):
+def find_closest_nodes_index(nodes_xyz: NDArray3float,
+                             xyz_compare: NDArray3float,
+                             neq_max: int, tol: float, msg: str=''):
     """
     Finds the closest nodes to an arbitrary set of xyz points
 
@@ -95,15 +126,17 @@ def find_closest_nodes_index(nodes_xyz, xyz_compare, neq_max, tol, msg=''):
 
     """
     #nodes_xyz, model, nids, inew = _eq_nodes_setup(
-        #bdf_filename, tol, renumber_nodes=renumber_nodes,
+        #bdf_filename, renumber_nodes=renumber_nodes,
         #xref=xref, node_set=node_set, debug=debug)
     ieq, slots = _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol,
                                              neq_max=neq_max, msg=msg)[1:3]
     return ieq
 
 
-def _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol, neq_max=4, msg=''):
-    # type: (np.ndarray, np.ndarray, float, int, str) -> (Any, np.ndarray, np.ndarray)
+def _not_equal_nodes_build_tree(nodes_xyz: NDArray3float,
+                                xyz_compare: NDArray3float,
+                                tol: float, neq_max: int=4,
+                                msg: str='') -> tuple[Any, np.ndarray, np.ndarray]:
     """
     helper function for `bdf_equivalence_nodes`
 
@@ -122,7 +155,7 @@ def _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol, neq_max=4, msg=''):
 
     Returns
     -------
-    kdt : cKDTree()
+    kdt : KDTree()
         the kdtree object
     ieq : int ndarray
         The indices of nodes_xyz where the nodes in xyz_compare are close???
@@ -140,8 +173,9 @@ def _not_equal_nodes_build_tree(nodes_xyz, xyz_compare, tol, neq_max=4, msg=''):
         error message
 
     """
+    assert isinstance(nodes_xyz, np.ndarray), type(nodes_xyz)
     assert isinstance(xyz_compare, np.ndarray), type(xyz_compare)
-    if nodes_xyz.shape[1] != xyz_compare.shape[1]:
+    if len(nodes_xyz.shape) != len(xyz_compare.shape) or nodes_xyz.shape[1] != xyz_compare.shape[1]:
         msgi = 'nodes_xyz.shape=%s xyz_compare.shape=%s%s' % (
             str(nodes_xyz.shape), str(xyz_compare.shape), msg)
         raise RuntimeError(msgi)

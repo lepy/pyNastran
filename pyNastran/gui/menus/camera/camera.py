@@ -43,17 +43,17 @@ class CameraWindow(PyDialog):
         self.cameras = deepcopy(data['cameras'])
         self.names = sorted(self.cameras.keys())
 
-        self.name = QLabel("Name:")
+        self.name = QLabel('Name:')
         self.name_edit = QLineEdit(str(self._default_name))
 
-        self.delete_button = QPushButton("Delete")
-        self.set_button = QPushButton("Set")
-        self.save_button = QPushButton("Save")
+        self.delete_button = QPushButton('Delete')
+        self.set_button = QPushButton('Set')
+        self.save_button = QPushButton('Save')
 
         # closing
-        self.apply_button = QPushButton("Apply")
-        self.close_button = QPushButton("Close")
-        self.cancel_button = QPushButton("Cancel")
+        self.apply_button = QPushButton('Apply')
+        self.close_button = QPushButton('Close')
+        self.cancel_button = QPushButton('Cancel')
 
         self.table = QTableWidget()
         names_text = []
@@ -96,7 +96,6 @@ class CameraWindow(PyDialog):
         grid.addWidget(self.set_button, irow, 1)
         irow += 1
 
-
         vbox = QVBoxLayout()
         vbox.addWidget(self.table)
 
@@ -107,8 +106,6 @@ class CameraWindow(PyDialog):
 
     def set_connections(self):
         """creates the actions for the menu"""
-        #if qt_version == 4:
-            #self.connect(self.ok_button, QtCore.SIGNAL('clicked()'), self.on_ok)
         self.set_button.clicked.connect(self.on_set)
         self.save_button.clicked.connect(self.on_save)
         self.delete_button.clicked.connect(self.on_delete)
@@ -198,10 +195,10 @@ class CameraWindow(PyDialog):
 #def check_name(cell):
     #text = str(cell.text()).strip()
     #if len(text):
-        #cell.setStyleSheet("QLineEdit{background: white;}")
+        #cell.setStyleSheet(QLINEEDIT_GOOD)
         #return text, True
     #else:
-        #cell.setStyleSheet("QLineEdit{background: red;}")
+        #cell.setStyleSheet(QLINEEDIT_ERROR)
         #return None, False
 
 
@@ -210,7 +207,6 @@ def main():  # pragma: no cover
     # doesn't save the current state as presumably there's been an error
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-
 
     import sys
     # Someone is launching this directly
@@ -234,12 +230,13 @@ def main():  # pragma: no cover
     ]
 
     data = {
-        'cameras' : {'a':amat, 'b':bmat, 'c':cmat},
+        'cameras': {'a': amat, 'b': bmat, 'c': cmat},
     }
     main_window = CameraWindow(data, win_parent=None)
     main_window.show()
     # Enter the main loop
     app.exec_()
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()

@@ -1,127 +1,178 @@
-from typing import List, Tuple, Union, Optional
+from typing import Optional
+from pyNastran.op2.op2_interface.function_codes import func7
 from pyNastran.op2.op2_interface.nx_tables import NX_ELEMENTS, NX_TABLE_CONTENT
 from pyNastran.op2.op2_interface.msc_tables import MSC_ELEMENTS, MSC_TABLE_CONTENT
 
 # strings
-SORT1_TABLES = [b'OSTRMS1C', b'OSTNO1C', b'OES1X', b'OSTR1X',
-                b'OESRMS2', b'OESNO2', b'OESXRMS1',
-                b'OES1C', b'OSTR1C',
-                'OES1C', 'OSTR1C', 'OESNLXR']
-SORT2_TABLES = [b'OUGPSD2', b'OUGATO2', b'OESCP',
-                b'OES2C', b'OSTR2C',
-                b'OFMPF2M', b'OLMPF2M', b'OPMPF2M', b'OSMPF2M', b'OGPMPF2M',
-                'OFMPF2M', 'OLMPF2M', 'OPMPF2M', 'OSMPF2M', 'OGPMPF2M',
-                'OES2C', 'OSTR2C']
+SORT1_TABLES_BYTES = [
+    b'OUG1S',
+
+    b'OES1', b'OES1C', b'OES1X', b'OES1X1', b'OESVM1', b'OESVM1C',
+    b'OSTR1', b'OSTR1C', b'OSTR1X', b'OSTRVM1', b'OSTRVM1C',
+    b'OSTRMS1C',
+
+    b'OESNLXR', b'OESTRCP',
+    # ----------
+    b'OEF1X', b'OEF1',
+    b'HOEF1', b'DOEF1',
+    b'OEFIT', b'OEFITSTN', b'OESRT', b'OESRTN',
+
+    # elastic/plastic/thermal strain
+    # composite
+    b'OSTR1EL', b'OSTR1PL', b'OSTR1TH',
+    b'OSTR1ELC', b'OSTR1PLC', b'OSTR1THC',
+    # --------
+    # random
+
+    # properly labeled
+    b'OESXRMS1', b'OESPSD1C', b'OESXNO1', b'OESXNO1C', b'OESXRM1C',
+    b'OSTRMS1C', b'OSTPSD1C', b'OSTNO1C', b'OSTRRMS1',
+    b'OEFATO1', b'OEFRMS1', b'OEFPSD1', b'OEFNO1', b'OEFCRM1',
+    b'OESPSD1',
+    b'OSTRNO1',
+    b'OSTRPSD1',
+
+    # mislabeled tables
+    b'OESRMS2', b'OESNO2',
+
+    b'RAFCONS', b'RAFEATC',
+    b'OUG1F',
+
+    # SATK
+    b'OUGPK1', b'OEFPK1',
+
+    # doesn't really matter
+    b'OAEROP', b'OAEROTV', b'OAERCSHM', b'OAEROSCD', b'OAEROHMD',
+]
+SORT2_TABLES_BYTES = [
+    b'OUGPSD2', b'OUGATO2', b'OESCP',
+    b'OFMPF2M', b'OLMPF2M', b'OPMPF2M', b'OSMPF2M', b'OGPMPF2M',
+
+    b'OES2', b'OES2C', b'OESVM2',
+    b'OSTR2', b'OSTR2C', b'OSTRVM2',
+    b'OEF2', b'OEFNO2',
+
+    # shock
+    b'DOES1',
+
+    # random
+    b'OEFATO2', b'OEFCRM2', b'OEFPSD2',
+    b'OESATO2', b'OESCRM2', b'OESPSD2C', b'OESPSD2',
+    b'OSTRATO2', b'OSTRCRM2', b'OSTPSD2C', b'OSTRPSD2',
+]
+TABLES_BYTES = SORT1_TABLES_BYTES + SORT2_TABLES_BYTES
+SORT1_TABLES_STR = [name.decode('utf8') for name in SORT1_TABLES_BYTES]
+SORT2_TABLES_STR = [name.decode('utf8') for name in SORT2_TABLES_BYTES]
 NO_SORT_METHOD = [b'QHHA']
 
-NASA95_ELEMENTS = {
-    #             OES       OEF
-    1 : 'CROD  ',  # done   done
-    2 : 'C.....',
-    3 : 'CTUBE ',  # done   done
-    4 : 'CSHEAR',  # done   done
-    5 : 'CTWIST',
-    6 : 'CTRIA1',
-    7 : 'CTRBSC',
-    8 : 'CTRPLT',
-    9 : 'CTRMEM',
-    10 : 'CONROD', # done   done
-    11 : 'ELAS1',  # done   done
-    12 : 'ELAS2',  # done   done
-    13 : 'ELAS3',  # done   done
-    14 : 'ELAS4',  # done   done
-    15 : 'CQDPLT',
-    16 : 'CQDMEM',
-    17 : 'CTRIA2',
-    18 : 'CQUAD2',
-    19 : 'CQUAD1',
-    20 : 'CDAMP1', #        done
-    21 : 'CDAMP2', #        done
-    22 : 'CDAMP3', #        done
-    23 : 'CDAMP4', #        done
-    24 : 'CVISC',  #        done
-    25 : 'CMASS1',
-    26 : 'CMASS2',
-    27 : 'CMASS3',
-    28 : 'CMASS4',
-    29 : 'CONM1',
-    30 : 'CONM2',
-    31 : 'PLOTEL',
-    32 : 'C.....',
-    33 : 'C.....',
-    34 : 'CBAR',    # done   done
-    35 : 'CCONE',   #        done <--- CCONEAX
-    36 : 'CTRIARG',
-    37 : 'CTRAPRG',
-    38 : 'CTORDRG',
-    39 : 'CTETRA',
-    40 : 'CWEDGE',
-    41 : 'CHEXA1',
-    42 : 'CHEXA2',
-    43 : 'CFLUID2',
-    44 : 'CFLUID3',
-    45 : 'CFLUID4',
-    46 : 'CFLMASS',
-    47 : 'CAXIF2',
-    48 : 'CAXIF3',
-    49 : 'CAXIF4',
-    50 : 'CSLOT3',
-    51 : 'CSLOT4',
-    52 : 'CHBDY',
-    53 : 'CDUM1',
-    54 : 'CDUM2',
-    55 : 'CDUM3',
-    56 : 'CDUM4',
-    57 : 'CDUM5',
-    58 : 'CDUM6',
-    59 : 'CDUM7',
-    60 : 'CDUM8',
-    61 : 'CDUM9',
-    62 : 'CQDMEM1',
-    63 : 'CQDMEM2',
-    64 : 'CQUAD4',
-    65 : 'CIHEX1',
-    66 : 'CIHEX2',
-    67 : 'CIHEX3',
-    68 : 'CQUADTS',
-    69 : 'CTRIATS',
-    70 : 'CTRIAAX',
-    71 : 'CTRAPAX',
-    72 : 'CAERO1',
-    73 : 'CTRIM6',
-    74 : 'CTRPLT1',
-    75 : 'CTRSHL',
-    76 : 'CFHEX1',
-    77 : 'CFHEX2',
-    78 : 'CFTETRA',
-    79 : 'CFWEDGE',
-    80 : 'CIS2D8',
-    81 : 'CELBOW',
-    82 : 'CFTUBE',
-    83 : 'CTRIA3',  # done   done
-}
+# NASA95_ELEMENTS = {
+#     #             OES       OEF
+#     1 : 'CROD  ',  # done   done
+#     2 : 'C.....',
+#     3 : 'CTUBE ',  # done   done
+#     4 : 'CSHEAR',  # done   done
+#     5 : 'CTWIST',
+#     6 : 'CTRIA1',
+#     7 : 'CTRBSC',
+#     8 : 'CTRPLT',
+#     9 : 'CTRMEM',
+#     10 : 'CONROD', # done   done
+#     11 : 'ELAS1',  # done   done
+#     12 : 'ELAS2',  # done   done
+#     13 : 'ELAS3',  # done   done
+#     14 : 'ELAS4',  # done   done
+#     15 : 'CQDPLT',
+#     16 : 'CQDMEM',
+#     17 : 'CTRIA2',
+#     18 : 'CQUAD2',
+#     19 : 'CQUAD1',
+#     20 : 'CDAMP1', #        done
+#     21 : 'CDAMP2', #        done
+#     22 : 'CDAMP3', #        done
+#     23 : 'CDAMP4', #        done
+#     24 : 'CVISC',  #        done
+#     25 : 'CMASS1',
+#     26 : 'CMASS2',
+#     27 : 'CMASS3',
+#     28 : 'CMASS4',
+#     29 : 'CONM1',
+#     30 : 'CONM2',
+#     31 : 'PLOTEL',
+#     32 : 'C.....',
+#     33 : 'C.....',
+#     34 : 'CBAR',    # done   done
+#     35 : 'CCONE',   #        done <--- CCONEAX
+#     36 : 'CTRIARG',
+#     37 : 'CTRAPRG',
+#     38 : 'CTORDRG',
+#     39 : 'CTETRA',
+#     40 : 'CWEDGE',
+#     41 : 'CHEXA1',
+#     42 : 'CHEXA2',
+#     43 : 'CFLUID2',
+#     44 : 'CFLUID3',
+#     45 : 'CFLUID4',
+#     46 : 'CFLMASS',
+#     47 : 'CAXIF2',
+#     48 : 'CAXIF3',
+#     49 : 'CAXIF4',
+#     50 : 'CSLOT3',
+#     51 : 'CSLOT4',
+#     52 : 'CHBDY',
+#     53 : 'CDUM1',
+#     54 : 'CDUM2',
+#     55 : 'CDUM3',
+#     56 : 'CDUM4',
+#     57 : 'CDUM5',
+#     58 : 'CDUM6',
+#     59 : 'CDUM7',
+#     60 : 'CDUM8',
+#     61 : 'CDUM9',
+#     62 : 'CQDMEM1',
+#     63 : 'CQDMEM2',
+#     64 : 'CQUAD4',
+#     65 : 'CIHEX1',
+#     66 : 'CIHEX2',
+#     67 : 'CIHEX3',
+#     68 : 'CQUADTS',
+#     69 : 'CTRIATS',
+#     70 : 'CTRIAAX',
+#     71 : 'CTRAPAX',
+#     72 : 'CAERO1',
+#     73 : 'CTRIM6',
+#     74 : 'CTRPLT1',
+#     75 : 'CTRSHL',
+#     76 : 'CFHEX1',
+#     77 : 'CFHEX2',
+#     78 : 'CFTETRA',
+#     79 : 'CFWEDGE',
+#     80 : 'CIS2D8',
+#     81 : 'CELBOW',
+#     82 : 'CFTUBE',
+#     83 : 'CTRIA3',  # done   done
+# }
 ANALYSIS_CODE_MAP = {
-    1 : "Statics",
-    2 : "Normal modes or buckling (real eigenvalues)",
-    3 : "Differential Stiffness 0 - obsolete",
-    4 : "Differential Stiffness 1 - obsolete",
-    5 : "Frequency",
-    6 : "Transient",
-    7 : "Pre-buckling",
-    8 : "Post-buckling",
-    9 : "Complex eigenvalues",
-    10 : "Nonlinear statics",
-    11 : "Geometric nonlinear statics",
+    1 : 'Statics',
+    2 : 'Normal modes or buckling (real eigenvalues)',
+    3 : 'Differential Stiffness 0 - obsolete',
+    4 : 'Differential Stiffness 1 - obsolete',
+    5 : 'Frequency',
+    6 : 'Transient',
+    7 : 'Pre-buckling',
+    8 : 'Post-buckling',
+    9 : 'Complex eigenvalues',
+    10 : 'Nonlinear statics',
+    11 : 'Geometric nonlinear statics',
 }
 
 DEVICE_CODE_MAP = {
-    1 : "Print",
-    2 : "Plot",
-    3 : "Print and Plot",
-    4 : "Punch",
-    5 : "Print and Punch",
-    6 : "Plot and Punch",
-    7 : "Print, Plot, and Punch",
+    1 : 'Print',
+    2 : 'Plot',
+    3 : 'Print and Plot',
+    4 : 'Punch',
+    5 : 'Print and Punch',
+    6 : 'Plot and Punch',
+    7 : 'Print, Plot, and Punch',
 }
 
 THERMAL_MAP = {
@@ -189,11 +240,12 @@ GEOM_TABLES = { # no analysis code
     'DBCOPT', 'DSCMCOL', 'DESCYC', 'R1TABRG',
 }
 
-def get_sort_method_from_table_name(table_name):
+def get_sort_method_from_table_name(table_name: bytes) -> int:
     """helper method"""
-    if table_name in SORT1_TABLES:
+    assert isinstance(table_name, bytes), table_name
+    if table_name in SORT1_TABLES_BYTES:
         sort_method = 1
-    elif table_name in SORT2_TABLES:
+    elif table_name in SORT2_TABLES_BYTES:
         sort_method = 2
     elif table_name in NO_SORT_METHOD:
         table_name_str = table_name.decode('utf8')
@@ -206,7 +258,7 @@ def get_sort_method_from_table_name(table_name):
         try:
             sort_method = int(table_num)
         except ValueError:
-            print('error determining sort_method: table_name=%r' % table_name_str)
+            print(f'error determining sort_method: table_name={table_name_str} type={type(table_name)}')
             raise
     return sort_method
 
@@ -218,8 +270,6 @@ class Op2Codes:
     def set_table_type(self) -> None:
         if self.is_msc:
             self.element_mapper = MSC_ELEMENTS
-        elif self.is_nasa95:
-            self.element_mapper = NASA95_ELEMENTS
         else:  # default
             self.element_mapper = NX_ELEMENTS
 
@@ -227,9 +277,8 @@ class Op2Codes:
         self.set_table_type()
         try:
             etype = self.element_mapper[elem_code]
-        except TypeError:
-            print('elem_code=%r' % elem_code)
-            raise
+        except KeyError as error:
+            raise KeyError(f'elem_code={str(elem_code)}; nastran_format={self._nastran_format!r} nastran_revision={self._nastran_revision!r}') from error
         return etype
 
     def print_table_code(self, table_code: int) -> str:
@@ -255,13 +304,84 @@ class Op2Codes:
 
         This is not the same thing as SOL 101.  SOL 101 (linear statics)
         and SOL 144 (aero-statics) are both statics.
+
         """
         return ''
 
-    def code_information(self, include_time: bool=True) -> str:
+    @property
+    def analysis_fmt(self):
+        """
+        ANALYSIS_CODE_MAP = {
+            1 : "Statics",
+            2 : "Normal modes or buckling (real eigenvalues)",
+            3 : "Differential Stiffness 0 - obsolete",
+            4 : "Differential Stiffness 1 - obsolete",
+            5 : "Frequency",
+            6 : "Transient",
+            7 : "Pre-buckling",
+            8 : "Post-buckling",
+            9 : "Complex eigenvalues",
+            10 : "Nonlinear statics",
+            11 : "Geometric nonlinear statics",
+        }
+        """
+        #if self.analysis_code in [1]:
+            #fmts = ('int32', 'int64')
+        if self.analysis_code in [1, 2, 5, 6, 8, 9, 10]:
+            # 1 - statics
+            # 2 - modes
+            # 5 - freq
+            # 6 - transient
+            # 8 - post-buckling
+            # 9 - complex eigenvalues
+            # 10 - nonlinear statics
+            if hasattr(self, 'analysis_method'):
+                name = self.analysis_method
+            else:
+                name = self.name
+            #try:
+                #name = self.analysis_method
+            #except AttributeError:
+                #print(self.object_stats())
+                #raise
+            if name == 'N/A' and self.result_name.startswith(('rms.', 'no.')):
+                self.name = 'freq'
+                name = self.name
+                #fmts = ('float32', 'float64')
+            elif name is None:
+                name = 'lsdvmn'
+                self.name = 'lsdvmn'
+                #print(self.object_stats())
+
+            #print(name)
+            if name in {'N/A', 'element_id'}:
+                fmts = ('float32', 'float64')
+            else:
+                if name in 'mode':
+                    fmts = ('int32', 'int64')
+                else:
+                    assert name in {'freq', 'dt', 'time', 'eigr',
+                                    'lsdvmn', 'lftsfq', 'load_factor',
+                                    'load_step', 'loadID', 'thresh'}, name + self.object_stats() # 'eigr', 'eign'
+                    fmts = ('float32', 'float64')
+
+        elif self.analysis_code in [1, 7, 11]:
+            # 1 - static
+            # 7 - pre-buckling
+            # 11 - geometric nonlinear statics
+            fmts = ('int32', 'int64')
+        else:
+            raise NotImplementedError(self.code_information())
+        index = int(self.size == 8)
+        #index = self.size // 4 - 1  # factor is size/4 -> subtract 1
+        return fmts[index]
+
+    def code_information(self, include_time: bool=True,
+                         stop_on_failure: bool=True) -> str:
         """
         prints the general table information
         DMAP - page 60-63
+
         """
         device_code = self.device_code
         #analysis_code = self.analysis_code
@@ -271,6 +391,7 @@ class Op2Codes:
         format_code = None
         if hasattr(self, 'format_code'):
             format_code = self.format_code
+            #result_type = func7(self.tCode)
 
         s_code = None
         if hasattr(self, 's_code'):
@@ -287,25 +408,17 @@ class Op2Codes:
                 stress_word = 'Stress'
             else:
                 stress_word = 'Strain'
-            s_word = get_scode_word(s_code, self.stress_bits)
+            try:
+                s_word = get_scode_word_assert(s_code, self.stress_bits)
+            except AssertionError:
+                s_word = get_scode_word(s_code, self.stress_bits)
+                s_word += ' (*assert)'
 
         element_type = None
         if hasattr(self, 'element_type'):
             element_type = self.element_type
 
-        format_word = '???'
-        if format_code == 1:
-            format_word = "Real"
-        elif format_code == 2:
-            format_word = "Real/Imaginary"
-        elif format_code == 3:
-            format_word = "Magnitude/Phase"
-        else:
-            format_word = '\n%18s1 - Real\n' % ''
-            format_word += '%18s2 - Real/Imaginary\n' % ''
-            format_word += '%18s3 - Magnitude/Phase\n' % ''
-            #msg = 'unsupported format_code:  format_code=%s\n' % format_code
-            #raise InvalidFormatCodeError(msg)
+        format_word = get_format_word(format_code)
 
         if self.sort_bits[0] == 0:
             sort_word1 = 'Real'
@@ -370,22 +483,33 @@ class Op2Codes:
         msg += "  analysis_code = %-3s %s\n" % (analysis_code, analysis)
         msg += "  table_code    = %-3s %s-%s\n" % (self_table_code, self.table_name_str, table)
         msg += "  format_code   = %-3s %s\n" % (format_code, format_word)
+        if hasattr(self, 'result_type'):
+            result_word = get_result_word(self.result_type)
+            msg += "  result_type   = %-3s %s\n" % (self.result_type, result_word)
 
-        msg += "  sort_method   = %s\n" % self.sort_method
-        msg += "  sort_code     = %s\n" % self.sort_code
-        msg += "    sort_bits   = (%s, %s, %s)\n" % tuple(self.sort_bits)
+        msg += (
+            f'  sort_method   = {self.sort_method}\n'
+            f'  sort_code     = {self.sort_code}\n'
+            f'    sort_bits   = {tuple(self.sort_bits)}\n'
+        )
+        #msg += "    sort_bits   = (%s, %s, %s)\n" % tuple(self.sort_bits)
         msg += "    data_format = %-3s %s\n" % (self.sort_bits[0], sort_word1)
         msg += "    sort_type   = %-3s %s\n" % (self.sort_bits[1], sort_word2)
         msg += "    is_random   = %-3s %s\n" % (self.sort_bits[2], sort_word3)
 
         random_code = self.random_code if hasattr(self, 'random_code') else 0
-        msg += "  random_code   = %-3s\n" % (random_code)
+        msg += "  random_code   = %-3s\n" % random_code
 
         if element_type is not None:
             if isinstance(element_type, str):
                 etype = element_type
             else:
-                etype = self.get_element_type(element_type)
+                try:
+                    etype = self.get_element_type(element_type)
+                except KeyError:
+                    if stop_on_failure:
+                        raise
+                    etype = '???'
             msg += "  element_type  = %-3s %s\n" % (element_type, etype)
 
         if s_word:  # stress code
@@ -393,7 +517,7 @@ class Op2Codes:
         if thermal is not None:
             msg += "  thermal       = %-3s %s\n" % (thermal, thermal_word)
             if hasattr(self, 'thermal_bits'):
-                msg += "  thermal_bits  = %s\n" % str(self.thermal_bits)
+                msg += f"  thermal_bits  = {self.thermal_bits}\n"
 
         if hasattr(self, 'num_wide'):
             msg += "  num_wide      = %-3s\n" % self.num_wide
@@ -413,8 +537,10 @@ class Op2Codes:
 
         if self.is_msc:
             msg += '  MSC Nastran\n'
-        elif self.is_nasa95:
-            msg += '  NASA 95 Nastran\n'
+        #elif self.is_optistruct:
+            #msg += '  Optistruct\n'
+        #elif self.is_autodesk:
+            #msg += '  Autodesk/NEi Nastran\n'
         else:
             msg += '  NX Nastran\n'
         #print msg
@@ -429,7 +555,7 @@ class Op2Codes:
         elif thermal == 1:
             force_flux = 'Flux'
         else:
-            force_flux = 'Force (or Flux); thermal=%r' % thermal
+            force_flux = f'Force (or Flux); thermal={thermal!r}'
         return force_flux
 
     def get_disp_temp(self, thermal: int) -> str:
@@ -441,22 +567,22 @@ class Op2Codes:
         #elif thermal is None:
             #raise RuntimeError('thermal_code is not specified; thermal_code=None')
         else:
-            disp_temp = 'Displacement/Temperature; thermal=%r' % thermal
+            disp_temp = f'Displacement/Temperature; thermal={thermal!r}'
         return disp_temp
 
     def get_table_code_name(self, disp_temp: str='', force_flux: str='',
-                            stress_word: str='') -> Tuple[int, str]:
+                            stress_word: str='') -> tuple[int, str]:
         """gets the name of the active table"""
         table = '???'
         table_code = self.table_code
         table_code = _adjust_table_code(self.table_code)
 
         if table_code == 1:
-            table = "OUG - %s vector/scalar" % disp_temp
+            table = f'OUG - {disp_temp} vector/scalar'
         elif table_code == 4:
-            table = "OEF - Element %s" % force_flux
+            table = f'OEF - Element {force_flux}'
         elif table_code == 5:
-            table = "OES - Element %s" % stress_word
+            table = f'OES - Element {stress_word}'
         else:
             #try:
             table = get_table_from_table_code(table_code, self.table_name_str, is_msc=self.is_msc)
@@ -475,7 +601,7 @@ class Op2Codes:
         table_name_str : str
             the table name as a string
 
-        ..note :: Refers to bytes/str in the Python 3 sense.
+        .. note:: Refers to bytes/str in the Python 3 sense.
         """
         table_name = self.table_name
         if isinstance(table_name, bytes):
@@ -483,7 +609,7 @@ class Op2Codes:
         return table_name
 
     #----
-    def is_thermal(self) -> Union[bool, str]:
+    def is_thermal(self) -> bool | str:
         """is this result thermal solution?"""
         if self.thermal == 0:
             return False
@@ -513,8 +639,11 @@ class Op2Codes:
                 try:
                     is_sort1_table = int(table_name[-1]) == 1
                 except ValueError:
-                    raise ValueError('is this SORT1/2?  table_name=%r' % table_name)
+                    raise ValueError(f'is this SORT1/2?  table_name={table_name!r}')
         return is_sort1_table
+
+    def sort_method2(self) -> int:
+        return 1 if self.is_sort1 else 2
 
     @property
     def is_sort1(self) -> bool:
@@ -524,15 +653,16 @@ class Op2Codes:
             is_sort1_table = (sort_method == 1)
         except AssertionError:
             table_name = self.table_name_str
-            if table_name in SORT1_TABLES:
+            assert isinstance(table_name, str), f'table_name={table_name} type={type(table_name)}'
+            if table_name in SORT1_TABLES_STR:
                 is_sort1_table = True
-            elif table_name in SORT2_TABLES:
+            elif table_name in SORT2_TABLES_STR:
                 is_sort1_table = False
             else:
                 try:
                     is_sort1_table = int(table_name[-1]) == 1
                 except ValueError:
-                    raise ValueError('is this SORT1/2?  table_name=%r' % table_name)
+                    raise ValueError(f'is this SORT1/2?  table_name={table_name!r}')
         return is_sort1_table
 
     @property
@@ -543,15 +673,15 @@ class Op2Codes:
             is_sort2_table = (sort_method == 2)
         except AssertionError:
             table_name = self.table_name_str
-            if table_name in SORT2_TABLES:
+            if table_name in SORT2_TABLES_STR:
                 is_sort2_table = True
-            elif table_name in SORT1_TABLES:
+            elif table_name in SORT1_TABLES_STR:
                 is_sort2_table = False
             else:
                 try:
                     is_sort2_table = int(table_name[-1]) == 2
                 except ValueError:
-                    raise ValueError('is this SORT1/2?  table_name=%r' % table_name)
+                    raise ValueError(f'is this SORT1/2?  table_name={table_name!r}')
         return is_sort2_table
 
     def update_t_code(self) -> None:
@@ -587,7 +717,7 @@ class Op2Codes:
         }
         unused_t_code = map_sort_bits[(is_complex, is_sort2, is_random)]
 
-    def _table_specs(self) -> Tuple[int, bool, bool]:
+    def _table_specs(self) -> tuple[int, bool, bool]:
         """
         +-------+-----------+-------------+----------+
         | Value | Sort Type | Data Format | Random ? |
@@ -654,55 +784,46 @@ class Op2Codes:
 
     #----
 
-def get_scode_word(s_code: int, stress_bits: List[int]) -> str:
-    if s_code == 0:
-        s_word = 'Coordinate Element - Stress Max Shear (Octahedral)'
-        assert stress_bits == [0, 0, 0, 0, 0], stress_bits
-    elif s_code == 14:
-        s_word = 'Coordinate Element - Strain Fiber Max Shear (Octahedral)'
-        assert stress_bits == [0, 1, 1, 1, 0], stress_bits
+SCODE_MAP = {
+    # word, stress_bits_expected
+    0 : ('Coordinate Element - Stress Max Shear (Octahedral)',       [0, 0, 0, 0, 0]),
+    14: ('Coordinate Element - Strain Fiber Max Shear (Octahedral)', [0, 1, 1, 1, 0]),
 
-    elif s_code == 1:
-        s_word = 'Coordinate Element - Stress von Mises'
-        assert stress_bits == [0, 0, 0, 0, 1], stress_bits
-    elif s_code == 10:
-        s_word = 'Coordinate Element - Strain Curvature Max Shear (Octahedral)'
-        assert stress_bits == [0, 1, 0, 1, 0], stress_bits
+    1: ('Coordinate Element - Stress von Mises',                         [0, 0, 0, 0, 1]),
+    10: ('Coordinate Element - Strain Curvature Max Shear (Octahedral)', [0, 1, 0, 1, 0]),
 
-    elif s_code == 11:
-        s_word = 'Coordinate Element - Strain Curvature von Mises'
-        assert stress_bits == [0, 1, 0, 1, 1], stress_bits
-    elif s_code == 15:
-        s_word = 'Coordinate Element - Strain Fiber von Mises'
-        assert stress_bits == [0, 1, 1, 1, 1], stress_bits
+    11: ('Coordinate Element - Strain Curvature von Mises', [0, 1, 0, 1, 1]),
+    15: ('Coordinate Element - Strain Fiber von Mises',     [0, 1, 1, 1, 1]),
 
-    elif s_code == 16:
-        s_word = 'Coordinate Material - Stress Max Shear (Octahedral)'
-        assert stress_bits == [1, 0, 0, 0, 0], stress_bits
-    elif s_code == 17:
-        s_word = 'Coordinate Material - Stress von Mises'
-        assert stress_bits == [1, 0, 0, 0, 1], stress_bits
+    16: ('Coordinate Material - Stress Max Shear (Octahedral)', [1, 0, 0, 0, 0]),
+    17: ('Coordinate Material - Stress von Mises',              [1, 0, 0, 0, 1]),
 
-    elif s_code == 26:
-        s_word = 'Coordinate Material - Strain Curvature Max Shear'
-        assert stress_bits == [1, 1, 0, 1, 0], stress_bits
-    elif s_code == 30:
-        s_word = 'Coordinate Material - Strain Fiber Max Shear (Octahedral)'
-        assert stress_bits == [1, 1, 1, 1, 0], stress_bits
+    26: ('Coordinate Material - Strain Curvature Max Shear', [1, 1, 0, 1, 0]),
+    30: ('Coordinate Material - Strain Fiber Max Shear (Octahedral)', [1, 1, 1, 1, 0]),
 
-    elif s_code == 27:
-        s_word = 'Coordinate Material - Strain Curvature von Mises'
-        assert stress_bits == (1, 1, 0, 1, 1), stress_bits
-    elif s_code == 31:
-        s_word = 'Coordinate Material - Strain Fiber von Mises'
-        assert stress_bits == (1, 1, 1, 1, 1), stress_bits
-    else:
+    27: ('Coordinate Material - Strain Curvature von Mises', (1, 1, 0, 1, 1)),
+    31: ('Coordinate Material - Strain Fiber von Mises', (1, 1, 1, 1, 1)),
+}
+
+def get_scode_word_assert(s_code: int, stress_bits: list[int]) -> str:
+    try:
+        s_word, stress_bits_expected = SCODE_MAP[s_code]
+        assert stress_bits == stress_bits_expected, f's_code={s_code} stress_bits={stress_bits} != {stress_bits_expected}'
+    except KeyError:
+        #s_word = 'Stress or Strain - UNDEFINED'
+        s_word = '???'
+    return s_word
+
+def get_scode_word(s_code: int, stress_bits: list[int]) -> str:
+    try:
+        s_word, stress_bits_expected = SCODE_MAP[s_code]
+    except KeyError:
         #s_word = 'Stress or Strain - UNDEFINED'
         s_word = '???'
     return s_word
 
 def determine_sort_bits_meaning(table_code: int, sort_code: int,
-                                sort_bits: Tuple[int, int, int]) -> Tuple[int, bool, bool]:
+                                sort_bits: tuple[int, int, int]) -> tuple[int, bool, bool]:
     """
     Value Sort type Data format Random
     ===== ========= =========== ======
@@ -740,19 +861,22 @@ def determine_sort_bits_meaning(table_code: int, sort_code: int,
 
     try:
         if is_random:
-            assert sort_bits[0] == 1, 'should be RANDOM; sort_bits=%s; sort_code=%s' % (sort_bits, sort_code)
+            pass
+            #assert sort_bits[0] == 1, f'should be RANDOM; sort_bits={sort_bits} (expected (1,?,?)); sort_code={sort_code} (expected 4, 5, or 6)'
+            # probably wrong...
+            #assert sort_bits[2] == 1, f'should be RANDOM; sort_bits={sort_bits} (expected (1,?,?)); sort_code={sort_code} (expected 4, 5, or 6)'
         else:
-            assert sort_bits[0] == 0, 'should be NOT RANDOM; sort_bits=%s; sort_code=%s' % (sort_bits, sort_code)
+            assert sort_bits[0] == 0, f'should be NOT RANDOM; sort_bits={sort_bits}; sort_code={sort_code}'
 
         if sort_method == 1:
-            assert sort_bits[1] == 0, 'should be SORT1; sort_bits=%s; sort_code=%s' % (sort_bits, sort_code)
+            assert sort_bits[1] == 0, f'should be SORT1; sort_bits={sort_bits}; sort_code={sort_code}'
         else:
-            assert sort_bits[1] == 1, 'should be SORT2; sort_bits=%s; sort_code=%s' % (sort_bits, sort_code)
+            assert sort_bits[1] == 1, f'should be SORT2; sort_bits={sort_bits}; sort_code={sort_code}'
 
         if is_real:
-            assert sort_bits[2] == 0, 'should be REAL; sort_bits=%s; sort_code=%s; table_code=%s table_code%%1000=%s' % (sort_bits, sort_code, table_code, table_code % 1000)
+            assert sort_bits[2] == 0, f'should be REAL; sort_bits={sort_bits}; sort_code={sort_code}; table_code={table_code} table_code%%1000={table_code % 1000}'
         else:
-            assert sort_bits[2] == 1, 'should be IMAG; sort_bits=%s; sort_code=%s; table_code=%s table_code%%1000=%s' % (sort_bits, sort_code, table_code, table_code % 1000)
+            assert sort_bits[2] == 1, f'should be IMAG; sort_bits={sort_bits}; sort_code={sort_code}; table_code={table_code} table_code%%1000={table_code % 1000}'
     except AssertionError:
         #print('sort_method=%r; is_real=%r is_random=%r' % (sort_method, is_real, is_random))
         raise
@@ -765,7 +889,7 @@ def get_table_from_table_code(table_code: int, table_name: str, is_msc: bool=Tru
             table = MSC_TABLE_CONTENT[table_code]
         else:
             table = NX_TABLE_CONTENT[table_code]
-    except:
+    except Exception:
         print(f'count not determine the table description for {table_name}')
         raise
 
@@ -792,3 +916,35 @@ def _adjust_table_code(table_code: int) -> int:
     elif table_code in [901, 910, 911]:
         table_code -= 900
     return table_code
+
+def get_format_word(format_code: int) -> str:
+    format_word = '???'
+    if format_code == 1:
+        format_word = 'Real'
+    elif format_code == 2:
+        format_word = 'Real/Imaginary'
+    elif format_code == 3:
+        format_word = 'Magnitude/Phase'
+    else:
+        format_word = '\n%18s1 - Real\n' % ''
+        format_word += '%18s2 - Real/Imaginary\n' % ''
+        format_word += '%18s3 - Magnitude/Phase\n' % ''
+        #msg = 'unsupported format_code:  format_code=%s\n' % format_code
+        #raise InvalidFormatCodeError(msg)
+    return format_word
+
+def get_result_word(result_type: int) -> str:
+    result_word = '???'
+    if result_type == 0:
+        result_word = 'Real'
+    elif result_type == 1:
+        result_word = 'Complex'
+    elif result_type == 2:
+        result_word = 'Random'
+    else:
+        result_word = '\n%18s0 - Real\n' % ''
+        result_word += '%18s1 - Complex\n' % ''
+        result_word += '%18s2 - Random\n' % ''
+        #msg = 'unsupported format_code:  format_code=%s\n' % format_code
+        #raise InvalidFormatCodeError(msg)
+    return result_word

@@ -8,27 +8,114 @@ This file defines the OUG Table, which contains:
    - FLUX = ALL
 
 """
+from __future__ import annotations
+from struct import Struct
+from typing import Any, TYPE_CHECKING
 import numpy as np
-from pyNastran.op2.op2_interface.op2_common import OP2Common
+from pyNastran.op2.op2_interface.op2_reader import mapfmt
 
+from pyNastran.op2.tables.utils import get_is_slot_saved
+from pyNastran.op2.tables.oug.oug import get_shock_prefix_postfix
+from pyNastran.op2.tables.oqg_constraintForces.separation_distance import (
+    SeparationDistanceArray)
 from pyNastran.op2.tables.oqg_constraintForces.oqg_spc_forces import (
     RealSPCForcesArray, ComplexSPCForcesArray,)
 from pyNastran.op2.tables.oqg_constraintForces.oqg_mpc_forces import (
     RealMPCForcesArray, ComplexMPCForcesArray,)
+from pyNastran.op2.tables.oqg_constraintForces.oqg_contact_forces import RealContactForcesArray
 from pyNastran.op2.tables.oqg_constraintForces.oqg_thermal_gradient_and_flux import (
     RealTemperatureGradientAndFluxArray)
+from pyNastran.op2.result_objects.contact_traction_and_pressure import RealContactTractionAndPressureArray
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.op2.op2 import OP2
 
+class OQG:
+    def __init__(self, op2: OP2):
+        self.op2 = op2
 
-class OQG(OP2Common):
-    def __init__(self):
-        OP2Common.__init__(self)
+    def _read_opsdi1_3(self, data: bytes, ndata: int) -> None:
+        """Initial separation distance"""
+        op2 = self.op2
+        op2.to_nx(f' because table_name={op2.table_name} was found')
+        self._read_oqg1_3(data, ndata)
 
-    def _read_oqg1_3(self, data, ndata):
-        self.nonlinear_factor = np.nan #None
-        self.is_table_1 = True
-        self.is_table_2 = False
-        unused_three = self.parse_approach_code(data)
-        self.words = [
+    def _read_opsdi1_4(self, data: bytes, ndata: int) -> int:
+        """Initial separation distance"""
+        op2 = self.op2
+        return self._read_opsds1_intial_final_4(
+            data, ndata,
+            'separation_initial',
+            op2.op2_results.separation_initial,
+            SeparationDistanceArray)
+
+    def _read_opsds1_3(self, data: bytes, ndata: int) -> None:
+        """Final separation distance"""
+        op2 = self.op2
+        op2.to_nx(f' because table_name={op2.table_name} was found')
+        self._read_oqg1_3(data, ndata)
+
+    def _read_opsds1_4(self, data: bytes, ndata: int) -> int:
+        """Final separation distance"""
+        op2 = self.op2
+        return self._read_opsds1_intial_final_4(
+            data, ndata,
+            'separation_final',
+            op2.op2_results.separation_final,
+            SeparationDistanceArray)
+
+    def _read_opsds1_intial_final_4(self, data: bytes, ndata: int,
+                                    result_name: str,
+                                    slot: dict[Any, Any],
+                                    obj_vector_real: SeparationDistanceArray) -> int:
+        """
+        $                    D E F O R M E D  C O N T A C T  S E P A R A T I O N  D I S T A N C E
+        $
+        $      POINT ID.   TYPE       DISTANCE
+        $             1      G      1.010815E-01
+        $             6      G      9.858034E-02
+        """
+        op2 = self.op2
+        assert op2.num_wide == 2, op2.code_information()
+        #if op2._results.is_not_saved(result_name):
+            #return ndata
+        #op2._results._found_result(result_name)
+        #slot = op2.get_result(result_name)
+        ntotal = 2 * 4 * op2.factor
+        nnodes = ndata // ntotal
+
+        auto_return, is_vectorized = op2._create_node_object4(
+            nnodes, result_name, slot, obj_vector_real)
+        if auto_return:
+            return nnodes * ntotal
+
+        obj = op2.obj
+        if op2.use_vector and is_vectorized and op2.sort_method == 1:
+            n = nnodes * 4 * op2.num_wide
+            itotal = obj.itotal
+            itotal2 = obj.itotal + nnodes
+            ints = np.frombuffer(data, op2.idtype8)[::2]
+            floats = np.frombuffer(data, op2.fdtype8)[1::2]
+            obj.node = ints // 10
+            obj.data[obj.itime, itotal:itotal2, 0] = floats
+        else:
+            n = 0
+            dt = op2.nonlinear_factor
+            structi = Struct(op2._endian + mapfmt(b'if', op2.size))
+            for unused_i in range(nnodes):
+                edata = data[n:n+ntotal]
+                nid_code, distance = structi.unpack(edata)
+                nid = nid_code // 10
+                obj.add_sort1(dt, nid, distance)
+                n += ntotal
+        return ndata
+
+    def _read_oqg1_3(self, data: bytes, ndata: int) -> None:
+        op2 = self.op2
+        op2.nonlinear_factor = np.nan #None
+        op2.is_table_1 = True
+        op2.is_table_2 = False
+        op2.parse_approach_code(data)  # field 3
+        op2.words = [
             'analysis_code', 'table_code', '???', 'isubcase',
             '???', '???', '???', 'random_code',
             'format_code', 'num_wide', '11', '???',
@@ -38,114 +125,105 @@ class OQG(OP2Common):
             '???', 'Title', 'subtitle', 'label']
 
         ## random code
-        self.random_code = self.add_data_parameter(data, 'random_code', b'i', 8, False)
+        op2.random_code = op2.add_data_parameter(data, 'random_code', b'i', 8, False)
 
         ## format code
-        self.format_code = self.add_data_parameter(data, 'format_code', b'i', 9, False)
+        op2.format_code = op2.add_data_parameter(data, 'format_code', b'i', 9, False)
 
         ## number of words per entry in record
-        self.num_wide = self.add_data_parameter(data, 'num_wide', b'i', 10, False)
+        op2.num_wide = op2.add_data_parameter(data, 'num_wide', b'i', 10, False)
 
         ## acoustic pressure flag
-        self.acoustic_flag = self.add_data_parameter(data, 'acoustic_flag', b'f', 13, False)
+        op2.acoustic_flag = op2.add_data_parameter(data, 'acoustic_flag', b'f', 13, False)
 
         ## thermal flag; 1 for heat transfer, 0 otherwise
-        self.thermal = self.add_data_parameter(data, 'thermal', b'i', 23, False)
+        op2.thermal = op2.add_data_parameter(data, 'thermal', b'i', 23, False)
 
-        if not self.is_sort1:
-            raise NotImplementedError('SORT2; code_info=\n%s' % self.code_information())
-        #assert self.isThermal()==False,self.thermal
+        if not op2.is_sort1:
+            raise NotImplementedError('SORT2; code_info=\n%s' % op2.code_information())
+        #assert self.isThermal()==False,op2.thermal
 
         ## assuming tCode=1
-        if self.analysis_code == 1:   # statics / displacement / heat flux
+        if op2.analysis_code == 1:   # statics / displacement / heat flux
             ## load set number
-            self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
-            self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
-            self.setNullNonlinearFactor()
-        elif self.analysis_code == 2:  # real eigenvalues
+            op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lsdvmn'])
+            op2.setNullNonlinearFactor()
+        elif op2.analysis_code == 2:  # real eigenvalues
             ## mode number
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)
             ## eigenvalue
-            self.eign = self.add_data_parameter(data, 'eign', b'f', 6, False)
+            op2.eign = op2.add_data_parameter(data, 'eign', b'f', 6, False)
             ## mode or cycle .. todo:: confused on the type - F1???
-            self.mode_cycle = self.add_data_parameter(data, 'mode_cycle', b'f', 7, False)
-            self.update_mode_cycle('mode_cycle')
-            self.data_names = self.apply_data_code_value('data_names',
+            op2.mode_cycle = op2.add_data_parameter(data, 'mode_cycle', b'f', 7, False)
+            op2._op2_readers.reader_oug.update_mode_cycle('mode_cycle')
+            op2.data_names = op2.apply_data_code_value('data_names',
                                                          ['mode', 'eign', 'mode_cycle'])
-        #elif self.analysis_code == 3: # differential stiffness
-            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
-            #self.data_names = self.data_code['lsdvmn'] = self.lsdvmn
-        #elif self.analysis_code == 4: # differential stiffness
-            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
-        elif self.analysis_code == 5:   # frequency
+        #elif op2.analysis_code == 3: # differential stiffness
+            #op2.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+            #op2.data_names = op2.data_code['lsdvmn'] = op2.lsdvmn
+        #elif op2.analysis_code == 4: # differential stiffness
+            #op2.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+        elif op2.analysis_code == 5:   # frequency
             ## frequency
-            self.freq = self.add_data_parameter(data, 'freq', b'f', 5)
-            self.data_names = self.apply_data_code_value('data_names', ['freq'])
-        elif self.analysis_code == 6:  # transient
+            op2.freq = op2.add_data_parameter(data, 'freq', b'f', 5)
+            op2.data_names = op2.apply_data_code_value('data_names', ['freq'])
+        elif op2.analysis_code == 6:  # transient
             ## time step
-            self.dt = self.add_data_parameter(data, 'dt', b'f', 5)
-            self.data_names = self.apply_data_code_value('data_names', ['dt'])
-        elif self.analysis_code == 7:  # pre-buckling
+            op2.dt = op2.add_data_parameter(data, 'dt', b'f', 5)
+            op2.data_names = op2.apply_data_code_value('data_names', ['dt'])
+        elif op2.analysis_code == 7:  # pre-buckling
             ## load set number
-            self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
-        elif self.analysis_code == 8:  # post-buckling
+            op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lsdvmn'])
+        elif op2.analysis_code == 8:  # post-buckling
             ## load set number
-            self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
             ## real eigenvalue
-            self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
-            self.data_names = self.apply_data_code_value('data_names', ['lsdvmn', 'eigr'])
-        elif self.analysis_code == 9:  # complex eigenvalues
+            op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 6, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lsdvmn', 'eigr'])
+        elif op2.analysis_code == 9:  # complex eigenvalues
             ## mode number
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)
             ## real eigenvalue
-            self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
+            op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 6, False)
             ## imaginary eigenvalue
-            self.eigi = self.add_data_parameter(data, 'eigi', b'f', 7, False)
-            self.data_names = self.apply_data_code_value('data_names', ['mode', 'eigr', 'eigi'])
-        elif self.analysis_code == 10:  # nonlinear statics
+            op2.eigi = op2.add_data_parameter(data, 'eigi', b'f', 7, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['mode', 'eigr', 'eigi'])
+        elif op2.analysis_code == 10:  # nonlinear statics
             ## load step
-            self.lftsfq = self.add_data_parameter(data, 'lftsfq', b'f', 5)
-            self.data_names = self.apply_data_code_value('data_names', ['lftsfq'])
-        elif self.analysis_code == 11:  # old geometric nonlinear statics
+            op2.lftsfq = op2.add_data_parameter(data, 'lftsfq', b'f', 5)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lftsfq'])
+        elif op2.analysis_code == 11:  # old geometric nonlinear statics
             ## load set number
-            self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
-        elif self.analysis_code == 12:
+            op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lsdvmn'])
+        elif op2.analysis_code == 12:
             # contran ? (may appear as aCode=6)  --> straight from DMAP...grrr...
             ## load set number
-            self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
+            op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lsdvmn'])
         else:
-            msg = 'invalid analysis_code...analysis_code=%s' % self.analysis_code
+            msg = 'invalid analysis_code...analysis_code=%s' % op2.analysis_code
             raise RuntimeError(msg)
 
-        self.fix_format_code()
-        if self.num_wide == 8:
-            self.format_code = 1
-            self.data_code['format_code'] = 1
-        else:
-            #self.fix_format_code()
-            if self.format_code == 1:
-                self.format_code = 2
-                self.data_code['format_code'] = 2
-            assert self.format_code in [2, 3], self.code_information()
+        op2._fix_oug_format_code()
+        op2._parse_thermal_code()
+        if op2.is_debug_file:
+            op2.binary_debug.write('  approach_code  = %r\n' % op2.approach_code)
+            op2.binary_debug.write('  tCode          = %r\n' % op2.tCode)
+            op2.binary_debug.write('  isubcase       = %r\n' % op2.isubcase)
+        op2._read_title(data)
+        op2._write_debug_bits()
 
-        self._parse_thermal_code()
-        if self.is_debug_file:
-            self.binary_debug.write('  approach_code  = %r\n' % self.approach_code)
-            self.binary_debug.write('  tCode          = %r\n' % self.tCode)
-            self.binary_debug.write('  isubcase       = %r\n' % self.isubcase)
-        self._read_title(data)
-        self._write_debug_bits()
-
-    def _read_oqg2_3(self, data, ndata):
+    def _read_oqg2_3(self, data: bytes, ndata: int) -> None:
         """reads the SORT2 version of table 4 (the data table)"""
-        self.nonlinear_factor = np.nan
-        self.is_table_1 = False
-        self.is_table_2 = True
-        unused_three = self.parse_approach_code(data)
-        self.words = [
+        op2 = self.op2
+        op2.nonlinear_factor = np.nan
+        op2.is_table_1 = False
+        op2.is_table_2 = True
+        unused_three = op2.parse_approach_code(data)
+        op2.words = [
             'analysis_code', 'table_code', '???', 'isubcase',
             '???', '???', '???', 'random_code',
             'format_code', 'num_wide', '11', '???',
@@ -155,129 +233,123 @@ class OQG(OP2Common):
             '???', 'Title', 'subtitle', 'label']
 
         ## random code
-        self.random_code = self.add_data_parameter(data, 'random_code', b'i', 8, False)
+        op2.random_code = op2.add_data_parameter(data, 'random_code', b'i', 8, False)
 
         ## format code
-        self.format_code = self.add_data_parameter(data, 'format_code', b'i', 9, False)
+        op2.format_code = op2.add_data_parameter(data, 'format_code', b'i', 9, False)
 
         ## number of words per entry in record
-        self.num_wide = self.add_data_parameter(data, 'num_wide', b'i', 10, False)
+        op2.num_wide = op2.add_data_parameter(data, 'num_wide', b'i', 10, False)
 
         ## acoustic pressure flag
-        self.acoustic_flag = self.add_data_parameter(data, 'acoustic_flag', b'f', 13, False)
+        op2.acoustic_flag = op2.add_data_parameter(data, 'acoustic_flag', b'f', 13, False)
 
         ## thermal flag; 1 for heat transfer, 0 otherwise
-        self.thermal = self.add_data_parameter(data, 'thermal', b'i', 23, False)
+        op2.thermal = op2.add_data_parameter(data, 'thermal', b'i', 23, False)
 
-        #assert self.isThermal() == False, self.thermal
+        #assert self.isThermal() == False, op2.thermal
 
-        self.node_id = self.add_data_parameter(data, 'node_id', b'i', 5, fix_device_code=True)
-        #if self.analysis_code == 1:  # statics / displacement / heat flux
+        self.node_id = op2.add_data_parameter(data, 'node_id', b'i', 5, fix_device_code=True)
+        #if op2.analysis_code == 1:  # statics / displacement / heat flux
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
-            #self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            #self.setNullNonlinearFactor()
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
+            #op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            #op2.setNullNonlinearFactor()
 
-        if self.analysis_code == 1:  # static...because reasons.
-            self._analysis_code_fmt = b'i'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'N/A')
-        elif self.analysis_code == 2:  # real eigenvalues
+        if op2.analysis_code == 1:  # static...because reasons.
+            op2._analysis_code_fmt = b'i'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'N/A')
+        elif op2.analysis_code == 2:  # real eigenvalues
             ## mode number
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
-            self._analysis_code_fmt = b'i'
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)
+            op2._analysis_code_fmt = b'i'
             ## real eigenvalue
-            self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
+            op2.eign = op2.add_data_parameter(data, 'eign', b'f', 6, False)
             ## mode or cycle .. todo:: confused on the type - F1???
-            self.mode_cycle = self.add_data_parameter(data, 'mode_cycle', b'f', 7, False)
-            self.data_names = self.apply_data_code_value('data_names',
-                                                         ['node_id', 'eigr', 'mode_cycle'])
-            self.apply_data_code_value('analysis_method', 'mode')
-        #elif self.analysis_code == 3: # differential stiffness
-            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
-            #self.data_names = self.data_code['lsdvmn'] = self.lsdvmn
-        #elif self.analysis_code == 4: # differential stiffness
-            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
-        elif self.analysis_code == 5:   # frequency
+            op2.mode_cycle = op2.add_data_parameter(data, 'mode_cycle', b'f', 7, False)
+            op2._op2_readers.reader_oug.update_mode_cycle('mode_cycle')
+            op2.data_names = op2.apply_data_code_value('data_names',
+                                                         ['node_id', 'eign', 'mode_cycle'])
+            op2.apply_data_code_value('analysis_method', 'mode')
+        #elif op2.analysis_code == 3: # differential stiffness
+            #op2.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+            #op2.data_names = op2.data_code['lsdvmn'] = op2.lsdvmn
+        #elif op2.analysis_code == 4: # differential stiffness
+            #op2.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+        elif op2.analysis_code == 5:   # frequency
             ## frequency
-            #self.freq = self.add_data_parameter(data, 'freq', b'f', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'freq')
-        elif self.analysis_code == 6:  # transient
+            #op2.freq = op2.add_data_parameter(data, 'freq', b'f', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'freq')
+        elif op2.analysis_code == 6:  # transient
             ## time step
-            #self.dt = self.add_data_parameter(data, 'dt', b'f', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'dt')
-        elif self.analysis_code == 7:  # pre-buckling
+            #op2.dt = op2.add_data_parameter(data, 'dt', b'f', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'dt')
+        elif op2.analysis_code == 7:  # pre-buckling
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'i'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'lsdvmn')
-        elif self.analysis_code == 8:  # post-buckling
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'i'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'lsdvmn')
+        elif op2.analysis_code == 8:  # post-buckling
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'i'
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'i'
             ## real eigenvalue
-            self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
-            self.data_names = self.apply_data_code_value('data_names', ['node_id', 'eigr'])
-            self.apply_data_code_value('analysis_method', 'eigr')
-        elif self.analysis_code == 9:  # complex eigenvalues
+            op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 6, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id', 'eigr'])
+            op2.apply_data_code_value('analysis_method', 'eigr')
+        elif op2.analysis_code == 9:  # complex eigenvalues
             ## mode number
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
-            self._analysis_code_fmt = b'i'
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)
+            op2._analysis_code_fmt = b'i'
             ## real eigenvalue
-            #self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
+            #op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 6, False)
             ## imaginary eigenvalue
-            self.eigi = self.add_data_parameter(data, 'eigi', b'f', 7, False)
-            self.data_names = self.apply_data_code_value('data_names', ['node_id', 'eigr', 'eigi'])
-            self.apply_data_code_value('analysis_method', 'mode')
-        elif self.analysis_code == 10:  # nonlinear statics
+            op2.eigi = op2.add_data_parameter(data, 'eigi', b'f', 7, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id', 'eigr', 'eigi'])
+            op2.apply_data_code_value('analysis_method', 'mode')
+        elif op2.analysis_code == 10:  # nonlinear statics
             ## load step
-            #self.lftsfq = self.add_data_parameter(data, 'lftsfq', b'f', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'lftsfq')
-        elif self.analysis_code == 11:  # old geometric nonlinear statics
+            #op2.lftsfq = op2.add_data_parameter(data, 'lftsfq', b'f', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'lftsfq')
+        elif op2.analysis_code == 11:  # old geometric nonlinear statics
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-        elif self.analysis_code == 12:
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+        elif op2.analysis_code == 12:
             # contran ? (may appear as aCode=6)  --> straight from DMAP...grrr...
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'i'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'lsdvmn')
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'i'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'lsdvmn')
         else:
-            msg = 'invalid analysis_code...analysis_code=%s' % self.analysis_code
+            msg = 'invalid analysis_code...analysis_code=%s' % op2.analysis_code
             raise RuntimeError(msg)
 
-        self.fix_format_code()
-        if self.num_wide == 8:
-            self.format_code = 1
-            self.data_code['format_code'] = 1
-        else:
-            #self.fix_format_code()
-            if self.format_code == 1:
-                self.format_code = 2
-                self.data_code['format_code'] = 2
-            assert self.format_code in [2, 3], self.code_information()
+        op2._fix_oug_format_code()
+        op2._parse_thermal_code()
+        if op2.is_debug_file:
+            op2.binary_debug.write('  approach_code  = %r\n' % op2.approach_code)
+            op2.binary_debug.write('  tCode          = %r\n' % op2.tCode)
+            op2.binary_debug.write('  isubcase       = %r\n' % op2.isubcase)
+        op2._read_title(data)
+        op2._write_debug_bits()
 
-        self._parse_thermal_code()
-        if self.is_debug_file:
-            self.binary_debug.write('  approach_code  = %r\n' % self.approach_code)
-            self.binary_debug.write('  tCode          = %r\n' % self.tCode)
-            self.binary_debug.write('  isubcase       = %r\n' % self.isubcase)
-        self._read_title(data)
-        self._write_debug_bits()
-
-    def _read_oqg_4(self, data, ndata):
+    def _read_oqg_4(self, data: bytes, ndata: int):
         """
         This function is called by:
+
+        spc_forces: MSC=OQGV1, table_code=3;  NX=OQGV1, table_code=3  # not 100%
+        mpc_forces: MSC=OQGV1, table_code=39; NX=OQGM1, table_code=3  # not 100%
 
         MSC : SPC/MPC forces
          - SPC forces table_code = 3  (OQGPSD1 ???)
@@ -292,393 +364,468 @@ class OQG(OP2Common):
         elif table_code == 39:
             table = "OQG - MPC Forces"
 
+        ROQGM1 - relative
+        - table_code = 3
+
         """
+        op2 = self.op2
         result_name = 'constraint_forces'
-        if self._results.is_not_saved(result_name):
+        if op2._results.is_not_saved(result_name):
             return ndata
 
-        if self.table_name in [b'OQGCRM1', b'OQGCRM2']:
-            if self.table_code not in [3, 503]:
-                msg = 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+        if op2.table_name in [b'OQGCRM1', b'OQGCRM2']:
+            if op2.table_code not in [3, 503]:
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
                 raise AssertionError(msg)
             n = self._read_oqg_spc_crm(data, ndata)
-        elif self.table_name in [b'OQGPSD1', b'OQGPSD2']:
-            if self.table_code not in [3, 603]:  # was 3
-                msg = 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
-                raise AssertionError(msg + '\n%s' % self.code_information())
+        elif op2.table_name in [b'OQGPSD1', b'OQGPSD2']:
+            if op2.table_code not in [3, 603]:  # was 3
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
+                raise AssertionError(msg + '\n%s' % op2.code_information())
             n = self._read_oqg_spc_psd(data, ndata)
-        elif self.table_name in [b'OQGATO1', b'OQGATO2']:
-            if self.table_code not in [3, 703]:
-                msg = 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+        elif op2.table_name in [b'OQGATO1', b'OQGATO2']:
+            if op2.table_code not in [3, 703]:
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
                 raise AssertionError(msg)
             n = self._read_oqg_spc_ato(data, ndata)
-        elif self.table_name in [b'OQGRMS1', b'OQGRMS2']:
-            if self.table_code not in [3, 803]:
-                msg = 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+        elif op2.table_name in [b'OQGRMS1', b'OQGRMS2']:
+            if op2.table_code not in [3, 803]:
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
                 raise AssertionError(msg)
             n = self._read_oqg_spc_rms(data, ndata)
-        elif self.table_name in [b'OQGNO1', b'OQGNO2']:
-            if self.table_code not in [3, 903]:
-                msg = 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+        elif op2.table_name in [b'OQGNO1', b'OQGNO2']:
+            if op2.table_code not in [3, 903]:
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
                 raise AssertionError(msg)
             n = self._read_oqg_spc_no(data, ndata)
 
-        elif self.table_code == 3:   # SPC Forces
-            assert self.table_name in [b'OQG1', b'OQGV1', b'OQP1', b'OQG2'], self.code_information()
+        elif op2.table_code == 3:   # SPC Forces
+            assert op2.table_name in [b'OQG1', b'OQGV1', b'OQP1', b'OQG2',
+                                      b'RAREATC', b'RARCONS'], op2.code_information()
             n = self._read_spc_forces(data, ndata)
-        elif self.table_code == 39:  # MPC Forces
-            assert self.table_name in [b'OQMG1', b'OQMG2'], self.code_information() # , b'OQMPSD1', b'OQMPSD2'
+        elif op2.table_code == 39:  # MPC Forces
+            assert op2.table_name in [b'OQMG1', b'OQMG2'], op2.code_information() # , b'OQMPSD1', b'OQMPSD2'
             n = self._read_oqg_mpc_forces(data, ndata)
-        elif self.table_name in [b'RAQEATC', b'RAQCONS']:
-            # self.table_code == 5 and
-            n = self._read_oqg_mpc_forces(data, ndata)
-        else:
-            raise RuntimeError(self.code_information())
+        #elif op2.table_name in [b'RAQEATC', b'RAQCONS']:
+        #    # RAQCONS/RAQEATC are ply strains, not MPC forces (now routed through OES reader)
+        #    n = self._read_oqg_mpc_forces(data, ndata)
+        elif op2.table_code == 63:   # Contact Forces
+            op2.to_nx(f' because table_name={op2.table_name} was found')
+            assert op2.table_name in [b'OQGCF1', b'OQGCF2'], op2.code_information()
+            n = self._oqg_read_contact_forces(data, ndata)
+        elif op2.table_code == 67:   # Glue Forces
+            assert op2.table_name in [b'OQGGF1', b'OQGGF2'], op2.code_information()
+            n = self._oqg_read_glue_forces(data, ndata)
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
         return n
 
-    def _read_spc_forces(self, data, ndata):
+    def _read_spc_forces(self, data: bytes, ndata: int):
         """
         table_code = 3
         """
-        if self.table_name in [b'OQG1', b'OQG2', b'OQGV1', b'OQP1']:
+        op2 = self.op2
+        table_name = op2.table_name
+        if table_name in [b'OQG1', b'OQG2', b'OQGV1', b'OQP1', b'RAREATC', b'RARCONS']:
             pass
         else:  # pragma: no cover
-            msg = 'spc_forces; table_name=%s' % self.table_name
+            msg = 'spc_forces; table_name=%s' % op2.table_name
             raise NotImplementedError(msg)
 
-        if self.thermal == 0:
-            self._setup_op2_subcase('SPCFORCES')
-            if self.table_name in [b'OQG1', b'OQG2']:
+        if op2.thermal == 0:
+            op2._setup_op2_subcase('SPCFORCES')
+            if table_name in [b'OQG1', b'OQG2']:
                 result_name = 'spc_forces'
-            #elif self.table_name in [b'OQGV1']:
+            #elif op2.table_name in [b'OQGV1']:
                 #result_name = 'spc_forces_v'
-            elif self.table_name in [b'OQGV1']:
+            elif table_name in [b'OQGV1', b'OQP1']:
                 result_name = 'spc_forces'
+            elif table_name == b'RAREATC':
+                result_name = 'RAREATC.spc_forces'
+            elif table_name == b'RARCONS':
+                result_name = 'RARCONS.spc_forces'
             else:
-                raise NotImplementedError(self.table_name_str)
-            if self._results.is_not_saved(result_name):
+                raise NotImplementedError(op2.table_name_str)
+
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
                 return ndata
-            self._results._found_result(result_name)
-            storage_obj = getattr(self, result_name)
-            n = self._read_table_vectorized(data, ndata, result_name, storage_obj,
-                                            RealSPCForcesArray, ComplexSPCForcesArray,
-                                            'node', random_code=self.random_code)
-        elif self.thermal == 1:
+            n = op2._read_table_vectorized(data, ndata, result_name, slot,
+                                           RealSPCForcesArray, ComplexSPCForcesArray,
+                                           'node', random_code=op2.random_code)
+        elif op2.thermal == 1:
             #'finite element temperature gradients and fluxes'
-            self._setup_op2_subcase('FLUX')
+            op2._setup_op2_subcase('FLUX')
 
             result_name = 'thermal_gradient_and_flux'
-            storage_obj = self.thermal_gradient_and_flux
-            if self._results.is_not_saved(result_name):
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
                 return ndata
-            self._results._found_result(result_name)
-            n = self._read_table_vectorized(data, ndata, result_name, storage_obj,
+            n = op2._read_table_vectorized(data, ndata, result_name, slot,
                                             RealTemperatureGradientAndFluxArray, None,
-                                            'node', random_code=self.random_code)
-        elif self.thermal == 8:  # 4 ?
-            result_name = 'spc_forces_scaled_response_spectra_nrl'
-            storage_obj = self.spc_forces_scaled_response_spectra_nrl
-            if self._results.is_not_saved(result_name):
+                                            'node', random_code=op2.random_code)
+        elif op2.thermal == 8:  # 4 ?
+            result_name0 = 'spc_forces'
+            prefix, postfix = get_shock_prefix_postfix(op2.thermal)
+            result_name = prefix + result_name0 + postfix
+
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
                 return ndata
-            self._results._found_result(result_name)
-            n = self._read_table_vectorized(data, ndata, result_name, storage_obj,
-                                            RealSPCForcesArray, ComplexSPCForcesArray,
-                                            'node', random_code=self.random_code)
-        else:
-            raise RuntimeError(self.code_information())
-            #msg = 'thermal=%s' % self.thermal
+
+            n = op2._read_table_vectorized(data, ndata, result_name, slot,
+                                           RealSPCForcesArray, ComplexSPCForcesArray,
+                                           'node', random_code=op2.random_code)
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
+            #msg = 'thermal=%s' % op2.thermal
             #return self._not_implemented_or_skip(data, ndata, msg)
         return n
 
-    def _read_oqg_mpc_forces(self, data, ndata):
+    def _read_oqg_mpc_forces(self, data: bytes, ndata: int):
         """
         table_code = 39
         """
-        self._setup_op2_subcase('MPCFORCES')
+        op2 = self.op2
+        op2._setup_op2_subcase('MPCFORCES')
 
-        if self.table_name in [b'OQMG1', b'OQMG2']:
+        if op2.table_name in [b'OQMG1', b'OQMG2']:
             result_name = 'mpc_forces'
-        elif self.table_name == b'RAQEATC':
-            result_name = 'mpc_forces_RAQEATC'
-        elif self.table_name == b'RAQCONS':
-            result_name = 'mpc_forces_RAQCONS'
-        elif self.table_name == b'RAQEATC':
-            result_name = 'mpc_forces_RAQEATC'
+        #elif op2.table_name == b'RAQEATC':
+            #result_name = 'mpc_forces_RAQEATC'
+        #elif op2.table_name == b'RAQCONS':
+            #result_name = 'mpc_forces_RAQCONS'
+        elif op2.table_name == b'ROQGM1':
+            result_name = 'ROQGM1.mpc_forces'
+        #elif op2.table_name == b'RAQCONS':
+        #    result_name = 'RAQCONS.mpc_forces'  # wrong: RAQCONS is ply strains, not MPC forces
+        #elif op2.table_name == b'RAQEATC':
+        #    result_name = 'RAQEATC.mpc_forces'  # wrong: RAQEATC is ply strains, not MPC forces
         else:  # pragma: no cover
-            msg = 'mpc_forces; table_name=%s' % self.table_name
+            msg = 'mpc_forces; table_name=%s' % op2.table_name
             raise NotImplementedError(msg)
 
-        storage_obj = self.get_result(result_name)
-        if self.thermal == 0:
-            if self._results.is_not_saved(result_name):
+        if op2.thermal == 0:
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
                 return ndata
-            self._results._found_result(result_name)
-            n = self._read_table_vectorized(data, ndata, result_name, storage_obj,
-                                            RealMPCForcesArray, ComplexMPCForcesArray,
-                                            'node', random_code=self.random_code)
-        else:
-            raise RuntimeError(self.code_information())
-            #msg = 'thermal=%s' % self.thermal
+            n = op2._read_table_vectorized(data, ndata, result_name, slot,
+                                           RealMPCForcesArray, ComplexMPCForcesArray,
+                                           'node', random_code=op2.random_code)
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
+            #msg = 'thermal=%s' % op2.thermal
             #return self._not_implemented_or_skip(data, ndata, msg)
-        assert isinstance(n, int), 'table_name=%s n=%s' % (self.table_name, n)
+        assert isinstance(n, int), 'table_name=%s n=%s' % (op2.table_name, n)
         return n
 
-    def _read_oqg_spc_psd(self, data, ndata):
+    def _oqg_read_contact_forces(self, data: bytes, ndata: int):
+        """
+        table_code = 63
+        """
+        op2 = self.op2
+        op2.to_nx(f' because table_name={op2.table_name} was found')
+        #op2._setup_op2_subcase('MPCFORCES')
+        if op2.table_name in [b'OQGCF1', b'OQGCF2']:
+            result_name = 'contact_forces'
+        else:  # pragma: no cover
+            msg = 'contact_forces; table_name=%s' % op2.table_name
+            raise NotImplementedError(msg)
+
+        if op2.thermal == 0:
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
+                return ndata
+            n = op2._read_table_vectorized(data, ndata, result_name, slot,
+                                           RealContactForcesArray, None,
+                                           'node', random_code=op2.random_code)
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
+            #msg = 'thermal=%s' % op2.thermal
+            #return self._not_implemented_or_skip(data, ndata, msg)
+        assert isinstance(n, int), 'table_name=%s n=%s' % (op2.table_name, n)
+        return n
+
+    def _oqg_read_glue_forces(self, data: bytes, ndata: int):
+        """
+        table_code = 67
+        """
+        op2 = self.op2
+        op2.to_nx(f' because table_name={op2.table_name} was found')
+        #op2._setup_op2_subcase('MPCFORCES')
+        if op2.table_name in [b'OQGGF1', b'OQGGF2']:
+            result_name = 'glue_forces'
+        else:  # pragma: no cover
+            msg = 'glue_forces; table_name=%s' % op2.table_name
+            raise NotImplementedError(msg)
+
+        if op2.thermal == 0:
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
+                return ndata
+            n = op2._read_table_vectorized(data, ndata, result_name, slot,
+                                           RealContactForcesArray, None,
+                                           'node', random_code=op2.random_code)
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
+            #msg = 'thermal=%s' % op2.thermal
+            #return self._not_implemented_or_skip(data, ndata, msg)
+        assert isinstance(n, int), 'table_name=%s n=%s' % (op2.table_name, n)
+        return n
+
+    def _read_oqg_spc_psd(self, data: bytes, ndata: int):
         """
         table_code = 601/610/611
         """
-        if self.thermal == 0:
-            if self.table_code in [3, 603]:
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [3, 603]:
                 result_name = 'psd.spc_forces'
-            else:
-                raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                raise RuntimeError(op2.code_information())
             obj = RealSPCForcesArray
-        else:
-            raise RuntimeError(self.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                    obj, 'node',
-                                    random_code=self.random_code)
+        n = op2._read_random_table(data, ndata, result_name, slot,
+                                   obj, 'node',
+                                   random_code=op2.random_code)
         return n
 
-    def _read_oqg_spc_rms(self, data, ndata):
+    def _read_oqg_spc_rms(self, data: bytes, ndata: int):
         """
         table_code = 3/???/?10/?11
         """
-        if self.thermal == 0:
-            if self.table_code in [3, 803]:
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [3, 803]:
                 result_name = 'rms.spc_forces'
-                if self._results.is_not_saved(result_name):
+                is_saved, slot = get_is_slot_saved(op2, result_name)
+                if not is_saved:
                     return ndata
-                storage_obj = self.get_result(result_name)
-                self._results._found_result(result_name)
-                n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                            RealSPCForcesArray, 'node',
-                                            random_code=self.random_code)
-            else:
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+                n = op2._read_random_table(data, ndata, result_name, slot,
+                                           RealSPCForcesArray, 'node',
+                                           random_code=op2.random_code)
+            else:  # pragma: no cover
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
         return n
 
-    def _read_oqg_spc_ato(self, data, ndata):
+    def _read_oqg_spc_ato(self, data: bytes, ndata: int):
         """
         table_code = ???
         """
-        if self.thermal == 0:
-            if self.table_code in [3]:
-                assert self.table_name in [b'OQGATO2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [3]:
+                assert op2.table_name in [b'OQGATO1', b'OQGATO2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'ato.spc_forces'
-            #elif self.table_code in [603]:
-                #assert self.table_name in [b'OQGATO2'], 'self.table_name=%r' % self.table_name
+            #elif op2.table_code in [603]:
+                #assert op2.table_name in [b'OQGATO2'], 'op2.table_name=%r' % op2.table_name
                 #result_name = 'psd.mpc_forces'
-            else:
-                print(self.table_code)
-                raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                print(op2.table_code)
+                raise RuntimeError(op2.code_information())
 
-            if self._results.is_not_saved(result_name):
+            is_saved, slot = get_is_slot_saved(op2, result_name)
+            if not is_saved:
                 return ndata
-            self._results._found_result(result_name)
-            storage_obj = self.get_result(result_name)
-            n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                        RealSPCForcesArray, 'node',
-                                        random_code=self.random_code)
-        else:
-            raise RuntimeError(self.code_information())
+            n = op2._read_random_table(data, ndata, result_name, slot,
+                                       RealSPCForcesArray, 'node',
+                                       random_code=op2.random_code)
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
         assert n is not None, n
         return n
 
-    def _read_oqg_spc_crm(self, data, ndata):
+    def _read_oqg_spc_crm(self, data: bytes, ndata: int) -> int:
         """
         table_code = 3/???/?10/?11
         """
-        if self.thermal == 0:
-            if self.table_code in [3, 503]:
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [3, 503]:
                 result_name = 'crm.spc_forces'
-                storage_obj = self.get_result(result_name)
-                if self._results.is_not_saved(result_name):
+                is_saved, slot = get_is_slot_saved(op2, result_name)
+                if not is_saved:
                     return ndata
-                self._results._found_result(result_name)
-                n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                            RealSPCForcesArray, 'node',
-                                            random_code=self.random_code)
-            else:
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+                n = op2._read_random_table(data, ndata, result_name, slot,
+                                           RealSPCForcesArray, 'node',
+                                           random_code=op2.random_code)
+            else:  # pragma: no cover
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
         return n
 
-    def _read_oqg_spc_no(self, data, ndata):
+    def _read_oqg_spc_no(self, data: bytes, ndata: int) -> int:
         """
         table_code = 3/???/?10/?11
         """
-        if self.thermal == 0:
-            if self.table_code in [3, 903]:
-                assert self.table_name in [b'OQGNO1', b'OQGNO2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [3, 903]:
+                assert op2.table_name in [b'OQGNO1', b'OQGNO2'], f'op2.table_name={op2.table_name!r}'
                 result_name = 'no.spc_forces'
                 obj = RealSPCForcesArray
-            else:
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
-
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                    obj, 'node',
-                                    random_code=self.random_code)
+        n = op2._read_random_table(data, ndata, result_name, slot,
+                                   obj, 'node',
+                                   random_code=op2.random_code)
         return n
 
-    def _read_oqg_mpc_psd(self, data, ndata):
+    def _read_oqg_mpc_psd(self, data: bytes, ndata: int) -> int:
         """
         table_code = 603
         """
-        if self.thermal == 0:
-            if self.table_code in [39]:
-                assert self.table_name in [b'OQMPSD1', b'OQMPSD2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [39]:
+                assert op2.table_name in [b'OQMPSD1', b'OQMPSD2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'psd.mpc_forces'
-            elif self.table_code in [603]:
-                assert self.table_name in [b'OQMPSD1', b'OQMPSD2'], 'self.table_name=%r' % self.table_name
+            elif op2.table_code in [603]:
+                assert op2.table_name in [b'OQMPSD1', b'OQMPSD2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'psd.mpc_forces'
-            else:
-                print(self.table_code)
-                raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                print(op2.table_code)
+                raise RuntimeError(op2.code_information())
             obj = RealMPCForcesArray
-        else:
-            raise RuntimeError(self.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
+        n = op2._read_random_table(data, ndata, result_name, slot,
                                     obj, 'node',
-                                    random_code=self.random_code)
+                                    random_code=op2.random_code)
 
         assert n is not None, n
         return n
 
-    def _read_oqg_mpc_ato(self, data, ndata):
+    def _read_oqg_mpc_ato(self, data: bytes, ndata: int) -> int:
         """
         table_code = ???
         """
-        if self.thermal == 0:
-            if self.table_code in [39]:
-                assert self.table_name in [b'OQMATO1', b'OQMATO2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [39]:
+                assert op2.table_name in [b'OQMATO1', b'OQMATO2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'ato.mpc_forces'
                 obj = RealMPCForcesArray
-            #elif self.table_code in [603]:
-                #assert self.table_name in [b''], 'self.table_name=%r' % self.table_name
+            #elif op2.table_code in [603]:
+                #assert op2.table_name in [b''], 'op2.table_name=%r' % op2.table_name
                 #result_name = 'psd.mpc_forces'
-            else:
-                print(self.table_code)
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                print(op2.table_code)
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                    obj, 'node',
-                                    random_code=self.random_code)
-
+        n = op2._read_random_table(data, ndata, result_name, slot,
+                                   obj, 'node',
+                                   random_code=op2.random_code)
         assert n is not None, n
         return n
 
-    def _read_oqg_mpc_crm(self, data, ndata):
+    def _read_oqg_mpc_crm(self, data: bytes, ndata: int) -> int:
         """
         table_code = ???
         """
-        if self.thermal == 0:
-            if self.table_code in [39]:
-                assert self.table_name in [b'OQMCRM1', b'OQMCRM2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [39]:
+                assert op2.table_name in [b'OQMCRM1', b'OQMCRM2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'crm.mpc_forces'
                 obj = RealMPCForcesArray
-            #elif self.table_code in [603]:
-                #assert self.table_name in [b''], 'self.table_name=%r' % self.table_name
+            #elif op2.table_code in [603]:
+                #assert op2.table_name in [b''], 'op2.table_name=%r' % op2.table_name
                 #result_name = 'psd.mpc_forces'
-            else:
-                print(self.table_code)
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                print(op2.table_code)
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                    obj, 'node',
-                                    random_code=self.random_code)
+        n = op2._read_random_table(data, ndata, result_name, slot,
+                                   obj, 'node',
+                                   random_code=op2.random_code)
         assert n is not None, n
         return n
 
-    def _read_oqg_mpc_rms(self, data, ndata):
+    def _read_oqg_mpc_rms(self, data: bytes, ndata: int) -> int:
         """
         table_code = ???
         """
-        if self.thermal == 0:
-            if self.table_code in [39]:
-                assert self.table_name in [b'OQMRMS1', b'OQMRMS2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [39]:
+                assert op2.table_name in [b'OQMRMS1', b'OQMRMS2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'rms.mpc_forces'
                 obj = RealMPCForcesArray
-            #elif self.table_code in [603]:
-                #assert self.table_name in [b''], 'self.table_name=%r' % self.table_name
+            #elif op2.table_code in [603]:
+                #assert op2.table_name in [b''], 'op2.table_name=%r' % op2.table_name
                 #result_name = 'psd.mpc_forces'
-            else:
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                    obj, 'node',
-                                    random_code=self.random_code)
-
+        n = op2._read_random_table(data, ndata, result_name, slot,
+                                   obj, 'node',
+                                   random_code=op2.random_code)
         assert n is not None, n
         return n
 
-    def _read_oqg_mpc_no(self, data, ndata):
+    def _read_oqg_mpc_no(self, data: bytes, ndata: int) -> int:
         """
         table_code = ???
         """
-        if self.thermal == 0:
-            if self.table_code in [39]:
-                assert self.table_name in [b'OQMNO1', b'OQMNO2'], 'self.table_name=%r' % self.table_name
+        op2 = self.op2
+        if op2.thermal == 0:
+            if op2.table_code in [39]:
+                assert op2.table_name in [b'OQMNO1', b'OQMNO2'], 'op2.table_name=%r' % op2.table_name
                 result_name = 'no.mpc_forces'
                 obj = RealMPCForcesArray
-            #elif self.table_code in [603]:
-                #assert self.table_name in [b''], 'self.table_name=%r' % self.table_name
+            #elif op2.table_code in [603]:
+                #assert op2.table_name in [b''], 'op2.table_name=%r' % op2.table_name
                 #result_name = 'psd.mpc_forces'
-            else:
-                raise RuntimeError(self.code_information())
-        else:
-            raise RuntimeError(self.code_information())
+            else:  # pragma: no cover
+                raise RuntimeError(op2.code_information())
+        else:  # pragma: no cover
+            raise RuntimeError(op2.code_information())
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        storage_obj = self.get_result(result_name)
-        n = self._read_random_table(data, ndata, result_name, storage_obj,
-                                    obj, 'node',
-                                    random_code=self.random_code)
+        n = op2._read_random_table(data, ndata, result_name, slot,
+                                   obj, 'node',
+                                   random_code=op2.random_code)
         assert n is not None, n
         return n

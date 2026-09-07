@@ -10,7 +10,7 @@ from pyNastran.bdf.bdf import BDF
 from pyNastran.converters.tecplot.tecplot import Tecplot, Zone
 
 
-def nastran_to_tecplot(model):
+def nastran_to_tecplot(model: BDF) -> Tecplot:
     """assumes sequential nodes"""
     tecplot = Tecplot(log=model.log)
 
@@ -28,18 +28,19 @@ def nastran_to_tecplot(model):
         raise RuntimeError(msg)
     zone = Zone(model.log)
     zone.headers_dict['VARIABLES'] = ['X', 'Y', 'Z']
-    zone.xyz = xyz
+    zone.zone_data = xyz
 
-    nquads = model.card_count['CQUAD4'] if 'CQUAD4' in model.card_count else 0
-    ntets = model.card_count['CTETRA'] if 'CTETRA' in model.card_count else 0
-    #ntrias = model.card_count['CTRIA3'] if 'CTRIA3' in model.card_count else 0
-    nhexas = model.card_count['CHEXA'] if 'CHEXA' in model.card_count else 0
-    nelements = len(model.elements)
+    nquad = model.card_count['CQUAD4'] if 'CQUAD4' in model.card_count else 0
+    ntet = model.card_count['CTETRA'] if 'CTETRA' in model.card_count else 0
+    #ntria = model.card_count['CTRIA3'] if 'CTRIA3' in model.card_count else 0
+    nhexa = model.card_count['CHEXA'] if 'CHEXA' in model.card_count else 0
+    nelement = len(model.elements)
     tris = []
     quads = []
     tets = []
-    hexas = []
+    pyrams = []
     pentas = []
+    hexas = []
     #i = 0
     #pids = np.zeros(nelements, dtype='int32')
     #mids = np.zeros(nelements, dtype='int32')
@@ -51,6 +52,8 @@ def nastran_to_tecplot(model):
             quads.append(element.node_ids)
         elif element.type == 'CTETRA':
             tets.append(element.node_ids[:4])
+        elif element.type == 'CPYRAM':
+            pyrams.append(element.node_ids[:5])
         elif element.type == 'CPENTA':
             pentas.append(element.node_ids[:6])
         elif element.type == 'CHEXA':
@@ -64,69 +67,98 @@ def nastran_to_tecplot(model):
         #i += 1
 
     for etype in unhandled_types:
-        print('ignoring %s' % etype)
+        print(f'ignoring {etype}')
 
     # only supports nodal results
     #tecplot.nodal_results = vstack([pids, mids])#.T
     #print(tecplot.nodal_results.shape)
     #tecplot.result_names = ['PropertyID', 'MaterialID']
 
-    ntris = len(tris)
-    nquads = len(quads)
-    nshells = ntris + nquads
+    ntri = len(tris)
+    nquad = len(quads)
+    tri_elements = np.array(tris, dtype='int32') - 1
+    quad_elements = np.array(quads, dtype='int32') - 1
+    del tris, quads
 
-    ntets = len(tets)
-    npentas = len(pentas)
-    nhexas = len(hexas)
-    nsolids = ntets + npentas + nhexas
-    nnot_tris = nquads
-    nnot_quads = ntris
-    nnot_tets = npentas + nhexas
-    nnot_hexas = ntets + npentas
-    if ntris and not nnot_tris and not nsolids:
-        zone.tri_elements = np.array(tris, dtype='int32')
-    elif nquads and not nnot_quads and not nsolids:
-        zone.quad_elements = np.array(quads, dtype='int32')
-    elif ntets and not nnot_tets and not nshells:
-        zone.tet_elements = np.array(tets, dtype='int32')
-    elif nhexas and not nnot_hexas and not nshells:
-        zone.hexa_elements = np.array(hexas, dtype='int32')
-    elif not nshells:
-        elements = np.zeros((nelements, 8), dtype='int32')
-        if ntets:
-            tets = np.array(tets, dtype='int32')
-            elements[:ntets, :4] = tets
-            elements[:ntets, 4] = elements[:ntets, 3]
-            elements[:ntets, 5] = elements[:ntets, 3]
-            elements[:ntets, 6] = elements[:ntets, 3]
-            elements[:ntets, 7] = elements[:ntets, 3]
-        if npentas:
-            # penta6
-            pentas = np.array(pentas, dtype='int32')
-            elements[ntets:ntets + npentas, :6] = pentas
-            elements[ntets:ntets + npentas, 6] = elements[:ntets, 5]
-            elements[ntets:ntets + npentas, 7] = elements[:ntets, 5]
-        if nhexas:
-            hexas = np.array(hexas, dtype='int32')
-            elements[ntets + npentas:ntets + npentas + nhexas, :6] = pentas
-            elements[ntets + npentas:ntets + npentas + nhexas, 6] = elements[:ntets, 5]
-            elements[ntets + npentas:ntets + npentas + nhexas, 7] = elements[:ntets, 5]
-        zone.hexa_elements = np.array(elements)
-    elif not nsolids:
-        elements = np.zeros((nelements, 4), dtype='int32')
-        tris = np.array(tris, dtype='int32')
-        elements[:ntris, :3] = tris
-        elements[:ntris, 4] = elements[:ntets, 3]
+    ntet = len(tets)
+    npyram = len(pyrams)
+    npenta = len(pentas)
+    nhexa = len(hexas)
+    tet_elements = np.array(tets, dtype='int32') - 1
+    pyram_elements = np.array(pyrams, dtype='int32') - 1
+    penta_elements = np.array(pentas, dtype='int32') - 1
+    hexa_elements = np.array(hexas, dtype='int32') - 1
+    del tets, pyrams, pentas, hexas
 
-        quads = np.array(quads, dtype='int32')
-        elements[ntris:, :] = quads
+    nshell = ntri + nquad
+    nsolid = ntet + npyram + npenta + nhexa
+    nnot_tri = nquad
+    nnot_quad = ntri
+    nnot_tet = npyram + npenta + nhexa
+    # nnot_penta = ntet + npyram + nhexa
+    # nnot_pyram = ntet + npenta + nhexa
+    nnot_hexa = ntet + npyram + npenta
+
+    if ntri and not nnot_tri and not nsolid:
+        zone.tri_elements = tri_elements
+        zone_type = 'FETRIANGLE'
+    elif nquad and not nnot_quad and not nsolid:
+        zone.quad_elements = quad_elements
+        zone_type = 'FEQUADRILATERAL'
+    elif not nshell:
+        if ntet and not nnot_tet:
+            zone.tet_elements = tet_elements
+            zone_type = 'FETETRAHEDRON'
+        elif npenta and not nhexa:
+            zone.hexa_elements = penta_elements
+            zone_type = 'FEBRICK'
+        elif nhexa and not nnot_hexa:
+            zone.hexa_elements = hexa_elements
+            zone_type = 'FEBRICK'
+        elif nsolid:
+            elements = np.zeros((nsolid, 8), dtype='int32')
+            n0 = 0
+            if ntet:
+                elements[:ntet, :4] = tet_elements
+                elements[:ntet, 4:] = tet_elements[:, 3]
+                n0 = ntet
+            if npyram:
+                # pyram5
+                n1 = n0 + npyram
+                elements[n0:n1, :5] = pyram_elements
+                elements[n0:n1, 5:] = pyram_elements[:, 4]
+                n0 = n1
+            if npenta:
+                # penta6
+                n1 = n0 + npenta
+                elements[n0:n1, :6] = penta_elements
+                elements[n0:n1, 6:] = penta_elements[:, 5]
+                n0 = n1
+            if nhexa:
+                n1 = n0 + nhexa
+                elements[n0:n1, :] = hexa_elements
+            zone.hexa_elements = elements
+            zone_type = 'FEBRICK'
+        else:
+            raise RuntimeError((ntet, npyram, npenta, nhexa, nshell))
+
+    elif nshell:
+        elements = np.zeros((nshell, 4), dtype='int32')
+        elements[:ntri, :3] = tri_elements
+        elements[:ntri, 3] = tri_elements[:, 2]
+        elements[ntri:, :] = quad_elements
+        zone.quad_elements = elements
+        zone_type = 'FEQUADRILATERAL'
     else:
         msg = 'Only solids or shells are allowed (not both)\n'
-        msg += '  nsolids=%s nshells=%s\n' % (nsolids, nshells)
-        msg += '  ntris=%s nquads=%s\n' % (ntris, nquads)
-        msg += '  ntets=%s npentas=%s nhexas=%s\n' % (ntets, npentas, nhexas)
+        msg += f'  nsolids={nsolid:d} nshells={nshell:d}\n'
+        msg += f'  ntris={ntri:d} nquads={nquad:d}\n'
+        msg += f'  ntets={ntet:d} npentas={npenta:d} nhexas={nhexa:d}\n'
         raise NotImplementedError(msg)
+    zone.headers_dict['ZONETYPE'] = zone_type
+
     tecplot.zones = [zone]
+    str(zone)
     return tecplot
 
 def nastran_to_tecplot_filename(bdf_filename, tecplot_filename, log=None, debug=False):
@@ -138,7 +170,6 @@ def nastran_to_tecplot_filename(bdf_filename, tecplot_filename, log=None, debug=
     #log.info('card_count = %s' % model.card_count)
     nnodes = len(model.nodes)
     nodes = np.zeros((nnodes, 3), dtype='float64')
-    elements = []
 
     i = 0
     nodeid_to_i_map = {}
@@ -149,45 +180,48 @@ def nastran_to_tecplot_filename(bdf_filename, tecplot_filename, log=None, debug=
         i += 1
     assert len(model.nodes) == i, 'model.nodes=%s i=%s' % (len(model.nodes), i)
 
+    elements_list = []
+    zone_type = 'FEBRICK'
     for unused_eid, element in sorted(model.elements.items()):
         if element.type in ['CTETRA']:
             n1, n2, n3, n4 = element.node_ids
             i1, i2, i3, i4 = (nodeid_to_i_map[n1], nodeid_to_i_map[n2],
                               nodeid_to_i_map[n3], nodeid_to_i_map[n4])
-            elements.append([i1, i2, i3, i4,
-                             i4, i4, i4, i4])
+            elements_list.append([i1, i2, i3, i4,
+                                  i4, i4, i4, i4])
         elif element.type in ['CPENTA']:
             n1, n2, n3, n4, n5, n6 = element.node_ids
             i1, i2, i3, i4, i5, i6 = (
                 nodeid_to_i_map[n1], nodeid_to_i_map[n2], nodeid_to_i_map[n3], nodeid_to_i_map[n4],
                 nodeid_to_i_map[n5], nodeid_to_i_map[n6])
-            elements.append([i1, i2, i3, i4,
-                             i5, i6, i6, i6])
+            elements_list.append([i1, i2, i3, i4,
+                                  i5, i6, i6, i6])
         elif element.type in ['CPYRAM']:
             n1, n2, n3, n4, n5 = element.node_ids
             i1, i2, i3, i4, i5 = (
                 nodeid_to_i_map[n1], nodeid_to_i_map[n2], nodeid_to_i_map[n3], nodeid_to_i_map[n4],
                 nodeid_to_i_map[n5])
-            elements.append([i1, i2, i3, i4,
-                             i5, i5, i5, i5])
+            elements_list.append([i1, i2, i3, i4,
+                                  i5, i5, i5, i5])
         elif element.type in ['CHEXA']:
             n1, n2, n3, n4, n5, n6, n7, n8 = element.node_ids
             i1, i2, i3, i4, i5, i6, i7, i8 = (
                 nodeid_to_i_map[n1], nodeid_to_i_map[n2], nodeid_to_i_map[n3], nodeid_to_i_map[n4],
                 nodeid_to_i_map[n5], nodeid_to_i_map[n6], nodeid_to_i_map[n7], nodeid_to_i_map[n8])
-            elements.append([i1, i2, i3, i4,
-                             i5, i6, i7, i8])
+            elements_list.append([i1, i2, i3, i4,
+                                  i5, i6, i7, i8])
         else:
             model.log.info('skip etype=%r' % element.type)
             model.log.info(element)
-    elements = np.array(elements, dtype='int32')
+    elements = np.array(elements_list, dtype='int32')
 
     tecplot = Tecplot(log=model.log)
     zone = Zone(model.log)
+    zone.headers_dict['ZONETYPE'] = zone_type
     zone.headers_dict['VARIABLES'] = ['X', 'Y', 'Z']
-    zone.xyz = nodes
+    zone.zone_data = nodes
     zone.hexa_elements = elements
-    zone.nodal_results = np.array([], dtype='float32')
     tecplot.zones = [zone]
+    str(zone)
     tecplot.write_tecplot(tecplot_filename)
     return tecplot

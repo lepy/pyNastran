@@ -1,10 +1,11 @@
 from itertools import count
-from typing import List
+from typing import Optional
 
 import numpy as np
-from numpy import zeros, searchsorted, ravel
 
-from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types, integer_float_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype, combination_inplace
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
 
@@ -38,7 +39,7 @@ class RealBush1DStressArray(OES_Object):
             raise NotImplementedError(self.element_type)
         return nnodes_per_element
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -54,10 +55,23 @@ class RealBush1DStressArray(OES_Object):
         return words
         # raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['element_force', 'axial_displacement', 'axial_velocity',
                    'axial_stress', 'axial_strain', 'plastic_strain']
         return headers
+
+    def linear_combination(self, factor: integer_float_types,
+                           data: Optional[np.ndarray]=None,
+                           update: bool=True) -> None:
+        # [element_force, axial_displacement, axial_velocity,
+        #  axial_stress, axial_strain, plastic_strain]
+        combination_inplace(self.data, data, factor)
+        if update:
+            self.update_data_components()
+
+    def update_data_components(self):
+        return
 
     def build(self):
         """sizes the vectorized attributes of the RealBush1DStressArray"""
@@ -73,20 +87,17 @@ class RealBush1DStressArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements,
             #self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.ntotal, dtype='int32')
-        self.is_failed = zeros((self.ntimes, self.ntotal, 1), dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(self.ntotal, dtype=idtype)
+        self.is_failed = np.zeros((self.ntimes, self.ntotal, 1), dtype='int32')
 
         # [element_force, axial_displacement, axial_velocity, axial_stress, axial_strain, plastic_strain, is_failed]
-        self.data = zeros((self.ntimes, self.ntotal, 6), dtype='float32')
+        self.data = np.zeros((self.ntimes, self.ntotal, 6), dtype=fdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -101,9 +112,9 @@ class RealBush1DStressArray(OES_Object):
             #          axial_stress              NaN         NaN         NaN
             #          axial_strain              NaN         NaN         NaN
             #          plastic_strain       0.000000    0.000000    0.000000
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
         else:
             #Static     element_force  axial_displacement  axial_velocity  axial_stress  axial_strain  plastic_strain
@@ -154,6 +165,7 @@ class RealBush1DStressArray(OES_Object):
     def add_sort1(self, dt, eid, element_force, axial_displacement, axial_velocity,
                   axial_stress, axial_strain, plastic_strain, is_failed):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         # pyNastran_examples\move_tpl\ar29scb1.op2
         #print('dt=%s eid=%s force=%s' % (dt, eid, element_force))
@@ -170,11 +182,11 @@ class RealBush1DStressArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
-            return ['<%s>\n' % self.__class__.__name__,
-                    '  ntimes: %i\n' % self.ntimes,
-                    '  ntotal: %i\n' % self.ntotal,
+            return [f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                    f'  ntimes: {self.ntimes:d}\n',
+                    f'  ntotal: {self.ntotal:d}\n',
                     ]
 
         nelements = self.ntotal
@@ -196,24 +208,24 @@ class RealBush1DStressArray(OES_Object):
         n = len(headers)
         assert n == self.data.shape[2], 'nheaders=%s shape=%s' % (n, str(self.data.shape))
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  is_failed.shape = %s\n' % str(self.is_failed.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  is_failed.shape = {self.is_failed.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element)  #[0]
+        itot = np.searchsorted(eids, self.element)  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        ind = ravel([searchsorted(self.element == eid) for eid in eids])
+        ind = np.ravel([np.searchsorted(self.element == eid) for eid in eids])
         return ind
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg = self._get_msgs()
@@ -252,3 +264,106 @@ class RealBush1DStressArray(OES_Object):
         if self.nonlinear_factor in (None, np.nan):
             page_num -= 1
         return page_num
+
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
+                  is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct, pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
+
+        if itable == -1:
+            self._write_table_header(op2_file, op2_ascii, date)
+            itable = -3
+
+        #if isinstance(self.nonlinear_factor, float):
+            #op2_format = '%sif' % (7 * self.ntimes)
+            #raise NotImplementedError()
+        #else:
+            #op2_format = 'i21f'
+        #s = Struct(op2_format)
+
+        eids = self.element
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        nelements = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert self.ntimes == 1, self.ntimes
+
+        #device_code = self.device_code
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
+
+        eids_device = self.element * 10 + self.device_code
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+        #assert ntotal == 193, ntotal
+
+        if not self.is_sort1:
+            raise NotImplementedError('SORT2')
+        struct1 = Struct(endian + b'i6f')
+
+        fdtype = self.data.dtype
+        if self.size == fdtype.itemsize:
+            pass
+        else:
+            # print(f'downcasting {self.class_name}...')
+            #cen_word_bytes = b'CEN/    '
+            idtype = np.int32(1)
+            fdtype = np.float32(1.0)
+
+        #self.element = np.zeros(self.ntotal, dtype='int32')
+        #self.is_failed = np.zeros((self.ntimes, self.ntotal, 1), dtype='int32')
+
+        # [eid,
+        #  element_force, axial_displacement, axial_velocity, axial_stress, axial_strain, plastic_strain,
+        #  is_failed]
+        data_out = np.empty((nelements, 8), dtype=fdtype)
+        data_out[:, 0] = eids_device.view(fdtype)
+
+        op2_ascii.write(f'nelements={nelements:d}\n')
+
+        for itime in range(self.ntimes):
+            #print('3, %s' % itable)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            #print('stress itable = %s' % itable)
+            itable -= 1
+            #print('4, %s' % itable)
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2_file.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
+
+            # [eid,
+            #  element_force, axial_displacement, axial_velocity, axial_stress, axial_strain, plastic_strain,
+            #  is_failed]
+            data_out[:, 1:-1] = self.data[itime, :, :]
+            #print(data_out[:, -1].shape, self.is_failed[itime, :, 0].shape)
+            data_out[:, -1] = self.is_failed[itime, :, 0] # .reshape(nelements, 1).view(fdtype)
+            assert data_out.size == ntotal, f'data_out.shape={data_out.shape} size={data_out.size}; ntotal={ntotal}'
+            op2_file.write(data_out)
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2_file.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable

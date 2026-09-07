@@ -1,13 +1,16 @@
-from typing import List
+import warnings
 import numpy as np
 
-from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.result_objects.op2_objects import ScalarObject, get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import (
+    build_dataframe_transient_header, build_pandas_transient_element_node)
 from pyNastran.f06.f06_formatting import (
     write_floats_10e, _eigenvalue_header)
+from pyNastran.op2.writer.utils import fix_table3_types
+from pyNastran.op2.op2_interface.write_utils import set_table3_field
 
 
-class GridPointSurfaceStressesArray(ScalarObject):
+class GridPointSurfaceArray(ScalarObject):
     """
     '                                  S T R E S S E S   A T   G R I D   P O I N T S   - -     S U R F A C E       5\n',
     '0                       SURFACE X-AXIS X  NORMAL(Z-AXIS)  Z         REFERENCE COORDINATE SYSTEM FOR SURFACE DEFINITION CID        0\n',
@@ -31,15 +34,15 @@ class GridPointSurfaceStressesArray(ScalarObject):
         self.location = None
         self._times = None
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
     def build(self):
@@ -57,31 +60,218 @@ class GridPointSurfaceStressesArray(ScalarObject):
         #self.names = []
         self.nelements //= self.ntimes
 
-        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
         self.node_element = np.zeros((self.ntotal, 2), dtype=idtype)
         #oxx, oyy, txy, angle, major, minor, ovm
-        self.data = np.zeros((self.ntimes, self.ntotal, 8), dtype=fdtype)
+        self.data = np.zeros((self.ntimes, self.nelements, 8), dtype=fdtype)
         self.location = np.empty(self.ntotal, dtype='U8')
 
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.is_built = True
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
 
-    #def build_dataframe(self):
-        #"""creates a pandas dataframe"""
-        #import pandas as pd
-        #headers = self.get_headers()
-        #element_node = [self.element_node[:, 0], self.element_node[:, 1]]
-        #if self.nonlinear_factor not in (None, np.nan):
-            #column_names, column_values = self._build_dataframe_transient_header()
-            #self.data_frame = pd.Panel(self.data, items=column_values, major_axis=element_node, minor_axis=headers).to_frame()
-            #self.data_frame.columns.names = column_names
+    def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+        headers = self.headers
+
+        if self.nonlinear_factor not in (None, np.nan):
+            # Time                           0.000       0.001  ...        0.009        0.010
+            # NodeID Element Location Item                      ...                          
+            # 1      0        Z1      nx       0.0  -41.896107  ...  -601.500427  -697.005737
+            #                 Z2      ny       0.0  -23.229788  ...  -426.088959  -489.507690
+            #                MID      txy      0.0  -58.446316  ...  -922.195618 -1064.819702
+            # 2      0        Z1      angle    0.0  -49.536415  ...   -47.716396   -47.782478
+            #                 Z2      majorP   0.0   26.623873  ...   412.562164   476.605408
+            # ...                              ...         ...  ...          ...          ...
+            # 6      0        Z2      angle    0.0  -32.336449  ...   -28.915054   -28.819374
+            #                MID      majorP   0.0  143.794113  ...  1270.939087  1441.396851
+            # 7      0        Z1      minorP   0.0  -49.340179  ...    39.632576    66.384140
+            #                 Z2      tmax     0.0   96.567146  ...   615.653259   687.506348
+            #                MID      ovm      0.0  173.798813  ...  1251.593506  1409.377808
+            column_names, column_values = build_dataframe_transient_header(self)
+            element_node = [
+                self.node_element[:, 0],
+                self.node_element[:, 1],
+                self.location,
+            ]
+            names = ['NodeID', 'Element', 'Location', 'Item']
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
+                headers, element_node, self.data,
+                from_tuples=False, from_array=True,
+                names=names)
+        else:
+            #                  index  ElementID  ...          tmax           ovm
+            # NodeID Location                    ...
+            # 3301    Z1           0          0  ...  0.000000e+00  0.000000e+00
+            #         Z2           1          0  ...  0.000000e+00  0.000000e+00
+            #        MID           2          0  ...  0.000000e+00  0.000000e+00
+            # 3302    Z1           3          0  ...  0.000000e+00  0.000000e+00
+            #         Z2           4          0  ...  0.000000e+00  0.000000e+00
+            data = {
+                'NodeID': self.node_element[:, 0],
+                'ElementID': self.node_element[:, 1],
+                'Location': self.location,
+            }
+            for i, key in enumerate(headers):
+                data[key] = self.data[0, :, i]
+            data_frame = pd.DataFrame(data)
+            data_frame = data_frame.reset_index().set_index(['NodeID', 'ElementID', 'Location'])
+        self.data_frame = data_frame
+
+    def _write_table_3(self, op2_file, op2_ascii, new_result, itable, itime): #, itable=-3, itime=0):
+        import inspect
+        from struct import pack
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write('%s.write_table_3: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+
+        #if itable == -3:
+        #print('*writing itable=%s' % itable)
+        if new_result and itable != -3:
+            header = [
+                4, 146, 4,
+            ]
+        else:
+            header = [
+                4, itable, 4,
+                4, 1, 4,
+                4, 0, 4,
+                4, 146, 4,
+            ]
+        op2_file.write(pack(b'%ii' % len(header), *header))
+        op2_ascii.write('table_3_header = %s\n' % header)
+        #op2_file.write(pack('12i', *header))
         #else:
-            #self.data_frame = pd.Panel(self.data, major_axis=element_node, minor_axis=headers).to_frame()
-            #self.data_frame.columns.names = ['Static']
-        #self.data_frame.index.names = ['NodeID', 'ElementID', 'Item']
+            #print('***writing itable=%s' % itable)
+            #op2_file.write(pack('3i', *[
+                ##4, itable, 4,
+                ##4, 1, 4,
+                ##4, 0, 4,
+                #4, 146, 4,
+            #]))
+        approach_code = self.approach_code
+        table_code = self.table_code
+        isubcase = self.isubcase
+        #[
+            #'aCode', 'tCode', 'element_type', 'isubcase',
+            #'???', '???', '???', 'load_set'
+            #'format_code', 'num_wide', 's_code', '???',
+            #'???', '???', '???', '???',
+            #'???', '???', '???', '???',
+            #'???', '???', '???', '???',
+            #'???', 'Title', 'subtitle', 'label']
+        #random_code = self.random_code
+        ogs = self.ogs
+        if ogs is None:
+            # print(''.join(self.get_stats()))
+            # warnings.warn('ogs=0...')
+            ogs = 0
+
+        format_code = self.format_code
+        s_code = self.sCode
+        num_wide = self.num_wide
+        acoustic_flag = 0
+        thermal = 0
+        title = b'%-128s' % self.title.encode('ascii')
+        subtitle = b'%-128s' % self.subtitle.encode('ascii')
+        label = b'%-128s' % self.label.encode('ascii')
+        ftable3 = b'50i 128s 128s 128s'
+        unused_oCode = 0
+
+        ftable3 = b'i' * 50 + b'128s 128s 128s'
+        field6 = 0
+        field7 = 0
+        if self.analysis_code == 1:
+            field5 = self.lsdvmns[itime]
+            if np.isnan(field5):  # poor sort2 -> sort1
+                raise RuntimeError('field5 in a static case is nan...; do you have SORT2?')
+                #field5 = 1
+
+        elif self.analysis_code == 2:
+            field5 = self.modes[itime]
+            field6 = self.eigns[itime]
+            field7 = self.cycles[itime]
+            assert isinstance(field6, float), type(field6)
+            assert isinstance(field7, float), type(field7)
+            ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+            ftable3 = set_table3_field(ftable3, 7, b'f') # field 7
+
+        #elif self.analysis_code == 3:
+            #field5 = self.freqs[itime]
+        elif self.analysis_code == 5:
+            field5 = self.freqs[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+        elif self.analysis_code == 6:
+            field5 = self.dts[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5
+        elif self.analysis_code == 7:  # pre-buckling
+            field5 = self.lsdvmns[itime] # load set number
+        elif self.analysis_code == 8:  # post-buckling
+            field5 = self.lsdvmns[itime] # load set number
+            #if hasattr(self, 'eigns'):
+            if hasattr(self, 'eigens'):
+                field6 = self.eigns[itime]
+            elif hasattr(self, 'eigrs'):
+                field6 = self.eigrs[itime]
+            else:  # pragma: no cover
+                print(self.get_stats())
+                raise NotImplementedError('cant find eigns or eigrs on analysis_code=8')
+            ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+        elif self.analysis_code == 9:  # complex eigenvalues
+            field5 = self.modes[itime]
+            if hasattr(self, 'eigns'):
+                field6 = self.eigns[itime]
+            elif hasattr(self, 'eigrs'):
+                field6 = self.eigrs[itime]
+            else:  # pragma: no cover
+                print(self.get_stats())
+                raise NotImplementedError('cant find eigns or eigrs on analysis_code=9')
+
+            ftable3 = set_table3_field(ftable3, 6, b'f') # field 6
+            field7 = self.eigis[itime]
+            ftable3 = set_table3_field(ftable3, 7, b'f') # field 7
+        elif self.analysis_code == 10:  # nonlinear statics
+            field5 = self.lftsfqs[itime]
+            ftable3 = set_table3_field(ftable3, 5, b'f') # field 5; load step
+        elif self.analysis_code == 11:  # old geometric nonlinear statics
+            field5 = self.lsdvmns[itime] # load set number
+        else:
+            raise NotImplementedError(self.analysis_code)
+
+
+        #self.ogs = self.add_data_parameter(data, 'ogs_id', b'i', 3, False)
+        #self.refid = self.add_data_parameter(data, 'refid', b'i', 8, False)
+        #self.format_code = self.add_data_parameter(data, 'format_code', b'i', 9, False)
+        #self.num_wide = self.add_data_parameter(data, 'num_wide', b'i', 10, False)
+        #self.sCode = self.add_data_parameter(data, 'sCode', b'i', 11, False)
+        #self.oCoord = self.add_data_parameter(data, 'oCoord', b'i', 12, False)
+        #self.axis = self.add_data_parameter(data, 'axis', b'i', 13, False)
+        #self.normal = self.add_data_parameter(data, 'normal', b'i', 14, False)
+
+        table3 = [
+            approach_code, table_code, ogs, isubcase, field5,
+            field6, field7, self.refid, format_code, num_wide,
+            s_code, self.oCoord, self.axis, self.normal, 0,
+            0, 0, 0, 0, 0,
+            0, 0, thermal, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+            title, subtitle, label,
+        ]
+        assert table3[22] == thermal
+
+        table3 = fix_table3_types(table3, size=4)
+        data = [584] + table3 + [584]
+        fmt = b'i' + ftable3 + b'i'
+        #print(fmt)
+        #print(data)
+        #f.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
+        op2_ascii.write('%s header 3c = %s\n' % (self.table_name, data))
+        op2_file.write(pack(fmt, *data))
 
     def add_sort1(self, dt, nid, eid, fiber, nx, ny, txy, angle, majorP, minorP, tmax, ovm):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         #assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.node_element[self.itotal, :] = [nid, eid]
@@ -89,12 +279,12 @@ class GridPointSurfaceStressesArray(ScalarObject):
         self.data[self.itime, self.itotal, :] = [nx, ny, txy, angle, majorP, minorP, tmax, ovm]
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -113,18 +303,15 @@ class GridPointSurfaceStressesArray(ScalarObject):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  node_element.shape = %s\n' % str(self.node_element.shape).replace('L', ''))
-        msg.append('  location.shape = %s\n' % str(self.location.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  node_element.shape = {self.node_element.shape}\n')
+        msg.append(f'  location.shape = {self.location.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg += self.get_data_code()
         return msg
 
-    def get_headers(self) -> List[str]:
-        headers = ['nx', 'ny', 'txy', 'angle', 'majorP', 'minorP', 'tmax', 'ovm']
-        return headers
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
 
@@ -132,14 +319,8 @@ class GridPointSurfaceStressesArray(ScalarObject):
         axis_int = self.oCoord
         axis_map = {0 : 'X', 1 : 'Y', 2 : 'Z'}
         axis = axis_map[axis_int]
-        msg = [
-            '                                  S T R E S S E S   A T   G R I D   P O I N T S   - -     S U R F A C E    %s\n' % self.ogs_id,
-            '0                       SURFACE X-AXIS X  NORMAL(Z-AXIS)  %s         REFERENCE COORDINATE SYSTEM FOR SURFACE DEFINITION CID        %s\n' % (axis, cid),
-            '     GRID      ELEMENT            STRESSES IN SURFACE SYSTEM           PRINCIPAL STRESSES            MAX             \n',
-            '     ID          ID    FIBRE   NORMAL-X   NORMAL-Y   SHEAR-XY     ANGLE      MAJOR      MINOR      SHEAR     VON MISES\n']
-           #'0     13683          3736    TRIAX6         4.996584E+00   0.0            1.203093E+02   0.0            0.0            0.0'
-           #'      13683          3737    TRIAX6        -4.996584E+00   0.0           -1.203093E+02   0.0            0.0            0.0'
-           #'      13683                  *TOTALS*       6.366463E-12   0.0           -1.364242E-12   0.0            0.0            0.0'
+        msg = self._get_f06_message(self.ogs_id, cid, axis)
+
         ntimes = self.data.shape[0]
 
         nids = self.node_element[:, 0]
@@ -178,6 +359,154 @@ class GridPointSurfaceStressesArray(ScalarObject):
             page_num += 1
         return page_num - 1
 
+    def write_op2(self, op2_file, op2_ascii, itable, new_result,
+                  date, is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        import inspect
+        from struct import Struct
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
+
+        if itable == -1:
+            #print('***************', itable)
+            self._write_table_header(op2_file, op2_ascii, date)
+            itable = -3
+
+        #if isinstance(self.nonlinear_factor, float):
+            #op2_format = '%sif' % (7 * self.ntimes)
+            #raise NotImplementedError()
+        #else:
+            #op2_format = 'i21f'
+        #s = Struct(op2_format)
+
+        #eids2 = self.element_node[:, 0]
+        #nodes = self.element_node[:, 1]
+        #nelements_nodes = len(nodes)
+
+        #eids3 = self.element_cid[:, 0]
+        #cids3 = self.element_cid[:, 1]
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        #nelements = len(np.unique(eids2))
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+        #nnodes_centroid = self.nnodes_per_element
+        #nnodes_no_centroid = self.nnodes_per_element_no_centroid
+        nnodes = self.data.shape[1]
+        #ntotali = 11
+        ntotali = self.num_wide
+        assert ntotali == 11, ntotali
+        ntotal = ntotali * nnodes
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert nnodes > 1, nnodes
+        #assert self.ntimes == 1, self.ntimes
+
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
+        ntimes = self.ntimes
+
+        #print('ntotal=%s' % (ntotal))
+        if not self.is_sort1:
+            raise NotImplementedError('SORT2')
+        #op2_format = endian + b'2i6f'
+
+        #idtype = self.element_cid.dtype
+        fdtype = self.data.dtype
+        #print(self.size)
+        if self.size == fdtype.itemsize:
+            grid_bytes = b'GRID'
+        else:
+            # warnings.warn(f'downcasting {self.class_name}...')
+            idtype = np.int32(1)
+            fdtype = np.float32(1.0)
+            grid_bytes = b'GRID'
+
+        #[nids, eids, fibers, nx, ny, txy, angle, majorp, minorp, tmax, ovm]
+        nids = self.node_element[:, 0]
+        eids = self.node_element[:, 1]
+        nids_device = nids * 10 + self.device_code
+
+        nids_device
+
+        # speed up transient cases, but slightly slows down static cases
+        data_out = np.empty((nnodes, 11), dtype=fdtype)
+        # setting:
+        #  - [nid_device, eids, location_bytes]
+        data_out[:, 0] = nids_device
+        data_out[:, 1] = eids
+        location_bytes = np.array([loc.encode('ascii') for loc in self.location])
+        data_out[:, 2] = location_bytes.view(fdtype)
+
+
+        #nx = self.data[itime, :, 0]
+        #ny = self.data[itime, :, 1]
+        #txy = self.data[itime, :, 2]
+        #angle = self.data[itime, :, 3]
+        #majorp = self.data[itime, :, 4]
+        #minorp = self.data[itime, :, 5]
+        #tmax = self.data[itime, :, 6]
+        #ovm = self.data[itime, :, 7]
+        #fibers = self.location
+
+        #cen_array = np.full(nelements, grid_bytes, dtype='|S4')
+        #nnodes_no_centroid_array = np.full(nelements, nnodes_no_centroid, dtype=idtype)
+
+        #element_wise_data = to_column_bytes([
+            #element_device, # ints
+            #cids3, # ints
+            #cen_array, # bytes
+            #nnodes_no_centroid_array, # ints
+        #], fdtype, debug=False)
+
+        # we could tack the nodes on, so we don't have to keep stacking it
+        # but we run into issues with datai
+        #
+        # total=nelements_nodes
+        #nodes_view = nodes.view(fdtype).reshape(nelements, nnodes_centroid)
+        #inode = np.arange(nnodes_centroid)
+        #data_out[:, 4+inode*21] = nodes_view[:, inode]
+
+        op2_ascii.write(f'nnodes={nnodes:d}\n')
+        struct_i = Struct('i')
+        struct_13i = Struct('13i')
+        for itime in range(self.ntimes):
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            #print('stress itable = %s' % itable)
+            itable -= 1
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2_file.write(struct_13i.pack(*header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
+
+
+            # stack each output by columns and fix any dtypes
+            #datai2 = datai.reshape(nelements, 21*nnodes_centroid)
+            #data_out = np.hstack([element_wise_data, datai2])
+            #data_out[:, 4:] = datai2
+
+            # switch datai to element format and put it in the output buffer
+            data_out[:, 3:] = self.data[itime, :, :]
+            assert data_out.size == ntotal
+            op2_file.write(data_out)
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2_file.write(struct_i.pack(*header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
+
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
@@ -211,6 +540,51 @@ class GridPointSurfaceStressesArray(ScalarObject):
                 raise ValueError(msg)
         return True
 
+    def _get_f06_message(self, ogs_id: int, cid: int, axis: str) -> list[str]:
+        raise NotImplementedError()
+
+class GridPointSurfaceStressesArray(GridPointSurfaceArray):
+
+    @property
+    def headers(self) -> list[str]:
+        headers = ['nx', 'ny', 'txy', 'angle', 'majorP', 'minorP', 'tmax', 'ovm']
+        return headers
+
+    def _get_f06_message(self, ogs_id: int, cid: int, axis: str) -> list[str]:
+        msg = [
+            f'                                  S T R E S S E S   A T   G R I D   P O I N T S   - -     S U R F A C E    {ogs_id:d}\n',
+            f'0                       SURFACE X-AXIS X  NORMAL(Z-AXIS)  {axis}         REFERENCE COORDINATE SYSTEM FOR SURFACE DEFINITION CID        {cid}\n',
+            '     GRID      ELEMENT            STRESSES IN SURFACE SYSTEM           PRINCIPAL STRESSES            MAX             \n',
+            '     ID          ID    FIBRE   NORMAL-X   NORMAL-Y   SHEAR-XY     ANGLE      MAJOR      MINOR      SHEAR     VON MISES\n']
+           #'0     13683          3736    TRIAX6         4.996584E+00   0.0            1.203093E+02   0.0            0.0            0.0'
+           #'      13683          3737    TRIAX6        -4.996584E+00   0.0           -1.203093E+02   0.0            0.0            0.0'
+           #'      13683                  *TOTALS*       6.366463E-12   0.0           -1.364242E-12   0.0            0.0            0.0'
+        return msg
+
+
+
+class GridPointSurfaceStrainsArray(GridPointSurfaceArray):
+
+    @property
+    def headers(self) -> list[str]:
+        headers = ['nx', 'ny', 'exy', 'angle', 'majorP', 'minorP', 'emax', 'evm']
+        return headers
+
+    def _get_f06_message(self, ogs_id: int, cid: int, axis: str) -> list[str]:
+        msg = [
+            f'                                    S T R A I N S   A T   G R I D   P O I N T S   - -     S U R F A C E    {ogs_id:d}\n',
+           #f'                                  S T R E S S E S   A T   G R I D   P O I N T S   - -     S U R F A C E    {ogs_id:d}\n',
+            f'0                       SURFACE X-AXIS X  NORMAL(Z-AXIS)  {axis}         REFERENCE COORDINATE SYSTEM FOR SURFACE DEFINITION CID        {cid}\n',
+           #'     GRID      ELEMENT            STRESSES IN SURFACE SYSTEM           PRINCIPAL STRESSES            MAX             \n',
+            '     GRID      ELEMENT            STRAINS  IN SURFACE SYSTEM           PRINCIPAL STRAINS             MAX             \n',
+            '     ID          ID    FIBRE   NORMAL-X   NORMAL-Y   SHEAR-XY     ANGLE      MAJOR      MINOR      SHEAR     VON MISES\n']
+           #'0     13683          3736    TRIAX6         4.996584E+00   0.0            1.203093E+02   0.0            0.0            0.0'
+           #'      13683          3737    TRIAX6        -4.996584E+00   0.0           -1.203093E+02   0.0            0.0            0.0'
+           #'      13683                  *TOTALS*       6.366463E-12   0.0           -1.364242E-12   0.0            0.0            0.0'
+        return msg
+
+
+
 
 class GridPointStressesVolumePrincipalArray(ScalarObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
@@ -224,7 +598,8 @@ class GridPointStressesVolumePrincipalArray(ScalarObject):
         self.itime = None
         self._times = None
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = [
             'lxa', 'lxb', 'lxc',
             'lya', 'lyb', 'lyc',
@@ -265,15 +640,15 @@ class GridPointStressesVolumePrincipalArray(ScalarObject):
                 raise ValueError(msg)
         return True
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
     def build(self):
@@ -289,21 +664,62 @@ class GridPointStressesVolumePrincipalArray(ScalarObject):
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
         self.nelements //= self.ntimes
 
-        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
         self.node = np.zeros(self.ntotal, dtype=idtype)
         #lxa, lxb, lxc, lya, lyb, lyc, lza, lzb, lzc, sa, sb, sc, epr, ovm
         self.data = np.zeros((self.ntimes, self.ntotal, 14), dtype=fdtype)
         self.location = np.empty(self.ntotal, dtype='U8')
 
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.is_built = True
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
 
-    def get_stats(self, short=False) -> List[str]:
+    def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+        headers = self.headers
+
+        if self.nonlinear_factor not in (None, np.nan):
+            # LoadStep              1.0
+            # NodeID Location Item
+            # 0               lxa   0.0
+            #                 lxb   0.0
+            #                 lxc   0.0
+            #                 lya   0.0
+            #                 lyb   0.0
+            column_names, column_values = build_dataframe_transient_header(self)
+            element_node = [
+                self.node,
+                self.location,
+            ]
+            names = ['NodeID', 'Location', 'Item']
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
+                headers, element_node, self.data,
+                from_tuples=False, from_array=True,
+                names=names)
+        else:
+            #                  index  lxa  lxb  lxc  lya  lyb  ...  lzc   sa   sb   sc  epr  ovm
+            # NodeID Location                                  ...
+            # 0                    0  0.0  0.0  0.0  0.0  0.0  ...  0.0  0.0  0.0  0.0  0.0  0.0
+            #                      1  0.0  0.0  0.0  0.0  0.0  ...  0.0  0.0  0.0  0.0  0.0  0.0
+            #                      2  0.0  0.0  0.0  0.0  0.0  ...  0.0  0.0  0.0  0.0  0.0  0.0
+            #                      3  0.0  0.0  0.0  0.0  0.0  ...  0.0  0.0  0.0  0.0  0.0  0.0
+            #                      4  0.0  0.0  0.0  0.0  0.0  ...  0.0  0.0  0.0  0.0  0.0  0.0
+            data = {
+                'NodeID': self.node,
+                'Location': self.location,
+            }
+            for i, key in enumerate(headers):
+                data[key] = self.data[0, :, i]
+            data_frame = pd.DataFrame(data)
+            data_frame = data_frame.reset_index().set_index(['NodeID', 'Location'])
+        self.data_frame = data_frame
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -322,13 +738,14 @@ class GridPointStressesVolumePrincipalArray(ScalarObject):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  node.shape = %s\n' % str(self.node.shape).replace('L', ''))
-        msg.append('  location.shape = %s\n' % str(self.location.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  node.shape = {self.node.shape}\n')
+        msg.append(f'  location.shape = {self.location.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg += self.get_data_code()
         return msg
 
     def add_sort1(self, dt, nid, lxa, lxb, lxc, lya, lyb, lyc, lza, lzb, lzc, sa, sb, sc, epr, ovm):
+        assert self.sort_method == 1, self
         assert isinstance(nid, int) and nid > 0, 'dt=%s nid=%s' % (dt, nid)
         self._times[self.itime] = dt
         self.node[self.itotal] = nid
@@ -336,7 +753,7 @@ class GridPointStressesVolumePrincipalArray(ScalarObject):
         self.itotal += 1
 
     #def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  #page_num=1, is_mag_phase=False, is_sort1=True):
+                  #page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         #pass
 
 
@@ -352,19 +769,20 @@ class GridPointStressesVolumeDirectArray(ScalarObject):
         self.itime = None
         self._times = None
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['ox', 'oy', 'oz', 'txy', 'tyz', 'txz', 'pressure', 'ovm']
         return headers
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
     def build(self):
@@ -380,20 +798,61 @@ class GridPointStressesVolumeDirectArray(ScalarObject):
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
         self.nelements //= self.ntimes
 
-        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
         self.node = np.zeros(self.ntotal, dtype=idtype)
         #oxx, oyy, txy, angle, major, minor, ovm
         self.data = np.zeros((self.ntimes, self.ntotal, 8), dtype=fdtype)
         self.location = np.empty(self.ntotal, dtype='U8')
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.is_built = True
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
 
-    def get_stats(self, short=False) -> List[str]:
+    def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+        headers = self.headers
+
+        if self.nonlinear_factor not in (None, np.nan):
+            # LoadStep                         1.0
+            # NodeID Location Item
+            # 201             ox        100.000000
+            # 202             oy         98.038734
+            # 203             oz         98.038734
+            # 204             txy         0.000000
+            # 205             tyz         0.000000
+            column_names, column_values = build_dataframe_transient_header(self)
+            element_node = [
+                self.node,
+                self.location,
+            ]
+            names = ['NodeID', 'Location', 'Item']
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
+                headers, element_node, self.data,
+                from_tuples=False, from_array=True,
+                names=names)
+        else:
+            #                  index        ox            oy  ...       txz  pressure       ovm
+            # NodeID Location                                 ...
+            # 1                    0 -0.000118 -4.082839e-05  ... -0.674398  0.000063  1.168092
+            # 2                    1 -0.000055  1.614241e-07  ... -0.351173  0.000032  0.750128
+            # 3                    2 -0.000257 -1.055142e-05  ...  0.040694  0.000065  0.071662
+            # 4                    3 -0.000168 -2.711696e-05  ...  0.158095  0.000103  0.281641
+            # 5                    4 -0.000619 -4.411857e-05  ...  0.234085  0.000184  0.405848
+            data = {
+                'NodeID': self.node,
+                'Location': self.location,
+            }
+            for i, key in enumerate(headers):
+                data[key] = self.data[0, :, i]
+            data_frame = pd.DataFrame(data)
+            data_frame = data_frame.reset_index().set_index(['NodeID', 'Location'])
+        self.data_frame = data_frame
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -412,13 +871,14 @@ class GridPointStressesVolumeDirectArray(ScalarObject):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  node.shape = %s\n' % str(self.node.shape).replace('L', ''))
-        msg.append('  location.shape = %s\n' % str(self.location.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  node.shape = {self.node.shape}\n')
+        msg.append(f'  location.shape = {self.location.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg += self.get_data_code()
         return msg
 
     def add_sort1(self, dt, nid, nx, ny, nz, txy, tyz, txz, pressure, ovm):
+        assert self.sort_method == 1, self
         assert isinstance(nid, int) and nid > 0, 'dt=%s nid=%s' % (dt, nid)
         self._times[self.itime] = dt
         self.node[self.itotal] = nid
@@ -426,7 +886,7 @@ class GridPointStressesVolumeDirectArray(ScalarObject):
         self.itotal += 1
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         """
         '    D I R E C T   S T R E S S E S   A T   G R I D   P O I N T S   - -       V O L U M E      101'
         '        OUTPUT COORDINATE SYSTEM =       0  BASIC   '
@@ -541,19 +1001,20 @@ class GridPointStressesSurfaceDiscontinutiesArray(ScalarObject): # tCode=35
         #self.node_element = None
         self._times = None
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['oxx', 'oyy', 'ozz', 'txy', 'pressure']
         return headers
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
     def build(self):
@@ -574,19 +1035,53 @@ class GridPointStressesSurfaceDiscontinutiesArray(ScalarObject): # tCode=35
         #oxx, oyy, ozz, txy, pressure
         self.data = np.zeros((self.ntimes, self.ntotal, 5), dtype='float32')
         self.location = np.empty(self.ntotal, dtype='U8')
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
 
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.is_built = True
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
 
-    def get_stats(self, short=False) -> List[str]:
+    def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+        headers = self.headers
+
+        if self.nonlinear_factor not in (None, np.nan):
+            # LoadStep                         1.0
+            # NodeID Location Item
+            # 101             oxx       100.000000
+            # 102             oyy        98.038734
+            # 103             ozz        98.038734
+            # 104             txy         0.000000
+            # 111             pressure   98.692490
+            column_names, column_values = build_dataframe_transient_header(self)
+            element_node = [
+                self.node,
+                self.location,
+            ]
+            names = ['NodeID', 'Location', 'Item']
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
+                headers, element_node, self.data,
+                from_tuples=False, from_array=True,
+                names=names)
+        else:
+            data = {
+                'NodeID': self.node,
+                'Location': self.location,
+            }
+            for i, key in enumerate(headers):
+                data[key] = self.data[0, :, i]
+            data_frame = pd.DataFrame(data)
+            data_frame = data_frame.reset_index().set_index(['NodeID', 'Location'])
+            print(data_frame)
+            raise RuntimeError('finish build_dataframe B')
+        self.data_frame = data_frame
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -605,15 +1100,27 @@ class GridPointStressesSurfaceDiscontinutiesArray(ScalarObject): # tCode=35
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  node.shape = %s\n' % str(self.node.shape).replace('L', ''))
-        msg.append('  location.shape = %s\n' % str(self.location.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  node.shape = {self.node.shape}\n')
+        msg.append(f'  location.shape = {self.location.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg += self.get_data_code()
         return msg
 
     def add_sort1(self, dt, nid, oxx, oyy, ozz, txy, pressure):
+        assert self.sort_method == 1, self
         assert isinstance(nid, int) and nid > 0, 'dt=%s nid=%s' % (dt, nid)
         self._times[self.itime] = dt
         self.node[self.itotal] = nid
         self.data[self.itime, self.itotal, :] = [oxx, oyy, ozz, txy, pressure]
         self.itotal += 1
+
+class GridPointStrainsVolumePrincipalArray(GridPointStressesVolumePrincipalArray):
+    pass
+
+class GridPointStrainsVolumeDirectArray(GridPointStressesVolumeDirectArray):
+    pass
+
+GridPointStrainsVolumeDiscontinutiesArray = None
+
+class GridPointStrainsSurfaceDiscontinutiesArray(GridPointStressesSurfaceDiscontinutiesArray):
+    pass

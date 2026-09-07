@@ -2,18 +2,23 @@
 import copy
 from struct import unpack, Struct, pack
 from collections import defaultdict
+from typing import Optional
 
 import numpy as np
 import scipy
+from scipy.spatial import KDTree
 
-from cpylog import get_logger2
 from pyNastran.utils import is_binary_file
+from cpylog import __version__ as CPYLOG_VERSION, SimpleLogger
+if CPYLOG_VERSION > '1.6.0':
+    from cpylog import get_logger
+else:  # pragma: no cover
+    from cpylog import get_logger2 as get_logger
 
 
-def read_stl(stl_filename, remove_elements_with_bad_normals=False,
-             log=None, debug=False):
+def read_stl(stl_filename: str, remove_elements_with_bad_normals: bool=False,
+             log: Optional[SimpleLogger]=None, debug: bool=False):
     """
-
     Reads an STL file
 
     Parameters
@@ -41,7 +46,7 @@ class STL:
     #is_structured = False
     #is_outward_normals = True
 
-    def __init__(self, log=None, debug=False):
+    def __init__(self, log: Optional[SimpleLogger]=None, debug: bool=False):
         """
         Initializes the STL object
 
@@ -56,15 +61,16 @@ class STL:
             if log is set, debug is ignored and uses the
             settings the logging object has
         """
-        self.log = get_logger2(log, debug=debug)
+        self.log = get_logger(log, debug)
 
         self.nodes = None
         self.elements = None
         self.header = ''
         self.infilename = None
 
-    def write_stl(self, stl_out_filename, is_binary=False, float_fmt='%6.12f',
-                  normalize_normal_vectors=False, stop_on_failure=True):
+    def write_stl(self, stl_out_filename: str, is_binary: bool=False,
+                  float_fmt: str='%6.12f', normalize_normal_vectors: bool=False,
+                  stop_on_failure: bool=True) -> None:
         """
         Writes an STL file
 
@@ -79,7 +85,7 @@ class STL:
         normalize_normal_vectors : bool; default=False
             should the vectors be normalized
         """
-        self.log.info("---writing STL...%r---" % stl_out_filename)
+        self.log.info(f'---writing STL...{stl_out_filename!r}---')
         self._validate()
         solid_name = 'dummy_name'
         if is_binary:
@@ -91,7 +97,7 @@ class STL:
                                  normalize_normal_vectors=normalize_normal_vectors,
                                  stop_on_failure=stop_on_failure)
 
-    def read_stl(self, stl_filename):
+    def read_stl(self, stl_filename: str) -> None:
         """
         Reads an STL file
 
@@ -99,9 +105,10 @@ class STL:
         ----------
         stl_filename : str
             the filename to read
+
         """
         self.infilename = stl_filename
-        self.log.info("---reading STL...%r---" % self.infilename)
+        self.log.info(f'---reading STL...{self.infilename}---')
 
         if is_binary_file(stl_filename):
             self.read_binary_stl(stl_filename)
@@ -112,9 +119,9 @@ class STL:
         #assert self.nodes > 0, 'nodes=%s' % self.nodes
         #assert self.nelements > 0, 'nelements=%s' % self.nelements
 
-
-    def write_binary_stl(self, stl_filename, normalize_normal_vectors=False,
-                         stop_on_failure=True):
+    def write_binary_stl(self, stl_filename: str,
+                         normalize_normal_vectors: bool=False,
+                         stop_on_failure=True) -> None:
         """
         Write an STL binary file
 
@@ -124,6 +131,7 @@ class STL:
             the filename to read
         normalize_normal_vectors : bool; default=False
             should the vectors be normalized
+
         """
         self._validate()
         with open(stl_filename, 'wb') as infile:
@@ -163,7 +171,7 @@ class STL:
                               p3[eid, 0], p3[eid, 1], p3[eid, 2], 0)
                 infile.write(data)
 
-    def read_binary_stl(self, stl_filename):
+    def read_binary_stl(self, stl_filename: str) -> None:
         """
         Read an STL binary file
 
@@ -171,23 +179,24 @@ class STL:
         ----------
         stl_filename : str
             the filename to read
+
         """
         with open(stl_filename, 'rb') as infile:
             data = infile.read()
 
-        ndata = len(data)
         j = 0
+        ndata = len(data)
+        elements = np.zeros((0, 3), dtype='int32')
         while j < ndata:
-            self.log.info('  read_binary_stl: j=%s ndata=%s' % (j, ndata))
+            self.log.info(f'  read_binary_stl: j={j} ndata={ndata}')
             self.header = data[j:j+80]
             nelements, = unpack('i', data[j+80:j+84])
             j += 84
 
             inode = 0
             nodes_dict = {}
-            assert nelements > 0, 'nelements=%s' % nelements
-            elements = np.zeros((nelements, 3), 'int32')
-
+            assert nelements > 0, f'nelements={nelements}'
+            elements = np.zeros((nelements, 3), dtype='int32')
             s = Struct('12fH')
             for ielement in range(nelements):
                 (unused_nx, unused_ny, unused_nz, ax, ay, az, bx, by, bz,
@@ -219,7 +228,7 @@ class STL:
                 elements[ielement] = [i1, i2, i3]
                 j += 50
         assert inode > 0, inode
-        nnodes = inode + 1 # accounting for indexing
+        nnodes = inode + 1  # accounting for indexing
         self.elements = elements
 
         nodes = np.zeros((nnodes, 3), 'float64')
@@ -227,10 +236,11 @@ class STL:
             nodes[inode] = node
         self.nodes = nodes
 
-
     def _get_normals_data(self, elements):
         """
-        This is intended as a submethod to help handle the problem of bad normals
+        This is intended as a submethod to help handle the problem of
+        bad normals
+
         """
         nodes = self.nodes
         #self.log.debug("get_normals...elements.shape %s" % str(elements.shape))
@@ -261,7 +271,7 @@ class STL:
         normals[:, 2] /= normals_norm
         return normals
 
-    def get_area(self, elements, stop_on_failure=True):
+    def get_area(self, elements, stop_on_failure: bool=True):
         unused_v123, normals_norm, inan = self._get_normals_data(elements)
 
         if stop_on_failure:
@@ -274,7 +284,7 @@ class STL:
                 raise RuntimeError(msg)
         return 0.5 * normals_norm
 
-    def get_normals(self, elements, stop_on_failure=True):
+    def get_normals(self, elements: np.ndarray, stop_on_failure: bool=True):
         """
         Parameters
         ----------
@@ -302,7 +312,7 @@ class STL:
                 msg += 'Failed Elements: %s; n=%s\n' % (inan, len(inan))
                 raise RuntimeError(msg)
             # we need to divide our (n,3) array in 3 steps
-            normals = v123 # / normals_norm
+            normals = v123  # / normals_norm
             normals[:, 0] /= normals_norm
             normals[:, 1] /= normals_norm
             normals[:, 2] /= normals_norm
@@ -319,20 +329,19 @@ class STL:
 
             # we need to divide our (n,3) array in 3 steps
             if 0:
-                normals = v123 # / normals_norm
+                normals = v123  # / normals_norm
                 normals[:, 0] /= normals_norm
                 normals[:, 1] /= normals_norm
                 normals[:, 2] /= normals_norm
                 normals[inan, :] = -1.01
             else:
-                normals = v123 # / normals_norm
+                normals = v123  # / normals_norm
                 normals[inotnan, 0] /= normals_norm[inotnan]
                 normals[inotnan, 1] /= normals_norm[inotnan]
                 normals[inotnan, 2] /= normals_norm[inotnan]
         return normals
 
-
-    def flip_normals(self, i=None):
+    def flip_normals(self, i=None) -> None:
         """
         Flips the normals of the specified elements.
 
@@ -355,7 +364,7 @@ class STL:
         if i is None:
             self.elements = elements2
         else:
-            self.elements[i, :] = elements2 #[i, :]
+            self.elements[i, :] = elements2  # [i, :]
 
     def get_normals_at_nodes(self, normals=None, nid_to_eid=None):
         """
@@ -366,7 +375,7 @@ class STL:
         ----------
         normals : (n, 3) ndarray floats
             The elemental normals
-        nid_to_eid : Dict[int] = [int, int, ... ]
+        nid_to_eid : dict[int] = [int, int, ... ]
             key = node_id
             value = list of element_ids
 
@@ -399,12 +408,12 @@ class STL:
             eid += 1
         return normals_at_nodes
 
-    def equivalence_nodes(self, tol=1e-5):
+    def equivalence_nodes(self, tol: float=1e-5) -> None:
         """equivalences the nodes of the model and updates the elements"""
         nnodes = self.nodes.shape[0]
 
         # build the kdtree
-        kdt = scipy.spatial.cKDTree(self.nodes)
+        kdt = KDTree(self.nodes)
 
         # find the node ids of interest
         nids_new = np.unique(self.elements.ravel())
@@ -418,7 +427,7 @@ class STL:
         slots = np.where(ieq[:, 1:] < nnodes)
         replacer = np.unique(ieq[slots])
 
-        # update the duplcated node id with it's partner
+        # update the duplcated node id with its partner
         # we'll pick the minimum ID
         for r in replacer:
             ip = np.where(ieq[r, :] < nnodes)[0]
@@ -434,12 +443,14 @@ class STL:
                 ireplace = np.where(self.elements == r)
                 self.elements[ireplace] = r_new_nid
 
-    def _validate(self):
+    def _validate(self) -> None:
         assert len(self.nodes) > 0, 'No nodes were found in the model'
         assert len(self.elements) > 0, 'No nodes were found in the model'
 
-    def write_stl_ascii(self, out_filename, solid_name, float_fmt='%.6f',
-                        normalize_normal_vectors=False, stop_on_failure=True):
+    def write_stl_ascii(self, out_filename: str, solid_name: str,
+                        float_fmt: str='%.6f',
+                        normalize_normal_vectors: bool=False,
+                        stop_on_failure: bool=True) -> None:
         """
         Writes an STL in ASCII format
 
@@ -485,8 +496,7 @@ class STL:
             msg = 'endsolid\n'
             out.write(msg)
 
-
-    def read_ascii_stl(self, stl_filename):
+    def read_ascii_stl(self, stl_filename: str) -> None:
         """
         Reads an STL that's in ASCII format
         """
@@ -496,9 +506,13 @@ class STL:
             ielement = 0
             nodes_dict = {}
             elements = []
+            iline = 1
             while line:
+                #print('-'*80)
+                #print(f'iline={iline}')
                 if 'solid' in line[:6].lower():
                     line = infile.readline()  # facet
+                    iline += 1
                     while 'facet' in line.strip()[:5].lower():
                         #facet normal -6.665299e-001 6.795624e-001 3.064844e-001
                         #   outer loop
@@ -507,24 +521,42 @@ class STL:
                         #      vertex 8.467505e-002 2.754588e-001 1.190215e+001
                         #   endloop
                         #endfacet
+                        #print('='*20)
+                        #print(f'iline={iline}')
+                        #print(f'facet_line={line}')
 
-                        infile.readline() # outer loop
-                        L1 = infile.readline().strip()
-                        L2 = infile.readline().strip()
-                        L3 = infile.readline().strip()
+                        word = infile.readline().strip()  # outer loop
+                        assert word.lower() == 'outer loop', f'Error: No "outer loop" found on line {iline+1}:\n{word}'
+                        iline += 1
 
-                        v1 = L1.split()[1:]
-                        v2 = L2.split()[1:]
-                        v3 = L3.split()[1:]
-                        infile.readline() # endloop
-                        infile.readline() # endfacet
+                        line1 = infile.readline().strip()
+                        line2 = infile.readline().strip()
+                        line3 = infile.readline().strip()
+                        #print(line1)
+                        #print(line2)
+                        #print(line3)
+                        assert 'vertex' in line1.lower(), f'Error: No vertex found on line {iline+1}:\n{line1}'
+                        assert 'vertex' in line2.lower(), f'Error: No vertex found on line {iline+2}:\n{line2}'
+                        assert 'vertex' in line3.lower(), f'Error: No vertex found on line {iline+3}:\n{line3}'
+                        iline += 3
+
+                        v1 = line1.split()[1:]
+                        v2 = line2.split()[1:]
+                        v3 = line3.split()[1:]
                         t1 = tuple(v1)
                         t2 = tuple(v2)
                         t3 = tuple(v3)
+                        assert len(v1) == 3, '%r' % line1
+                        assert len(v2) == 3, '%r' % line2
+                        assert len(v3) == 3, '%r' % line3
 
-                        assert len(v1) == 3, '%r' % L1
-                        assert len(v2) == 3, '%r' % L2
-                        assert len(v3) == 3, '%r' % L3
+                        word = infile.readline().strip()  # endloop
+                        #print(f'endloop_word = {word.strip()}')
+                        assert word.lower() == 'endloop', f'No endloop found on line {iline+1}:\n{word}'
+                        word = infile.readline()  # endfacet
+                        #print(f'endfacet_word = {word.strip()}')
+                        #assert word.lower() == 'endfacet', f'No endfacet found on line {iline+2}:\n{word}'
+                        iline += 2
 
                         if t1 in nodes_dict:
                             i1 = nodes_dict[t1]
@@ -549,20 +581,24 @@ class STL:
                         element = [i1, i2, i3]
                         elements.append(element)
                         ielement += 1
-                        line = infile.readline()  # facet
+                        line = infile.readline().strip()  # facet normal  -1.665915e-01   1.653124e-01   3.903514e-01
+                        #assert 'normal' in line.lower(), f'No normal found on line {iline+1}:\n{line}'
+                        iline += 1
                     #print "end of solid..."
                 elif 'endsolid' in line.lower():
                     line = infile.readline()
+                    iline += 1
                 elif line.strip() == '':
                     line = infile.readline()
+                    iline += 1
                 else:
                     self.log.error(line)
                     #line = f.readline()
-                    raise NotImplementedError('multiple solids are not supported; line=%r' % line)
+                    raise NotImplementedError(f'Multiple solids are not supported on iline={iline+1}; line={line!r}')
                     #break
 
         assert inode > 0, inode
-        nnodes = inode + 1 # accounting for indexing
+        nnodes = inode + 1  # accounting for indexing
         self.elements = np.array(elements, 'int32')
         nodes = np.zeros((nnodes, 3), 'float64')
 
@@ -570,14 +606,16 @@ class STL:
             nodes[inode] = node
         self.nodes = nodes
 
-    def scale_nodes(self, xscale, yscale=None, zscale=None):
+    def scale_nodes(self, xscale: float,
+                    yscale: Optional[float]=None,
+                    zscale: Optional[float]=None) -> None:
         """
         Scales the model
 
         Parameters
         ----------
         xscale : float
-            the scaling factor for the x axis; also the default scaling factor
+            the scaling factor for the x-axis; also the default scaling factor
         yscale/zscale : float; default=xscale
             the scaling factors for the y/z axes
         """
@@ -589,13 +627,13 @@ class STL:
         self.nodes[:, 1] *= yscale
         self.nodes[:, 2] *= zscale
 
-    def shift_nodes(self, xshift, yshift, zshift):
+    def shift_nodes(self, xshift: float, yshift: float, zshift: float) -> None:
         """Shifts the model"""
         self.nodes[:, 0] += xshift
         self.nodes[:, 1] += yshift
         self.nodes[:, 2] += zshift
 
-    def flip_axes(self, axes, scale):
+    def flip_axes(self, axes: str, scale: float) -> None:
         """
         Swaps the axes
 
@@ -622,7 +660,7 @@ class STL:
             self.nodes[:, 0] = z * scale
             self.nodes[:, 2] = x * scale
 
-    def create_mirror_model(self, xyz, tol):
+    def create_mirror_model(self, xyz: str, tol: float) -> None:
         """
         Creates a mirror model.
 
@@ -665,7 +703,7 @@ class STL:
         elements3 = []
         for element in self.elements:
             # the 3 "y" locations for the element
-            epoints = nodes[element, xyzi] # [0]
+            epoints = nodes[element, xyzi]  # [0]
             je = np.where(epoints <= tol)[0]
             if len(je) < 3:  # not a symmetry element, so we save it
                 elements2.append(element)
@@ -682,7 +720,7 @@ class STL:
         self.elements = np.array(elements2 + elements3, dtype='int32')
 
 
-def _rotate_model(stl):  # pragma: no cover
+def _rotate_model(stl: STL) -> None:  # pragma: no cover
     nodes = stl.nodes
     elements = stl.elements
     if 0:

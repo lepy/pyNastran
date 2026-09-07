@@ -1,20 +1,34 @@
-from typing import List
-
+from typing import TextIO, Optional
 import numpy as np
 from numpy import zeros, searchsorted, ravel
 
-from pyNastran.utils.numpy_utils import integer_types
-from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.utils.numpy_utils import integer_types, integer_float_types
+from pyNastran.utils.mathematics import get_abs_max
+
+from pyNastran.op2.result_objects.op2_objects import (
+    get_times_dtype, combination_inplace)
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
-    StressObject, StrainObject, OES_Object)
-from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
+    StressObject, StrainObject, OES_Object, oes_real_data_code,
+    set_element_case, set_static_case, set_modal_case,
+    set_transient_case, set_post_buckling_case,
+)
+from pyNastran.f06.f06_formatting import (
+    write_floats_13e, write_floats_13e_long, _eigenvalue_header)
+from pyNastran.op2.op2_interface.write_utils import (
+    to_column_bytes, view_dtype, view_idtype_as_fdtype)
+from pyNastran.op2.writer.utils import op2_stringify
 
 
+ELEMENT_NAME_TO_ELEMENT_TYPE = {
+    'CBAR' : 34,
+}
 #oxx = 0. # max from bending and axial
 #txz = 1. # from transverse shear; txz=Vz/(Kz*A)
 #txy = 1. # from transverse shear; txy=Vz/(Ky*A)
 #t = 2. # from torsional stress; t=T*C/J
 #ovm = (oxx**2 + 3 * (txy**2 + txz**2 + t**2))**0.5
+
 
 class RealBarArray(OES_Object):
     def __init__(self, data_code, is_sort1, isubcase, dt):
@@ -33,6 +47,37 @@ class RealBarArray(OES_Object):
             #self.add_new_eid = self.add_new_eid_sort2
             #self.addNewNode = self.addNewNodeSort2
 
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        h5_table_dict = {
+            'EID': Int64Col(pos=0),
+            'SD': Float64Col(pos=1),
+            'XC': Float64Col(pos=2),
+            'XD': Float64Col(pos=3),
+            'XE': Float64Col(pos=4),
+            'XF': Float64Col(pos=5),
+            'AX': Float64Col(pos=6),
+            'MAX': Float64Col(pos=7),
+            'MIN': Float64Col(pos=8),
+            'MS': Float64Col(pos=9),
+            'DOMAIN_ID': Int64Col(pos=10),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr,
+                        ntime_neid0: int, ntime_neid1: int,
+                        itime: int):
+        arr["EID"][ntime_neid0:ntime_neid1] = self.element
+        arr["SD"][ntime_neid0:ntime_neid1] = self.data[itime, :, 0]
+        arr["XC"][ntime_neid0:ntime_neid1] = self.data[itime, :, 1]
+        arr["XD"][ntime_neid0:ntime_neid1] = self.data[itime, :, 2]
+        arr["XE"][ntime_neid0:ntime_neid1] = self.data[itime, :, 3]
+        arr["XF"][ntime_neid0:ntime_neid1] = self.data[itime, :, 4]
+        arr["AX"][ntime_neid0:ntime_neid1] = self.data[itime, :, 5]
+        arr["MAX"][ntime_neid0:ntime_neid1] = self.data[itime, :, 6]
+        arr["MIN"][ntime_neid0:ntime_neid1] = self.data[itime, :, 7]
+        arr["MS"][ntime_neid0:ntime_neid1] = self.data[itime, :, 8]
+
     @property
     def is_real(self) -> bool:
         return True
@@ -45,15 +90,100 @@ class RealBarArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
+    @classmethod
+    def _add_case(cls,
+                  table_name, element_name, isubcase,
+                  is_sort1, is_random, is_msc,
+                  random_code, title, subtitle, label):
+        num_wide = 17
+        data_code = oes_real_data_code(table_name,
+                                       element_name, num_wide,
+                                       is_sort1=is_sort1, is_random=is_random,
+                                       random_code=random_code,
+                                       title=title, subtitle=subtitle, label=label,
+                                       is_msc=is_msc)
+
+        # I'm only sure about the 1s in the strains and the
+        # corresponding 0s in the stresses.
+        is_strain = 'Strain' in cls.__name__
+        if is_strain:
+            strain = 1
+            s_code = 1
+        else:
+            # stress
+            strain = 0
+            s_code = 0
+        stress_bits = [0, strain, 0, strain]
+        data_code['stress_bits'] = stress_bits
+        data_code['s_code'] = s_code
+        #data_code['num_wide'] = 17
+
+        element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name]
+        data_code['element_name'] = element_name
+        data_code['element_type'] = element_type
+        return data_code
+
+    @classmethod
+    def add_static_case(cls, table_name, element_name, element, data, isubcase,
+                        is_sort1=True, is_random=False, is_msc=True,
+                        random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+
+        obj = set_static_case(cls, is_sort1, isubcase, data_code,
+                              set_element_case, (element, data))
+        return obj
+
+    @classmethod
+    def add_modal_case(cls, table_name, element_name: str, element, data, isubcase,
+                       modes, eigns, cycles,
+                       is_sort1=True, is_random=False, is_msc=True,
+                       random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_modal_case(cls, is_sort1, isubcase, data_code,
+                             set_element_case, (element, data),
+                             modes, eigns, cycles)
+        return obj
+
+    @classmethod
+    def add_transient_case(cls, table_name, element_name, element, data, isubcase,
+                           times,
+                           is_sort1=True, is_random=False, is_msc=True,
+                           random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_transient_case(cls, is_sort1, isubcase, data_code,
+                                 set_element_case, (element, data),
+                                 times)
+        return obj
+
+    @classmethod
+    def add_post_buckling_case(cls, table_name, element_name, element, data, isubcase,
+                               modes, eigrs, eigis,
+                               is_sort1=True, is_random=False, is_msc=True,
+                               random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_post_buckling_case(cls, is_sort1, isubcase, data_code,
+                                     set_element_case, (element, data),
+                                     modes, eigrs, eigis)
+        return obj
+
     def _get_msgs(self):
         raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
-
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
 
     def build(self):
         """sizes the vectorized attributes of the RealBarArray"""
@@ -74,18 +204,27 @@ class RealBarArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
 
-        _times = zeros(self.ntimes, dtype=dtype)
-        element = zeros(self.ntotal, dtype=idtype)
+        if self.is_sort1:
+            ntimes = self.ntimes
+            ntotal = self.ntotal  # nelements
+        else:
+            #print("***name=%s type=%s ntimes=%s nelements=%s ntotal=%s" % (
+                #self.element_name, self.element_type, self.ntimes, self.nelements, self.ntotal))
+            ntotal = self.ntimes  # nelements
+            ntimes = self.ntotal
+            #ss
+
+        _times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        element = np.zeros(ntotal, dtype=idtype)
 
         #[s1a, s2a, s3a, s4a, axial, smaxa, smina, MS_tension,
         # s1b, s2b, s3b, s4b,        sminb, sminb, MS_compression]
-        data = zeros((self.ntimes, self.ntotal, 15), dtype=fdtype)
+        data = np.zeros((ntimes, ntotal, 15), dtype=fdtype)
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
                 #print(key, value)
@@ -104,9 +243,9 @@ class RealBarArray(OES_Object):
 
         headers = self.get_headers()
         if self.nonlinear_factor not in (None, np.nan):
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
             #data_frame = pd.Panel(self.data, items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
             #data_frame.columns.names = column_names
@@ -116,6 +255,75 @@ class RealBarArray(OES_Object):
             data_frame.index.name = 'ElementID'
             data_frame.columns.names = ['Static']
         self.data_frame = data_frame
+
+    def envelope(self,
+                 eids: np.ndarray,
+                 result_name: str) -> np.ndarray:
+        is_min = (result_name == 'min')
+        func_name = 'min' if is_min else 'max'
+        max_min_func = getattr(np, func_name)
+
+        # print(''.join(self.get_stats()))
+        element = self.element
+        # print(f'element = {element}')
+        ielement = np.searchsorted(element, eids)
+        assert np.array_equal(element[ielement], eids)
+
+        #[s1a, s2a, s3a, s4a, axial, smaxa, smina, MS_tension,
+        # s1b, s2b, s3b, s4b,        sminb, sminb, MS_compression]
+        # data = np.zeros((ntime, ntotal, 15), dtype=fdtype)
+        stress_strain_dict_map = {
+            'axial': 4,
+        }
+        ntime, neid, _ = self.data.shape
+        # if result_name == 'von_mises':
+        #     data = self.von_mises()
+        # elif result_name == 'max_shear':
+        #     data = self.max_shear()
+        if result_name == 'abs_max':
+            # TODO: wrong, but ok...
+            data = np.abs(self.abs_principal())
+            assert data.shape == (ntime, neid), data.shape
+        elif result_name == 'max':
+            data = self.max_principal()
+        elif result_name == 'min':
+            data = self.min_principal()
+        elif result_name in stress_strain_dict_map:
+            iresult = stress_strain_dict_map[result_name]
+            data = self.data[:, :, iresult]
+        else:  # pragma: No cover
+            raise NotImplementedError(result_name)
+
+        assert data.ndim == 2, data.shape
+        # ntime, nelement = data.shape
+
+        # data.shape = (ntime, neid)
+        eid_data = max_min_func(data, axis=0)
+        assert eid_data.shape == (neid, ), eid_data.shape
+        return eid_data[ielement]
+
+    # def von_mises(self) -> np.ndarray:
+    #     asdf
+    # def max_shear(self) -> np.ndarray:
+    #     asdf
+
+    def abs_principal(self) -> np.ndarray:
+        omax = self.max_principal()
+        omin = self.min_principal()
+        abs_max = get_abs_max(omin, omax, omax.dtype)
+        return abs_max
+
+    def max_principal(self) -> np.ndarray:
+        #[s1a, s2a, s3a, s4a, axial, smaxa, smina, MS_tension,
+        # s1b, s2b, s3b, s4b,        sminb, sminb, MS_compression]
+        data = self.data[:, :, [5, 12]]
+        omax = data.max(axis=2)
+        return omax
+
+    def min_principal(self) -> np.ndarray:
+        data = self.data[:, :, [6, 12]]
+        omin = data.min(axis=2)
+        return omin
 
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
@@ -153,12 +361,26 @@ class RealBarArray(OES_Object):
     def add_new_eid_sort1(self, dt, eid,
                           s1a, s2a, s3a, s4a, axial, smaxa, smina, MSt,
                           s1b, s2b, s3b, s4b, smaxb, sminb, MSc):
-
         assert isinstance(eid, integer_types)
         self._times[self.itime] = dt
         self.element[self.itotal] = eid
         self.data[self.itime, self.itotal, :] = [s1a, s2a, s3a, s4a, axial, smaxa, smina, MSt,
                                                  s1b, s2b, s3b, s4b,        smaxb, sminb, MSc]
+        self.itotal += 1
+        self.ielement += 1
+
+    def add_new_eid_sort2(self, dt, eid,
+                          s1a, s2a, s3a, s4a, axial, smaxa, smina, MSt,
+                          s1b, s2b, s3b, s4b, smaxb, sminb, MSc):
+        #print(self.itime, self.itotal)  # itotal=ielement
+        assert isinstance(eid, integer_types)
+        ielement = self.itime
+        itime = self.ielement
+        #print(itime, dt, self._times.dtype)
+        self._times[itime] = dt
+        self.element[ielement] = eid
+        self.data[itime, ielement, :] = [s1a, s2a, s3a, s4a, axial, smaxa, smina, MSt,
+                                         s1b, s2b, s3b, s4b,        smaxb, sminb, MSc]
         self.itotal += 1
         self.ielement += 1
 
@@ -174,12 +396,13 @@ class RealBarArray(OES_Object):
         #self.data[self.itime, self.itotal, :] = [fd, oxx, oyy, txy, angle, majorP, minorP, ovm]
         #self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
+        class_name = self.__class__.__name__
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{class_name}>\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.ntotal
@@ -189,38 +412,114 @@ class RealBarArray(OES_Object):
 
         msg = []
         if self.nonlinear_factor not in (None, np.nan):  # transient
-            msg.append('  type=%s ntimes=%i nelements=%i\n'
-                       % (self.__class__.__name__, ntimes, nelements))
+            msg.append(f'  type={class_name} ntimes={ntimes:d} nelements={nelements}; table_name={self.table_name_str}\n')
             ntimes_word = 'ntimes'
         else:
-            msg.append('  type=%s nelements=%i\n'
-                       % (self.__class__.__name__, nelements))
+            msg.append(f'  type={class_name} nelements={nelements:d}\n')
             ntimes_word = '1'
         headers = self.get_headers()
 
         n = len(headers)
         assert n == self.data.shape[2], 'nheaders=%s shape=%s' % (n, str(self.data.shape))
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element)  #[0]
+        itot = np.searchsorted(eids, self.element)  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        ind = ravel([searchsorted(self.element == eid) for eid in eids])
-        #ind = searchsorted(eids, self.element)
+        ind = np.ravel([np.searchsorted(self.element == eid) for eid in eids])
+        #ind = np.searchsorted(eids, self.element)
         #ind = ind.reshape(ind.size)
         #ind.sort()
         return ind
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+
+    def linear_combination(self, factor: integer_float_types,
+                           data: Optional[np.ndarray]=None,
+                           update: bool=True) -> None:
+        # [s1a, s2a, s3a, s4a, axial, smaxa, smina, MS_tension,
+        #  s1b, s2b, s3b, s4b,        smaxb, sminb, MS_compression]
+        import warnings
+        warnings.warn('update oes_bar margins')
+        combination_inplace(self.data, data, factor)
+        if update:
+            self.update_data_components()
+
+    def update_data_components(self):
+        return
+
+    def write_csv(self, csv_file: TextIO,
+                  is_exponent_format: bool=False,
+                  is_mag_phase: bool=False, is_sort1: bool=True,
+                  write_header: bool=True):
+        """
+        Stress Table - PBAR/PBARL
+        -------------------------
+
+        """
+        name = str(self.__class__.__name__)
+        if write_header:
+            csv_file.write('# %s\n' % name)
+            headers = ['Flag', 'SubcaseID', 'iTime', 'Eid', 'End', 'Saxial', 'S1', 'S2', 'S3', 'S4', 'Blank']
+            csv_file.write('# ' + ','.join(headers) + '\n')
+
+        # stress vs. strain
+        flag = 10 if 'Stress' in name else 11
+
+        isubcase = self.isubcase
+        ntimes = self.data.shape[0]
+
+        zero = ' 0.000000E+00'
+
+        eids = self.element
+        eid_len = '%d' % len(str(eids.max()))
+
+        for itime in range(ntimes):
+            #dt = self._times[itime]
+            #header = _eigenvalue_header(self, header, itime, ntimes, dt)
+            #f06_file.write(''.join(header + msg))
+
+            s1a = self.data[itime, :, 0]
+            s2a = self.data[itime, :, 1]
+            s3a = self.data[itime, :, 2]
+            s4a = self.data[itime, :, 3]
+
+            axial = self.data[itime, :, 4]
+            #smaxa = self.data[itime, :, 5]
+            #smina = self.data[itime, :, 6]
+            #MSt = self.data[itime, :, 7]
+
+            s1b = self.data[itime, :, 8]
+            s2b = self.data[itime, :, 9]
+            s3b = self.data[itime, :, 10]
+            s4b = self.data[itime, :, 11]
+
+            #smaxb = self.data[itime, :, 12]
+            #sminb = self.data[itime, :, 13]
+            #MSc = self.data[itime, :, 14]
+
+            for (eid, s1ai, s2ai, s3ai, s4ai, axiali, s1bi, s2bi, s3bi, s4bi) in zip(
+                eids, s1a, s2a, s3a, s4a, axial, s1b, s2b, s3b, s4b):
+
+                vals = [s1ai, s2ai, s3ai, s4ai, axiali,
+                        s1bi, s2bi, s3bi, s4bi]
+                if is_exponent_format:
+                    vals2 = write_floats_13e_long(vals)
+                    [s1ai, s2ai, s3ai, s4ai, axiali,
+                     s1bi, s2bi, s3bi, s4bi] = vals2
+                csv_file.write(f'{flag}, {isubcase}, {itime}, {eid:{eid_len}d}, 0, {axiali}, {s1ai}, {s2ai}, {s3ai}, {s4ai}, {zero}\n'
+                               f'{flag}, {isubcase}, {itime}, {eid:{eid_len}d}, 1, {axiali}, {s1bi}, {s2bi}, {s3bi}, {s4bi}, {zero}\n')
+        return
+
+    def write_f06(self, f06_file: TextIO, header=None, page_stamp='PAGE %s',
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg = self._get_msgs()
@@ -273,17 +572,17 @@ class RealBarArray(OES_Object):
             page_num -= 1
         return page_num
 
-    def write_op2(self, op2, op2_ascii, itable, new_result,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result,
                   date, is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
         from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -310,7 +609,7 @@ class RealBarArray(OES_Object):
         #print('shape = %s' % str(self.data.shape))
         #assert self.ntimes == 1, self.ntimes
 
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         #fmt = '%2i %6f'
         #print('ntotal=%s' % (ntotal))
@@ -321,9 +620,15 @@ class RealBarArray(OES_Object):
         else:
             raise NotImplementedError('SORT2')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        op2_ascii.write(f'nelements={nelements:d}\n')
+
+        fdtype = np.float32(0.).dtype
+        idtype = np.int32(0.).dtype
+        datai = np.empty((nelements, self.num_wide), dtype=fdtype)
+        datai[:, 0] = eids_device
+
         for itime in range(self.ntimes):
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             #print('stress itable = %s' % itable)
@@ -333,46 +638,51 @@ class RealBarArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
-            s1a = self.data[itime, :, 0]
-            s2a = self.data[itime, :, 1]
-            s3a = self.data[itime, :, 2]
-            s4a = self.data[itime, :, 3]
+            if 0:
+                datai[:, 1:] = self.data[itime, :, :]
+                op2_file.write(datai)
 
-            axial = self.data[itime, :, 4]
-            smaxa = self.data[itime, :, 5]
-            smina = self.data[itime, :, 6]
-            MSt = self.data[itime, :, 7]
+            else:
+                s1a = self.data[itime, :, 0]
+                s2a = self.data[itime, :, 1]
+                s3a = self.data[itime, :, 2]
+                s4a = self.data[itime, :, 3]
 
-            s1b = self.data[itime, :, 8]
-            s2b = self.data[itime, :, 9]
-            s3b = self.data[itime, :, 10]
-            s4b = self.data[itime, :, 11]
+                axial = self.data[itime, :, 4]
+                smaxa = self.data[itime, :, 5]
+                smina = self.data[itime, :, 6]
+                MSt = self.data[itime, :, 7]
 
-            smaxb = self.data[itime, :, 12]
-            sminb = self.data[itime, :, 13]
-            MSc = self.data[itime, :, 14]
+                s1b = self.data[itime, :, 8]
+                s2b = self.data[itime, :, 9]
+                s3b = self.data[itime, :, 10]
+                s4b = self.data[itime, :, 11]
 
-            for (eid_device,
-                 s1ai, s2ai, s3ai, s4ai, axiali, smaxai, sminai, MSti,
-                 s1bi, s2bi, s3bi, s4bi,         smaxbi, sminbi, MSci) in zip(
-                eids_device,
-                s1a, s2a, s3a, s4a, axial, smaxa, smina, MSt,
-                s1b, s2b, s3b, s4b,        smaxb, sminb, MSc):
+                smaxb = self.data[itime, :, 12]
+                sminb = self.data[itime, :, 13]
+                MSc = self.data[itime, :, 14]
 
-                data = [eid_device,
-                        s1ai, s2ai, s3ai, s4ai, axiali, smaxai, sminai, MSti,
-                        s1bi, s2bi, s3bi, s4bi,         smaxbi, sminbi, MSci]
-                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, str(data)))
-                op2.write(struct1.pack(*data))
+                for (eid_device,
+                     s1ai, s2ai, s3ai, s4ai, axiali, smaxai, sminai, MSti,
+                     s1bi, s2bi, s3bi, s4bi,         smaxbi, sminbi, MSci) in zip(
+                    eids_device,
+                    s1a, s2a, s3a, s4a, axial, smaxa, smina, MSt,
+                    s1b, s2b, s3b, s4b,        smaxb, sminb, MSc):
+
+                    data = [eid_device,
+                            s1ai, s2ai, s3ai, s4ai, axiali, smaxai, sminai, MSti,
+                            s1bi, s2bi, s3bi, s4bi,         smaxbi, sminbi, MSci]
+                    op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, op2_stringify(data)))
+                    op2_file.write(struct1.pack(*data))
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -383,7 +693,8 @@ class RealBarStressArray(RealBarArray, StressObject):
         RealBarArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['s1a', 's2a', 's3a', 's4a', 'axial', 'smaxa', 'smina', 'MS_tension',
                    's1b', 's2b', 's3b', 's4b',          'smaxb', 'sminb', 'MS_compression']
         return headers
@@ -407,7 +718,8 @@ class RealBarStrainArray(RealBarArray, StrainObject):
         RealBarArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['e1a', 'e2a', 'e3a', 'e4a', 'axial', 'emaxa', 'emina', 'MS_tension',
                    'e1b', 'e2b', 'e3b', 'e4b',          'emaxb', 'eminb', 'MS_compression']
         return headers

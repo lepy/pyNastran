@@ -6,9 +6,9 @@ All dynamic control cards are defined in this file.  This includes:
  * FREQ
  * FREQ1
  * FREQ2
- * FREQ3 (not implemented)
+ * FREQ3
  * FREQ4
- * FREQ5 (not implemented)
+ * FREQ5
  * NLPCI
  * NLPARM
  * TSTEP
@@ -27,22 +27,67 @@ from math import log, exp
 from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy import unique, hstack
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import BaseCard
+from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank,
     string_or_blank, blank, fields, components_or_blank,
     integer_string_or_blank, integer_or_double, #parse_components,
     modal_components_or_blank,
 )
+from pyNastran.bdf.bdf_interface.assign_type_force import force_double
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
 
+
+#if method_int == 1:
+    #method = 'AUTO'
+#elif method_int == 2:
+    #method = 'TSTEP'
+#elif method_int == 3:
+    #method = 'ADAPT'
+
+NLPARM_KMETHOD_MAP = {
+    1 : 'AUTO',
+    2 : 'ITER',
+    3 : 'ADAPT',
+    4 : 'SEMI',
+}
+NLPARM_CONV_MAP = {
+    1 : 'W',
+    2 : 'P',
+    3 : 'PW',
+    4 : 'U',
+    5 : 'UW',
+    6 : 'UP',
+    7 : 'UPW',
+    10: '', # NLSTEP
+    14: '', # NLSTEP
+    42: 'PVA',
+    -1 : 'PW',  # Nastran-CoFE : blank -> assuming default
+}
+#nlparm_conv_map = {
+    #1 : 'W',
+    #2 : 'P',  # guess based on format
+    #3 : 'PW',
+    #4 : 'U',
+    #7 : 'UPW',
+    #10 : '',
+    ##3: 'ADAPT'
+#}
+
+
+
+NLPARM_INT_OUT_MAP = {
+    0 : 'NO',
+    1 : 'YES',
+    2 : 'ALL',
+}
 
 class DELAY(BaseCard):
     """
@@ -61,9 +106,11 @@ class DELAY(BaseCard):
         nodes = [1]
         components = [1]
         delays = [1.]
-        return DELAY(sid, nodes, components, delays, comment='')
+        return DELAY(sid, nodes, components, delays)
 
-    def __init__(self, sid, nodes, components, delays, comment=''):
+    def __init__(self, sid: int,
+                 nodes: list[int], components: list[int], delays: list[float],
+                 comment: str=''):
         """
         Creates a DELAY card
 
@@ -71,13 +118,13 @@ class DELAY(BaseCard):
         ----------
         sid : int
             DELAY id that is referenced by a TLOADx, RLOADx or ACSRCE card
-        nodes : List[int]
+        nodes : list[int]
             list of nodes that see the delay
             len(nodes) = 1 or 2
-        components : List[int]
+        components : list[int]
             the components corresponding to the nodes that see the delay
             len(nodes) = len(components)
-        delays : List[float]
+        delays : list[float]
             Time delay (tau) for designated point Pi and component Ci
             len(nodes) = len(delays)
         comment : str; default=''
@@ -94,6 +141,9 @@ class DELAY(BaseCard):
             components = [components]
         if isinstance(delays, float):
             delays = [delays]
+        assert len(nodes) == len(components)
+        assert len(nodes) == len(delays)
+
         #: Identification number of DELAY entry. (Integer > 0)
         self.sid = sid
         #: Grid, extra, or scalar point identification number. (Integer > 0)
@@ -106,7 +156,7 @@ class DELAY(BaseCard):
         self.nodes_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a DELAY card from ``BDF.add_card(...)``
 
@@ -130,21 +180,23 @@ class DELAY(BaseCard):
             assert components[1] in [0, 1, 2, 3, 4, 5, 6], components
         return DELAY(sid, nodes, components, delays, comment=comment)
 
-    def add(self, delay):
+    def add(self, delay: DELAY):
         assert self.sid == delay.sid, 'sid=%s delay.sid=%s' % (self.sid, delay.sid)
         if delay.comment:
-            if hasattr('_comment'):
+            if hasattr(self, '_comment'):
                 self._comment += delay.comment
             else:
                 self._comment = delay.comment
         self.nodes += delay.nodes
         self.components += delay.components
         self.delays += delay.delays
+        assert len(self.nodes) == len(self.components)
+        assert len(self.nodes) == len(self.delays)
 
     def get_delay_at_freq(self, freq):
         return self.nodes, self.components, self.delays
 
-    def cross_reference(self, model, xref_errors):
+    def cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -183,7 +235,10 @@ class DELAY(BaseCard):
 
     def raw_fields(self):
         list_fields = ['DELAY', self.sid]
-        for nid, comp, delay in zip(self.node_ids, self.components, self.delays):
+        node_ids = self.node_ids
+        assert len(node_ids) == len(self.components)
+        assert len(node_ids) == len(self.delays)
+        for nid, comp, delay in zip(node_ids, self.components, self.delays):
             if isinstance(nid, integer_types):
                 nidi = nid
             else:
@@ -194,6 +249,8 @@ class DELAY(BaseCard):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
+        assert len(node_ids) == len(self.components)
+        assert len(node_ids) == len(self.delays)
         if size == 8:
             for nid, comp, delay in zip(node_ids, self.components, self.delays):
                 msg += print_card_8(['DELAY', self.sid, nid, comp, delay])
@@ -224,9 +281,9 @@ class DPHASE(BaseCard):
         nodes = [1]
         components = [1]
         phase_leads = [1.]
-        return DPHASE(sid, nodes, components, phase_leads, comment='')
+        return DPHASE(sid, nodes, components, phase_leads)
 
-    def __init__(self, sid, nodes, components, phase_leads, comment=''):
+    def __init__(self, sid, nodes, components, phase_leads, comment: str=''):
         """
         Creates a DPHASE card
 
@@ -234,13 +291,13 @@ class DPHASE(BaseCard):
         ----------
         sid : int
             DPHASE id that is referenced by a RLOADx or ACSRCE card
-        nodes : List[int]
+        nodes : list[int]
             list of nodes that see the delay
             len(nodes) = 1 or 2
-        components : List[int]
+        components : list[int]
             the components corresponding to the nodes that see the delay
             len(nodes) = len(components)
-        phase_leads : List[float]
+        phase_leads : list[float]
             Phase lead θ in degrees.
             len(nodes) = len(delays)
         comment : str; default=''
@@ -264,7 +321,7 @@ class DPHASE(BaseCard):
         self.nodes_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a DPHASE card from ``BDF.add_card(...)``
 
@@ -288,16 +345,18 @@ class DPHASE(BaseCard):
             assert components[1] in [0, 1, 2, 3, 4, 5, 6], components
         return DPHASE(sid, nodes, components, phase_leads, comment=comment)
 
-    def add(self, dphase):
+    def add(self, dphase: DPHASE):
         assert self.sid == dphase.sid, 'sid=%s dphase.sid=%s' % (self.sid, dphase.sid)
         if dphase.comment:
-            if hasattr('_comment'):
+            if hasattr(self, '_comment'):
                 self._comment += dphase.comment
             else:
                 self._comment = dphase.comment
         self.nodes += dphase.nodes
         self.components += dphase.components
         self.phase_leads += dphase.phase_leads
+        assert len(self.nodes) == len(self.components)
+        assert len(self.nodes) == len(self.phase_leads)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -312,7 +371,7 @@ class DPHASE(BaseCard):
         msg = ', which is required by DPHASE sid=%s' % self.sid
         self.nodes_ref = model.Nodes(self.node_ids, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         return self.cross_reference(model)
 
     def uncross_reference(self) -> None:
@@ -346,13 +405,18 @@ class DPHASE(BaseCard):
 
     def raw_fields(self):
         list_fields = ['DPHASE', self.sid]
-        for nid, comp, delay in zip(self.node_ids, self.components, self.phase_leads):
+        node_ids = self.node_ids
+        assert len(node_ids) == len(self.components)
+        assert len(node_ids) == len(self.phase_leads)
+        for nid, comp, delay in zip(node_ids, self.components, self.phase_leads):
             list_fields += [nid, comp, delay]
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
         node_ids = self.node_ids
+        assert len(node_ids) == len(self.components)
+        assert len(node_ids) == len(self.phase_leads)
         if size == 8:
             for nid, comp, delay in zip(node_ids, self.components, self.phase_leads):
                 msg += print_card_8(['DPHASE', self.sid, nid, comp, delay])
@@ -380,9 +444,9 @@ class FREQ(BaseCard):
     def _init_from_empty(cls):
         sid = 1
         freqs = [1., 2., 3.]
-        return FREQ(sid, freqs, comment='')
+        return FREQ(sid, freqs)
 
-    def __init__(self, sid, freqs, comment=''):
+    def __init__(self, sid, freqs, comment: str=''):
         """
         Creates a FREQ card
 
@@ -390,7 +454,7 @@ class FREQ(BaseCard):
         ----------
         sid : int
             set id referenced by case control FREQUENCY
-        freqs : List[float]
+        freqs : list[float]
             the frequencies for a FREQx object
         comment : str; default=''
             a comment for the card
@@ -405,7 +469,7 @@ class FREQ(BaseCard):
         self.freqs = np.unique(freqs)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a FREQ card from ``BDF.add_card(...)``
 
@@ -432,13 +496,13 @@ class FREQ(BaseCard):
 
         Parameters
         ----------
-        freqs : List[float] / (nfreq, ) float ndarray
+        freqs : list[float] / (nfreq, ) float ndarray
             the frequencies for a FREQx object
 
         """
         #print("self.freqs = ",self.freqs)
         #print("freqs = ",freqs)
-        self.freqs = unique(hstack([self.freqs, freqs]))
+        self.freqs = np.unique(np.hstack([self.freqs, freqs]))
 
     def add_frequency_object(self, freq):
         """
@@ -482,9 +546,9 @@ class FREQ1(BaseCard):
         sid = 1
         f1 = 1.
         df = 10.
-        return FREQ1(sid, f1, df, ndf=1, comment='')
+        return FREQ1(sid, f1, df, ndf=1)
 
-    def __init__(self, sid, f1, df, ndf=1, comment=''):
+    def __init__(self, sid, f1, df, ndf=1, comment: str=''):
         """
         Creates a FREQ1 card
 
@@ -513,10 +577,10 @@ class FREQ1(BaseCard):
         freqs = []
         for i in range(ndf + 1):
             freqs.append(f1 + i * df)
-        self.freqs = unique(freqs)
+        self.freqs = np.unique(freqs)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a FREQ1 card from ``BDF.add_card(...)``
 
@@ -529,10 +593,30 @@ class FREQ1(BaseCard):
 
         """
         sid = integer(card, 1, 'sid')
-        f1 = double_or_blank(card, 2, 'f1', 0.0)
+        f1 = double_or_blank(card, 2, 'f1', default=0.0)
         df = double(card, 3, 'df')
-        ndf = integer_or_blank(card, 4, 'ndf', 1)
-        assert len(card) <= 5, 'len(FREQ card) = %i\ncard=%s' % (len(card), card)
+        ndf = integer_or_blank(card, 4, 'ndf', default=1)
+        assert len(card) <= 5, f'len(FREQ card) = {len(card):d}\ncard={card}'
+        return FREQ1(sid, f1, df, ndf, comment=comment)
+
+    @classmethod
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a FREQ1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        sid = integer(card, 1, 'sid')
+        f1 = double_or_blank(card, 2, 'f1', default=0.0)
+        df = force_double(card, 3, 'df')
+        ndf = integer_or_blank(card, 4, 'ndf', default=1)
+        assert len(card) <= 5, f'len(FREQ card) = {len(card):d}\ncard={card}'
         return FREQ1(sid, f1, df, ndf, comment=comment)
 
     def raw_fields(self):
@@ -568,9 +652,9 @@ class FREQ2(BaseCard):
         sid = 1
         f1 = 1.
         f2 = 2.
-        return FREQ2(sid, f1, f2, nf=1, comment='')
+        return FREQ2(sid, f1, f2, nf=1)
 
-    def __init__(self, sid, f1, f2, nf=1, comment=''):
+    def __init__(self, sid, f1, f2, nf=1, comment: str=''):
         """
         Creates a FREQ2 card
 
@@ -605,7 +689,7 @@ class FREQ2(BaseCard):
         self.freqs = np.unique(freqs)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a FREQ2 card from ``BDF.add_card(...)``
 
@@ -621,7 +705,7 @@ class FREQ2(BaseCard):
         f1 = double(card, 2, 'f1')  # default=0.0 ?
         f2 = double(card, 3, 'f2')
         nf = integer_or_blank(card, 4, 'nf', 1)
-        assert len(card) <= 5, 'len(FREQ2 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(FREQ2 card) = {len(card):d}\ncard={card}'
         return FREQ2(sid, f1, f2, nf, comment=comment)
         #return FREQ(sid, freqs, comment=comment)
 
@@ -652,9 +736,9 @@ class FREQ3(FREQ):
     def _init_from_empty(cls):
         sid = 1
         f1 = 1.
-        return FREQ3(sid, f1, f2=None, freq_type='LINEAR', nef=10, cluster=1.0, comment='')
+        return FREQ3(sid, f1, f2=None, freq_type='LINEAR', nef=10, cluster=1.0)
 
-    def __init__(self, sid, f1, f2=None, freq_type='LINEAR', nef=10, cluster=1.0, comment=''):
+    def __init__(self, sid, f1, f2=None, freq_type='LINEAR', nef=10, cluster=1.0, comment: str=''):
         """
         Creates a FREQ3 card
 
@@ -692,8 +776,51 @@ class FREQ3(FREQ):
     def validate(self):
         assert self.freq_type in ['LINEAR', 'LOG'], 'freq_type=%r' % self.freq_type
 
+    def get_frequencies(self, natural_freq: np.ndarray) -> np.ndarray:
+        f1 = self.f1
+        f2 = self.f2
+        freq_type = self.freq_type
+        cluster = 1 / self.cluster
+        nef = self.nef
+        if f1 == f2:
+            return np.array([f1], dtype='float64')
+
+        natural_freq2 = np.unique(np.hstack([[f1, f2], natural_freq]))
+        ifreq = (f1 <= natural_freq2) & (natural_freq2 <= f2)
+        natural_freq3 = natural_freq2[ifreq]
+        #f1_plus_f2 = 0.5 * (f1s + f2s)
+        #f2_minus_f1 = 0.5 * (f2s - f1s)
+        #nef = 11
+        #cluster = 1 / 0.25
+        k = np.arange(nef, dtype='int32')
+        zeta = -1 + 2 * k / (nef - 1)
+        zeta2 = np.abs(zeta) ** cluster * np.sign(zeta)
+
+        #f1s = [10.]
+        #f2s = [20.]
+
+        frequencies_list = []
+        if freq_type == 'LINEAR':
+            f1s = natural_freq3[:-1]
+            f2s = natural_freq3[1:]
+            for f1, f2 in zip(f1s, f2s):
+                fhat = 0.5 * (f1 + f2) + 0.5 * (f2 - f1) * zeta2
+                frequencies_list.append(fhat)
+        elif freq_type == 'LOG':
+            f1s = np.log10(natural_freq3[:-1])
+            f2s = np.log10(natural_freq3[1:])
+            for f1, f2 in zip(f1s, f2s):
+                flog_hat = 0.5 * (f1 + f2) + 0.5 * (f2 - f1) * zeta2
+                fhat = 10 ** flog_hat
+                frequencies_list.append(fhat)
+        else:  # pragma: no cover
+            raise RuntimeError(self.get_stats())
+
+        frequencies = np.unique(np.hstack(frequencies_list))
+        return frequencies
+
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a FREQ3 card from ``BDF.add_card(...)``
 
@@ -707,10 +834,10 @@ class FREQ3(FREQ):
         """
         sid = integer(card, 1, 'sid')
         f1 = double(card, 2, 'f1')
-        f2 = double_or_blank(card, 3, 'f2', f1)
+        f2 = double_or_blank(card, 3, 'f2', default=f1)
         freq_type = string_or_blank(card, 4, 'Type', 'LINEAR')
-        nef = integer_or_blank(card, 5, 'nef', 10)
-        cluster = double_or_blank(card, 6, 'cluster', 1.0)
+        nef = integer_or_blank(card, 5, 'nef', default=10)
+        cluster = double_or_blank(card, 6, 'cluster', default=1.0)
         return FREQ3(sid, f1, f2=f2, freq_type=freq_type, nef=nef, cluster=cluster,
                      comment=comment)
 
@@ -746,9 +873,9 @@ class FREQ4(FREQ):
     @classmethod
     def _init_from_empty(cls):
         sid = 1
-        return FREQ4(sid, f1=0., f2=1e20, fspread=0.1, nfm=3, comment='')
+        return FREQ4(sid, f1=0., f2=1e20, fspread=0.1, nfm=3)
 
-    def __init__(self, sid, f1=0., f2=1e20, fspread=0.1, nfm=3, comment=''):
+    def __init__(self, sid, f1=0., f2=1e20, fspread=0.1, nfm=3, comment: str=''):
         """
         Creates a FREQ4 card
 
@@ -775,7 +902,7 @@ class FREQ4(FREQ):
         self.nfm = nfm
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a FREQ4 card from ``BDF.add_card(...)``
 
@@ -792,8 +919,24 @@ class FREQ4(FREQ):
         f2 = double_or_blank(card, 3, 'f2', 1.e20)
         fspread = double_or_blank(card, 4, 'fspd', 0.1)
         nfm = integer_or_blank(card, 5, 'nfm', 3)
-        assert len(card) <= 6, 'len(FREQ card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 6, f'len(FREQ card) = {len(card):d}\ncard={card}'
         return FREQ4(sid, f1=f1, f2=f2, fspread=fspread, nfm=nfm, comment=comment)
+
+    def get_frequencies(self, natural_freq: np.ndarray) -> np.ndarray:
+        # 21 equally spaced bands for each mode
+        num = self.nfm
+        f1 = self.f1
+        f2 = self.f2
+        fspread = self.fspread
+        frequencies_list = []
+        for natural_freqi in natural_freq:
+            if not(f1 <= natural_freqi <= f2):
+                continue
+            f1i = (1 - fspread) * natural_freqi
+            f2i = (1 + fspread) * natural_freqi
+            freqs = np.linspace(f1i, f2i, num=num)
+            frequencies_list.append(freqs)
+        return np.unique(np.hstack(frequencies_list))
 
     def raw_fields(self):
         list_fields = ['FREQ4', self.sid, self.f1, self.f2, self.fspread, self.nfm]
@@ -832,9 +975,9 @@ class FREQ5(FREQ):
     def _init_from_empty(cls):
         sid = 1
         fractions = [0.1, 0.2, 0.3]
-        return FREQ5(sid, fractions, f1=0., f2=1e20, comment='')
+        return FREQ5(sid, fractions, f1=0., f2=1e20)
 
-    def __init__(self, sid, fractions, f1=0., f2=1e20, comment=''):
+    def __init__(self, sid, fractions, f1=0., f2=1e20, comment: str=''):
         """
         Creates a FREQ5 card
 
@@ -846,7 +989,7 @@ class FREQ5(FREQ):
             Lower bound of frequency range in cycles per unit time.
         f2 : float; default=1e20
             Upper bound of frequency range in cycles per unit time.
-        fractions : List[float]
+        fractions : list[float]
             Fractions of the natural frequencies in the range F1 to F2.
         comment : str; default=''
             a comment for the card
@@ -868,11 +1011,21 @@ class FREQ5(FREQ):
     def validate(self):
         assert len(self.fractions) > 0, 'FREQ5: fractions=%s' % self.fractions
 
-    #def get_freqs(self):
-        #raise NameError()
+    def get_frequencies(self, natural_freq: np.ndarray) -> np.ndarray:
+        """
+        #f1     : 20.0
+        #f2     : 200.0
+        #fractions : [0.6, 0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.2]
+        """
+        fractions = np.unique(self.fractions)
+        freqsi = fractions[:, np.newaxis] * natural_freq[np.newaxis, :]
+        freqsi2 = np.unique(freqsi)
+        ifreq = (self.f1 <= freqsi2) & (freqsi2 <= self.f2)
+        frequencies = freqsi2[ifreq]
+        return frequencies
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         sid = integer(card, 1, 'sid')
         f1 = double(card, 2, 'f1')
         f2 = double_or_blank(card, 3, 'f2', f1)
@@ -880,7 +1033,7 @@ class FREQ5(FREQ):
         i = 1
         fractions = []
         for ifield in range(4, len(card)):
-            fraction = double(card, ifield, 'FR%i' % (i))
+            fraction = double(card, ifield, f'FR%{i:d}')
             fractions.append(fraction)
             i += 1
         return FREQ5(sid, fractions, f1=f2, f2=f2, comment=comment)
@@ -921,12 +1074,12 @@ class NLPARM(BaseCard):
                       max_iter=25, conv='PW', int_out='NO', eps_u=0.01,
                       eps_p=0.01, eps_w=0.01, max_div=3, max_qn=None,
                       max_ls=4, fstress=0.2, ls_tol=0.5, max_bisect=5,
-                      max_r=20., rtol_b=20., comment='')
+                      max_r=20., rtol_b=20.)
 
     def __init__(self, nlparm_id, ninc=None, dt=0.0, kmethod='AUTO', kstep=5,
                  max_iter=25, conv='PW', int_out='NO',
                  eps_u=0.01, eps_p=0.01, eps_w=0.01, max_div=3, max_qn=None, max_ls=4,
-                 fstress=0.2, ls_tol=0.5, max_bisect=5, max_r=20., rtol_b=20., comment=''):
+                 fstress=0.2, ls_tol=0.5, max_bisect=5, max_r=20., rtol_b=20., comment: str=''):
         """
         Creates an NLPARM card
 
@@ -968,7 +1121,7 @@ class NLPARM(BaseCard):
         ls_tol : float; default=0.5
             ???
         max_bisect : int; default=5
-            ???
+            max number of bisections
         max_r : float; default=20.
             ???
         rtol_b : float; default=20.
@@ -1011,10 +1164,38 @@ class NLPARM(BaseCard):
         self.max_r = max_r
         self.rtol_b = rtol_b
 
+    def validate(self) -> None:
+        # line 1
+        assert self.nlparm_id > 0, self.get_stats()
+        assert self.ninc is None or self.ninc >= 0, self.get_stats()  #  is this >0 or >= 0?
+        assert self.dt >= 0., self.get_stats()
+        assert self.kstep >= -1, self.get_stats()
+        assert len(set(self.conv)) == len(self.conv), f'There are duplicate values in conv={self.conv!r}'
+        for conv_key in set(self.conv):
+            #MSC: 'U', 'P', 'W', 'V', 'N', 'A'
+            assert conv_key in ['U', 'P', 'W', 'V', 'N', 'A', ''], self.get_stats()
+        assert self.int_out in ['YES', 'NO', 'ALL'], self.get_stats()
+
+        # line 2
+        assert self.eps_p > 0.0, self.get_stats()
+        assert self.eps_u > 0.0 or self.eps_u < 0.0, self.get_stats()
+        assert self.eps_w > 0.0 or self.eps_w < 0.0, self.get_stats()
+        assert isinstance(self.max_div, int), self.get_stats()
+        assert self.max_qn >= 0, self.get_stats()
+        assert self.max_ls >= 0, self.get_stats()
+        assert 0.0 < self.fstress < 1.0, self.get_stats()
+        assert 0.01 < self.ls_tol < 0.9, self.get_stats()
+
+        # line 3
+        # [-10, 10] is the official limit, but is not limited by that; 100 is insane...
+        assert -100 <= self.max_bisect <= 100, self.get_stats()
+        assert 1.0 <= self.max_r <= 40.0, self.get_stats()
+        assert self.rtol_b > 0.0, self.get_stats()
+
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
-        Adds a NLPARM card from ``BDF.add_card(...)``
+        Adds an NLPARM card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -1032,33 +1213,33 @@ class NLPARM(BaseCard):
         # PARAM,NLTOL,0, in which case the default is 1.
         ninc = integer_or_blank(card, 2, 'ninc')
 
-        dt = double_or_blank(card, 3, 'dt', 0.0)
-        kmethod = string_or_blank(card, 4, 'kmethod', 'AUTO')
-        kstep = integer_or_blank(card, 5, 'kstep', 5)
-        max_iter = integer_or_blank(card, 6, 'max_iter', 25)
-        conv = string_or_blank(card, 7, 'conv', 'PW')
-        int_out = string_or_blank(card, 8, 'intOut', 'NO')
+        dt = double_or_blank(card, 3, 'dt', default=0.0)
+        kmethod = string_or_blank(card, 4, 'kmethod', default='AUTO')
+        kstep = integer_or_blank(card, 5, 'kstep', default=5)
+        max_iter = integer_or_blank(card, 6, 'max_iter', default=25)
+        conv = string_or_blank(card, 7, 'conv', default='PW')
+        int_out = string_or_blank(card, 8, 'intOut', default='NO')
 
         # line 2
-        eps_u = double_or_blank(card, 9, 'eps_u', 0.01)
-        eps_p = double_or_blank(card, 10, 'eps_p', 0.01)
-        eps_w = double_or_blank(card, 11, 'eps_w', 0.01)
-        max_div = integer_or_blank(card, 12, 'max_div', 3)
+        eps_u = double_or_blank(card, 9, 'eps_u', default=0.01)
+        eps_p = double_or_blank(card, 10, 'eps_p', default=0.01)
+        eps_w = double_or_blank(card, 11, 'eps_w', default=0.01)
+        max_div = integer_or_blank(card, 12, 'max_div', default=3)
 
         if kmethod == 'PFNT':
-            max_qn = integer_or_blank(card, 13, 'max_qn', 0)
+            max_qn = integer_or_blank(card, 13, 'max_qn', default=0)
         else:
-            max_qn = integer_or_blank(card, 13, 'max_qn', max_iter)
+            max_qn = integer_or_blank(card, 13, 'max_qn', default=max_iter)
 
-        max_ls = integer_or_blank(card, 14, 'max_ls', 4)
-        fstress = double_or_blank(card, 15, 'fstress', 0.2)
-        ls_tol = double_or_blank(card, 16, 'ls_tol', 0.5)
+        max_ls = integer_or_blank(card, 14, 'max_ls', default=4)
+        fstress = double_or_blank(card, 15, 'fstress', default=0.2)
+        ls_tol = double_or_blank(card, 16, 'ls_tol', default=0.5)
 
         # line 3
-        max_bisect = integer_or_blank(card, 17, 'max_bisect', 5)
-        max_r = double_or_blank(card, 21, 'max_r', 20.)
-        rtol_b = double_or_blank(card, 23, 'rtol_b', 20.)
-        assert len(card) <= 24, 'len(NLPARM card) = %i\ncard=%s' % (len(card), card)
+        max_bisect = integer_or_blank(card, 17, 'max_bisect', default=5)
+        max_r = double_or_blank(card, 21, 'max_r', default=20.)
+        rtol_b = double_or_blank(card, 23, 'rtol_b', default=20.)
+        assert len(card) <= 24, f'len(NLPARM card) = {len(card):d}\ncard={card}'
         return NLPARM(nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv,
                       int_out, eps_u, eps_p, eps_w, max_div,
                       max_qn, max_ls, fstress,
@@ -1066,65 +1247,53 @@ class NLPARM(BaseCard):
                       rtol_b, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
-        Adds a NLPARM card from the OP2
+        Adds an NLPARM card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
-        (nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv, int_out, eps_u, eps_p,
-         eps_w, max_div, max_qn, max_ls, fstress, ls_tol, max_bisect, max_r,
-         rtol_b) = data
+        if len(data) == 19:
+            (nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv, int_out, eps_u, eps_p,
+             eps_w, max_div, max_qn, max_ls, fstress, ls_tol, max_bisect, max_r,
+             rtol_b) = data
+        else:
+            (nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv, int_out, eps_u, eps_p,
+             eps_w, max_div, max_qn, max_ls, fstress, ls_tol, max_bisect, max_r,
+             rtol_b, end_zero) = data
+            assert end_zero == 0, data
 
-        kmethod_map = {
-            1 : 'AUTO',
-            2 : 'ITER',
-            3 : 'ADAPT',
-            4 : 'SEMI',
-        }
         try:
-            kmethod = kmethod_map[kmethod]
+            kmethod = NLPARM_KMETHOD_MAP[kmethod]
         except KeyError:
             msg = 'nlparm_id=%s kmethod=%r data=%s' % (nlparm_id, kmethod, data)
             raise NotImplementedError(msg)
 
-        conv_map = {
-            1 : 'W',
-            2 : 'P',
-            3 : 'PW',
-            4 : 'U',
-            5 : 'UW',
-            6 : 'UP',
-            7 : 'UPW',
-            -1 : 'PW',  # Nastran-CoFE : blank -> assuming default
-        }
         try:
-            conv = conv_map[conv]
+            conv = NLPARM_CONV_MAP[conv]
         except KeyError:
             msg = 'nlparm_id=%s conv=%r data=%s' % (nlparm_id, conv, data)
             raise NotImplementedError(msg)
 
-        int_out_map = {
-            0 : 'NO',
-            1 : 'YES',
-            2 : 'ALL',
-        }
         try:
-            int_out = int_out_map[int_out]
+            int_out = NLPARM_INT_OUT_MAP[int_out]
         except KeyError:
             msg = 'nlparm_id=%s int_out=%r data=%s' % (nlparm_id, int_out, data)
             raise NotImplementedError(msg)
-        return NLPARM(nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv,
-                      int_out, eps_u, eps_p, eps_w, max_div,
-                      max_qn, max_ls, fstress,
-                      ls_tol, max_bisect, max_r,
-                      rtol_b, comment=comment)
+
+        nlparm = NLPARM(nlparm_id, ninc, dt, kmethod, kstep, max_iter, conv,
+                        int_out, eps_u, eps_p, eps_w, max_div,
+                        max_qn, max_ls, fstress,
+                        ls_tol, max_bisect, max_r,
+                        rtol_b, comment=comment)
+        nlparm.validate()
+        return nlparm
 
     def raw_fields(self):
         list_fields = ['NLPARM', self.nlparm_id, self.ninc, self.dt, self.kmethod,
@@ -1178,10 +1347,10 @@ class NLPCI(BaseCard):
     def _init_from_empty(cls):
         nlpci_id = 1
         return NLPCI(nlpci_id, Type='CRIS', minalr=0.25, maxalr=4.,
-                     scale=0., desiter=12, mxinc=20, comment='')
+                     scale=0., desiter=12, mxinc=20)
 
     def __init__(self, nlpci_id, Type='CRIS', minalr=0.25, maxalr=4.,
-                 scale=0., desiter=12, mxinc=20, comment=''):
+                 scale=0., desiter=12, mxinc=20, comment: str=''):
         BaseCard.__init__(self)
         if comment:
             self.comment = comment
@@ -1194,9 +1363,9 @@ class NLPCI(BaseCard):
         self.mxinc = mxinc
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
-        Adds a NLPCI card from ``BDF.add_card(...)``
+        Adds an NLPCI card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -1306,14 +1475,14 @@ class ROTORD(BaseCard):
         return ROTORD(sid, rstart, rstep, numstep, rids, rsets, rspeeds, rcords, w3s, w4s, rforces,
                       brgsets, refsys='ROT', cmout=0.0, runit='RPM', funit='RPM', zstein='NO',
                       orbeps=1.e-6, roprt=0, sync=1, etype=1, eorder=1.0, threshold=0.02,
-                      maxiter=10, comment='')
+                      maxiter=10)
 
     def __init__(self, sid, rstart, rstep, numstep,
                  rids, rsets, rspeeds, rcords, w3s, w4s, rforces, brgsets,
-                 refsys='ROT', cmout=0.0, runit='RPM', funit='RPM',
-                 zstein='NO', orbeps=1.e-6, roprt=0, sync=1,
+                 refsys: str='ROT', cmout=0.0, runit: str='RPM', funit: str='RPM',
+                 zstein: str='NO', orbeps=1.e-6, roprt=0, sync=1,
                  etype=1, eorder=1.0, threshold=0.02, maxiter=10,
-                 comment=''):
+                 comment: str=''):
         """
         Adds a ROTORD card
 
@@ -1328,25 +1497,25 @@ class ROTORD(BaseCard):
             Step-size of reference rotor speed. See Remark 3. (Real ≠ 0.0)
         numstep : int
             Number of steps for reference rotor speed including RSTART.
-        rids : List[int]
+        rids : list[int]
             Identification number of rotor i.
             (Integer > 0 with RID(i+1) > RIDi; Default = i)
-        rsets : List[int]
+        rsets : list[int]
             Refers to the RSETID value on the ROTORG, ROTORB, and
             ROTSE bulk entries for rotor RIDi. (Integer > 0 or blank if
             only one rotor)
-        rspeeds : List[int/float, ..., int/float]
+        rspeeds : list[int/float, ..., int/float]
             float : rotor speeds
             int : TABLEDi
-        rcords : List[int]
+        rcords : list[int]
             ???
-        w3s : List[float]
+        w3s : list[float]
             ???
-        w4s : List[float]
+        w4s : list[float]
             ???
-        rforces : List[int]
+        rforces : list[int]
             ???
-        brgsets : List[int]
+        brgsets : list[int]
             ???
         refsys : str; default='ROT'
             Reference system
@@ -1440,7 +1609,7 @@ class ROTORD(BaseCard):
         # ..todo :: RSETi
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a ROTORD card from ``BDF.add_card(...)``
 
@@ -1560,9 +1729,9 @@ class ROTORG(BaseCard):
     def _init_from_empty(cls):
         sid = 1
         nids = [2, 3]
-        return ROTORG(sid, nids, comment='')
+        return ROTORG(sid, nids)
 
-    def __init__(self, sid, nids, comment=''):
+    def __init__(self, sid, nids, comment: str=''):
         BaseCard.__init__(self)
         if comment:
             self.comment = comment
@@ -1574,7 +1743,7 @@ class ROTORG(BaseCard):
         #assert len(self.grids1) > 0, 'ngrids1=%s\n%s' % (len(self.grids1), str(self))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card, comment: str=''):
         """
         Adds a ROTORG card from ``BDF.add_card(...)``
 
@@ -1716,9 +1885,9 @@ class TF(BaseCard):
         components = ['4', '5']
         a = []
         #f2 = 2.
-        return TF(sid, nid0, c, b0, b1, b2, nids, components, a, comment='')
+        return TF(sid, nid0, c, b0, b1, b2, nids, components, a)
 
-    def __init__(self, sid, nid0, c, b0, b1, b2, nids, components, a, comment=''):
+    def __init__(self, sid, nid0, c, b0, b1, b2, nids, components, a, comment: str=''):
         BaseCard.__init__(self)
         if comment:
             self.comment = comment
@@ -1740,7 +1909,7 @@ class TF(BaseCard):
         pass
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card, comment: str=''):
         """
         Adds a TF card from ``BDF.add_card(...)``
 
@@ -1755,7 +1924,7 @@ class TF(BaseCard):
         sid = integer(card, 1, 'sid')
         nid0 = integer(card, 2, 'nid0')
         # component 0 means an SPOINT/EPOINT
-        c = components_or_blank(card, 3, 'components_0', 0)
+        c = components_or_blank(card, 3, 'components_0', '0')
         b0 = double_or_blank(card, 4, 'b0', 0.)
         b1 = double_or_blank(card, 5, 'b1', 0.)
         b2 = double_or_blank(card, 6, 'b2', 0.)
@@ -1772,10 +1941,10 @@ class TF(BaseCard):
             j = irow * 8 + 9
             #ifield = irow + 1
             nid = integer(card, j, 'grid_%i' % (irow + 1))
-            component = components_or_blank(card, j + 1, 'components_%i' % (irow + 1), 0)
-            a0 = double_or_blank(card, j + 2, 'a0_%i' % (irow + 1), 0.)
-            a1 = double_or_blank(card, j + 3, 'a1_%i' % (irow + 1), 0.)
-            a2 = double_or_blank(card, j + 4, 'a2_%i' % (irow + 1), 0.)
+            component = components_or_blank(card, j + 1, 'components_%i' % (irow + 1), default='0')
+            a0 = double_or_blank(card, j + 2, 'a0_%i' % (irow + 1), default=0.)
+            a1 = double_or_blank(card, j + 3, 'a1_%i' % (irow + 1), default=0.)
+            a2 = double_or_blank(card, j + 4, 'a2_%i' % (irow + 1), default=0.)
             nids.append(nid)
             components.append(component)
             a.append([a0, a1, a2])
@@ -1829,9 +1998,9 @@ class TSTEP(BaseCard):
         N = 4
         DT = 1.
         NO = None
-        return TSTEP(sid, N, DT, NO, comment='')
+        return TSTEP(sid, N, DT, NO)
 
-    def __init__(self, sid, N, DT, NO, comment=''):
+    def __init__(self, sid, N, DT, NO, comment: str=''):
         """
         Creates a TSTEP card
 
@@ -1839,11 +2008,11 @@ class TSTEP(BaseCard):
         ----------
         sid : int
             the time step id
-        N : List[int/None]
+        N : list[int/None]
             List of number of time steps for each step section.
-        DT : List[float/None]
+        DT : list[float/None]
             List of time steps for each step section.
-        NO : List[int/None]
+        NO : list[int/None]
             List of step frequency for each step section.
             Every N steps, results will be printed.
         comment : str; default=''
@@ -1874,7 +2043,7 @@ class TSTEP(BaseCard):
         assert len(self.N) == len(self.NO), 'N=%s NO=%s' % (self.N, self.NO)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card, comment: str=''):
         """
         Adds a TSTEP card from ``BDF.add_card(...)``
 
@@ -1961,9 +2130,9 @@ class TSTEP1(BaseCard):
         ninc = 4
         tend = 1.
         nout = None
-        return TSTEP1(sid, tend, ninc, nout, comment='')
+        return TSTEP1(sid, tend, ninc, nout)
 
-    def __init__(self, sid, tend, ninc, nout, comment=''):
+    def __init__(self, sid, tend, ninc, nout, comment: str=''):
         """
         Creates a TSTEP1 card
 
@@ -1971,11 +2140,11 @@ class TSTEP1(BaseCard):
         ----------
         sid : int
             the time step id
-        tend : List[float/None]
+        tend : list[float/None]
             ???
-        ninc : List[int/None]
+        ninc : list[int/None]
             ???
-        nout : List[int/str/None]
+        nout : list[int/str/None]
             ???
         comment : str; default=''
             a comment for the card
@@ -1990,7 +2159,7 @@ class TSTEP1(BaseCard):
         self.nout = nout
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card, comment: str=''):
         """
         Adds a TSTEP1 card from ``BDF.add_card(...)``
 
@@ -2044,15 +2213,29 @@ class TSTEPNL(BaseCard):
     heat transfer analysis. TSTEPNL is intended for SOLs 129, 159, and 600.
     Parameters for Nonlinear Transient Analysis.
 
-    +---------+--------+--------+-------+--------+--------+-------+---------+------+
-    |    1    |   2    |   3    |   4   |   5    |   6    |   7   |    8    |  9   |
-    +=========+========+========+=======+========+========+=======+=========+======+
-    | TSTEPNL |   ID   |  NDT   |  DT   |   NO   | METHOD | KSTEP | MAXITER | CONV |
-    +---------+--------+--------+-------+--------+--------+-------+---------+------+
-    |         |  ESPU  |  EPSP  |  EPSW | MAXDIV | MAXQN  | MAXLS | FSTRESS |      |
-    +---------+--------+--------+-------+--------+--------+-------+---------+------+
-    |         | MAXBIS | ADJUST | MSTEP |   RB   |  MAXR  | UTOL  | RTOLB   |      |
-    +---------+--------+--------+-------+--------+--------+-------+---------+------+
+    MSC 2005.2
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |    1    |    2    |   3    |   4   |   5    |   6    |   7   |    8    |  9   |
+    +=========+=========+========+=======+========+========+=======+=========+======+
+    | TSTEPNL |    ID   |  NDT   |  DT   |   NO   | METHOD | KSTEP | MAXITER | CONV |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |         |  ESPU   |  EPSP  |  EPSW | MAXDIV | MAXQN  | MAXLS | FSTRESS |      |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |         | MAXBIS  | ADJUST | MSTEP |   RB   |  MAXR  | UTOL  | RTOLB   |      |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+
+    NX 2019.2
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |    1    |    2    |   3    |   4   |   5    |   6    |   7   |    8    |  9   |
+    +=========+=========+========+=======+========+========+=======+=========+======+
+    | TSTEPNL |   ID    |  NDT   |  DT   |   NO   | METHOD | KSTEP | MAXITER | CONV |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |         |  ESPU   |  EPSP  |  EPSW | MAXDIV | MAXQN  | MAXLS | FSTRESS |      |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |         | MAXBIS  | ADJUST | MSTEP |   RB   |  MAXR  | UTOL  | RTOLB   |      |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
+    |         | KUPDATE |        |       |        |        |       |         |      |
+    +---------+---------+--------+-------+--------+--------+-------+---------+------+
 
     method = None for NX, but apparently TSTEP as well, which is not in the QRG
 
@@ -2170,15 +2353,53 @@ class TSTEPNL(BaseCard):
         self.min_iter = min_iter
         #assert self.ndt >= 3, self
         assert self.dt > 0.
+        assert isinstance(self.method, str), f'method={self.method}; type={type(self.method)}'
 
     def validate(self):
         if self.method not in self.allowed_methods:
             msg = 'method=%r allowed_methods=[%s]' % (
                 self.method, ', '.join(self.allowed_methods))
             raise ValueError(msg)
+        assert self.sid > 0, self.get_stats()
+        assert self.ndt > 0, self.get_stats()  # not correct...should be ndt > 0, but has test issues...
+        assert self.dt > 0.0, self.get_stats()
+        assert self.no >= 1, self.get_stats()
+        assert self.method in self.allowed_methods, self.get_stats()
+        if self.method in {'FNT', 'PFNT'}:
+            assert self.kstep in {-1, None, 1}, self.get_stats()
+        else:
+            assert self.kstep is None or self.kstep >= 1, self.get_stats()
+
+        assert self.min_iter is None or self.min_iter >= 0, self.get_stats()
+        assert self.max_iter != 0, self.get_stats()
+        assert self.max_div != 0, self.get_stats()
+        assert self.max_qn >= 0, self.get_stats()
+        assert self.max_ls >= 0, self.get_stats()
+
+        # -9 <= Integer <= 9
+        assert -9 <= self.max_bisect <= 9, self.get_stats()  # default in MSC 2020=0
+        assert self.adjust >= 0, self.get_stats()  #  is this >0 or >= 0?
+    #def __init__(self, sid, ndt, dt, no, method='ADAPT', kstep=None,
+                 #max_iter=10, conv='PW', eps_u=1.e-2, eps_p=1.e-3,
+                 #eps_w=1.e-6, max_div=2, max_qn=10, max_ls=2,
+                 #fstress=0.2, max_bisect=5, adjust=5, mstep=None,
+                 #rb=0.6, max_r=32., utol=0.1, rtol_b=20.,
+                 #min_iter=None, comment=''):
+
+        assert self.eps_u > 0.0 or self.eps_u < 0, self.get_stats()
+        assert self.eps_p > 0.0, self.get_stats()
+        assert self.eps_w > 0.0 or self.eps_u < 0, self.get_stats()
+        assert self.fstress > 0.0, self.get_stats()
+        assert self.rb > 0.0, self.get_stats()
+        assert self.max_r > 0.0, self.get_stats()
+        assert self.utol > 0.0, self.get_stats()
+        assert self.rtol_b > 0.0, self.get_stats()
+
+
+
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card, comment: str=''):
         """
         Adds a TSTEPNL card from ``BDF.add_card(...)``
 
@@ -2196,14 +2417,29 @@ class TSTEPNL(BaseCard):
         no = integer_or_blank(card, 4, 'no', 1)
 
         #: .. note:: not listed in all QRGs
-        method = string_or_blank(card, 5, 'method', 'ADAPT')
+        method = string_or_blank(card, 5, 'method', default='ADAPT')
         if method == 'ADAPT':
-            kstep = integer_or_blank(card, 6, 'kStep', 2)
+            kstep = integer_or_blank(card, 6, 'kStep', default=2)
         elif method == 'ITER':
-            kstep = integer_or_blank(card, 6, 'kStep', 10)
-        elif method in ['AUTO', 'TSTEP', 'SEMI']:
+            kstep = integer_or_blank(card, 6, 'kStep', default=10)
+        elif method in {'AUTO', 'TSTEP', 'SEMI'}:
             kstep = None
             #kstep = blank(card, 6, 'kStep') #: .. todo:: not blank
+        elif method in {'PFNT', 'FNT'}:
+            #METHOD = 'PFNT': This is the Pure Full Newton iteration method.
+            #The PFNT method is the same as the FNT method except that the defaults
+            #for PFNT method are EPSU=-0.01, EPSW=-0.01, and MAXLS=0.
+            #
+            # For FNT and PFNT methods, whether the stiffness matrix will
+            # be updated between the convergence of a load increment and
+            # the start of the next load increment depends on the value of
+            # KSTEP. In this case, KSTEP = -1, BLANK, or 1. A user fatal
+            # error will be issued if other value is input.
+            # KSTEP=1      stiffness matrix will not be updated.
+            # KSTEP=BLANK: the program will decide whether to update depending element type.
+            # KSTEP=-1:    stiffness matrix will be forced to be updated
+            kstep = integer_or_blank(card, 6, 'kstep')
+            assert kstep in {1, -1, None}, f'TSTEPNL method={method!r} and kstep={kstep}, which should be -1, 1 or blank'
         else:
             msg = 'invalid TSTEPNL Method.  method=%r; allowed_methods=[%s]' % (
                 method, ', '.join(cls.allowed_methods))
@@ -2231,7 +2467,7 @@ class TSTEPNL(BaseCard):
 
         # not listed in all QRGs
         min_iter = integer_or_blank(card, 24, 'minIter')
-        assert len(card) <= 25, 'len(TSTEPNL card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 25, f'len(TSTEPNL card) = {len(card):d}\ncard={card}'
         return TSTEPNL(
             sid, ndt, dt, no, method, kstep, max_iter, conv,
             eps_u, eps_p, eps_w, max_div, max_qn, max_ls, fstress,
@@ -2239,45 +2475,52 @@ class TSTEPNL(BaseCard):
             comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TSTEPNL card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
-        (sid, ndt, dt, no, method, kstep, max_iter, conv, eps_u, eps_p, eps_w,
-         max_div, max_qn, max_ls, fstress, max_bisect,
-         adjust, mstep, rb, max_r, utol, rtol_b) = data
+        if len(data) == 22:
+            (sid, ndt, dt, no, method_int, kstep, max_iter, conv_int, eps_u, eps_p, eps_w,
+             max_div, max_qn, max_ls, fstress, max_bisect,
+             adjust, mstep, rb, max_r, utol, rtol_b) = data
+        else:
+            assert len(data) == 27, len(data)
+            (sid, ndt, dt, no, method_int, kstep, max_iter, conv_int, eps_u, eps_p, eps_w,
+             max_div, max_qn, max_ls, fstress, max_bisect,
+             adjust, mstep, rb, max_r, utol, rtol_b,
+             kdamp, kupdate, kustep, tintopt, gamma) = data
 
-        if method == 1:
+        if method_int == 1:
             method = 'AUTO'
-        elif method == 2:
+        elif method_int == 2:
             method = 'TSTEP'
-        elif method == 3:
+        elif method_int == 3:
             method = 'ADAPT'
-        else:
-            raise NotImplementedError('tstepnl=%s method=%r data=%s' % (sid, method, data))
+        else:  # pragma: no cover
+            raise NotImplementedError('tstepnl=%s method_int=%r data=%s' % (sid, method_int, data))
 
-        if conv == 1:
+        if conv_int == 1:
             conv = 'W'
-        #elif conv == 2:  # guess based on format
-            #conv = 'P'
-        elif conv == 3:
+        elif conv_int == 2:  # guess based on format
+            conv = 'P'
+        elif conv_int == 3:
             conv = 'PW'
-        elif conv == 4:
+        elif conv_int == 4:
             conv = 'U'
-        elif conv == 7:
+        elif conv_int == 7:
             conv = 'UPW'
-        #elif conv == 3:
+        #elif conv_int == 3:
             #conv = 'ADAPT'
-        else:
-            raise NotImplementedError('tstepnl=%s conv=%r data=%s' % (sid, conv, data))
+        else:  # pragma: no cover
+            raise NotImplementedError('tstepnl=%s conv_int=%r data=%s' % (sid, conv_int, data))
 
         min_iter = None  # not listed in DMAP 2005
         return TSTEPNL(
@@ -2393,13 +2636,13 @@ class TIC(BaseCard):
         ----------
         sid : int
             Case Control IC id
-        nodes : int / List[int]
+        nodes : int / list[int]
             the nodes to which apply the initial conditions
-        components : int / List[int]
+        components : int / list[int]
             the DOFs to which apply the initial conditions
-        u0 : float / List[float]
+        u0 : float / list[float]
             Initial displacement.
-        v0 : float / List[float]
+        v0 : float / list[float]
             Initial velocity.
         comment : str; default=''
             a comment for the card
@@ -2443,19 +2686,19 @@ class TIC(BaseCard):
         """
         sid = integer(card, 1, 'sid')
         nid = integer(card, 2, 'G')
-        comp = modal_components_or_blank(card, 3, 'C', 0)
+        comp = modal_components_or_blank(card, 3, 'C', default=0)
         u0 = double_or_blank(card, 4, 'U0', 0.)
         v0 = double_or_blank(card, 5, 'V0', 0.)
         return TIC(sid, nid, comp, u0=u0, v0=v0, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TIC card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -2481,7 +2724,7 @@ class TIC(BaseCard):
     def add(self, tic):
         assert self.sid == tic.sid, 'sid=%s tic.sid=%s' % (self.sid, tic.sid)
         if tic.comment:
-            if hasattr('_comment'):
+            if hasattr(self, '_comment'):
                 self._comment += tic.comment
             else:
                 self._comment = tic.comment
@@ -2493,7 +2736,7 @@ class TIC(BaseCard):
     def cross_reference(self, model: BDF) -> None:
         self.nodes_ref = model.Nodes(self.nodes)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         return self.cross_reference(model)
 
     def uncross_reference(self) -> None:
@@ -2520,3 +2763,5 @@ class TIC(BaseCard):
             for nid, comp, u0, v0 in zip(node_ids, self.components, self.u0, self.v0):
                 msg += print_card_16(['TIC', self.sid, nid, comp, u0, v0])
         return msg
+
+FREQs = FREQ | FREQ1 | FREQ2 | FREQ3 | FREQ4 | FREQ5

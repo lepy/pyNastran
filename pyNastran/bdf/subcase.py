@@ -1,13 +1,17 @@
 """Subcase creation/extraction class"""
-from typing import List, Dict, Any
-from numpy import ndarray
+from __future__ import annotations
+import getpass
+from typing import Optional, Any
+import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
-from pyNastran.utils import object_attributes, deprecated
+#from pyNastran.utils import deprecated # object_attributes,
 
-from pyNastran.bdf.bdf_interface.case_control_cards import CLASS_MAP
-from pyNastran.bdf.bdf_interface.subcase_utils import (
+from pyNastran.bdf.bdf_interface.subcase.utils import (
     write_stress_type, write_set, expand_thru_case_control)
+USER_NAME = getpass.getuser()
+
+from cpylog import SimpleLogger
 
 
 INT_CARDS = (
@@ -26,6 +30,7 @@ INT_CARDS = (
     'MODTRAK', 'OFREQ', 'DRSPAN', 'OMODES', 'ADACT', 'SERESP', 'STATSUB',
     'CURVESYM', 'ELSDCON', 'CSSCHD', 'NSM', 'TSTRU', 'RANDVAR',
     'RGYRO', 'SELR', 'TEMPERATURE(ESTI)', 'RCROSS', 'SERE', 'SEMR',
+    'LINE', 'MAXLINES',
 )
 
 PLOTTABLE_TYPES = (
@@ -65,120 +70,20 @@ class Subcase:
         187: 101,
     }
 
-    def __init__(self, id=0):
+    def __init__(self, id: int=0):
         self.id = id
-        self.params = {}
+        self.params: dict[str, Any] = {}
         self.sol = None
         self.log = None
         #print("\n***adding subcase %s***" % self.id)
 
-    def load_hdf5_file(self, hdf5_file, encoding):
-        from pyNastran.utils.dict_to_h5py import _cast
+    def load_hdf5_file(self, hdf5_file, encoding: str):
+        from .bdf_interface.subcase.h5py_interface import load_hdf5_file
+        load_hdf5_file(self, hdf5_file, encoding)
 
-        keys = list(hdf5_file.keys())
-        for key in keys:
-            #print(key)
-            group = hdf5_file[key]
-            if key in ['id']: # scalars
-                value = _cast(group)
-                setattr(self, key, value)
-            elif key == 'params':
-                #print(group)
-                #print(group.keys())
-                for group_key in group.keys():
-                    #self.log.debug('%s %s' % (group_key, key))
-                    value, options, param_type = _load_hdf5_param(group, group_key, encoding)
-
-                    #self.log.debug('%s (%s, %s, %s)' % (key, value, options, param_type))
-                    if isinstance(options, list):
-                        options = [
-                            option.decode(encoding) if isinstance(option, bytes) else option
-                            for option in options]
-
-                    self.params[group_key] = (value, options, param_type)
-                    str(self)
-            else:  # pragma: no cover
-                raise RuntimeError('failed exporting Subcase/%s' % key)
-
-    def export_to_hdf5(self, hdf5_file, encoding):
-        keys_to_skip = ['log', 'solCodeMap', 'allowed_param_types']
-        h5attrs = object_attributes(self, mode='both', keys_to_skip=keys_to_skip)
-        #print('Subcase %i' % self.id)
-        for h5attr in h5attrs:
-            value = getattr(self, h5attr)
-            if h5attr in ['id']: # scalars
-                # simple export
-                hdf5_file.create_dataset(h5attr, data=value)
-            elif h5attr in ['sol']: # scalars/None
-                if value is None:
-                    continue
-                hdf5_file.create_dataset(h5attr, data=value)
-            elif h5attr in ['params']:
-                if len(value) == 0:
-                    continue
-                keys = list(self.params.keys())
-                params_group = hdf5_file.create_group('params')
-                #print('keys =', keys)
-                unused_keys_bytes = [key.encode(encoding) for key in keys]
-                #params_group.create_dataset('keys', data=keys_bytes)
-                for key, (value, options, param_type) in self.params.items():
-                    #print('  %-14s: %-8r %r %r' % (key, value, options, param_type))
-                    if key == '':
-                        sub_group = params_group.create_group('blank')
-                        sub_group.create_dataset('value', data=value)
-
-                    else:
-                        #print('key = %r' % key)
-                        sub_group = params_group.create_group(key)
-                        if value is not None:
-                            if isinstance(value, list):
-                                value_bytes = [
-                                    valuei.encode(encoding) if isinstance(valuei, str) else valuei
-                                    for valuei in value]
-                                sub_group.create_dataset('value', data=value_bytes)
-                            elif isinstance(value, (integer_types, float, str)):
-                                sub_group.create_dataset('value', data=value)
-                            elif hasattr(value, 'export_to_hdf5'):
-                                sub_groupi = sub_group.create_group('object')
-                                sub_groupi.attrs['type'] = key
-                                value.export_to_hdf5(sub_groupi, encoding)
-                            else:
-                                print('value = %r' % value)
-                                raise NotImplementedError(value)
-
-                    if param_type is not None:
-                        sub_group.create_dataset('param_type', data=param_type)
-
-                    if options is not None:
-                        if isinstance(options, list):
-                            options_bytes = [
-                                option.encode(encoding) if isinstance(option, str) else option
-                                for option in options]
-                            sub_group.create_dataset('options', data=options_bytes)
-                        else:
-                            sub_group.create_dataset('options', data=options)
-
-            #if h5attr in ['_begin_count', 'debug', 'write_begin_bulk']: # scalars
-                ## do nothing on purpose
-                #hdf5_file.create_dataset(h5attr, data=value)
-            #elif h5attr in ['reject_lines', 'begin_bulk', 'lines', 'output_lines']:
-                # lists of strings
-                #if len(value) == 0:
-                    #continue
-                #value_bytes = [line.encode(encoding) for line in value]
-                ##print(value_bytes)
-                #hdf5_file.create_dataset(h5attr, data=value_bytes)
-            #elif h5attr == 'subcases':
-                #keys = list(self.subcases.keys())
-                #subcase_group = hdf5_file.create_group('subcases')
-                #subcase_group.create_dataset('keys', data=keys)
-                #for key, subcase in self.subcases.items():
-                    #sub_group = subcase_group.create_group(str(key))
-                    #subcase.export_to_hdf5(subcase_group, encoding)
-            else:  # pragma: no cover
-                print(key, value)
-                raise RuntimeError('cant export to hdf5 Subcase/%s' % h5attr)
-
+    def export_to_hdf5(self, hdf5_file, encoding: str) -> None:
+        from pyNastran.bdf.bdf_interface.subcase.h5py_interface import export_to_hdf5
+        export_to_hdf5(self, hdf5_file, encoding)
 
     def __deepcopy__(self, memo):
         """
@@ -225,37 +130,44 @@ class Subcase:
         _copy.params.update(self.params)
         return _copy
 
-    def deprecated(self, old_name: str, new_name: str, deprecated_version: str) -> None:
-        """
-        Throws a deprecation message and crashes if past a specific version.
+    # def deprecated(self, old_name: str, new_name: str, deprecated_version: str) -> None:
+    #     """
+    #     Throws a deprecation message and crashes if past a specific version.
+    #
+    #     Parameters
+    #     ----------
+    #     old_name : str
+    #         the old function name
+    #     new_name : str
+    #         the new function name
+    #     deprecated_version : float
+    #         the version the method was first deprecated in
+    #     """
+    #     return deprecated(old_name, new_name, deprecated_version, levels=[0, 1, 2])
 
-        Parameters
-        ----------
-        old_name : str
-            the old function name
-        new_name : str
-            the new function name
-        deprecated_version : float
-            the version the method was first deprecated in
-        """
-        return deprecated(old_name, new_name, deprecated_version, levels=[0, 1, 2])
-
-    def add_op2_data(self, data_code, msg, log):
+    def add_op2_data(self, data_code: dict[str, Any], msg: str,
+                     log: SimpleLogger) -> None:
         """
         >>> self.subcase.add_op2_data(self.data_code, 'VECTOR')
         """
         assert log is not None, log
+        # assert self.log is not None, self.log
         #subtable_name = data_code['subtable_name']
         table_name = data_code['table_name']
         if not isinstance(table_name, str):
             # table_name is a byte string
             table_name = table_name.decode('latin1')
         else:
-            raise NotImplementedError('table_name=%r' % table_name)
+            raise NotImplementedError(f'table_name={table_name!r} must be bytes')
 
         table_code = data_code['table_code']
         unused_sort_code = data_code['sort_code']
         unused_device_code = data_code['device_code']
+
+        sort_str = 'SORT1'
+        if table_name in {'OESNLBR2'}:
+            sort_str = 'SORT1'
+
         #print(data_code)
         #print('table_name=%r table_code=%s sort_code=%r device_code=%r' % (
             #table_name, table_code, sort_code, device_code))
@@ -263,7 +175,7 @@ class Subcase:
         #if 'TITLE' in
         #print(data_code)
         #print(f'table_name={table_name!r} type={type(table_name)}')
-        options = []
+        options: list[Any] = []
         if data_code['title']:
             self.add('TITLE', data_code['title'], [], 'STRING-type')
         if data_code['subtitle']:
@@ -271,7 +183,10 @@ class Subcase:
         if data_code['label']:
             self.add('LABEL', data_code['label'], [], 'STRING-type')
 
-        if table_name in ['OUGV1', 'BOUGV1', 'OUGV2', 'OUG1', 'OUGV1PAT', 'OUGMC1', 'OUGMC2']:
+        #OUGF1, # OUG1F
+        if table_name in {'OUGV1', 'BOUGV1', 'OUGV2', 'OUG1', 'OUGV1PAT', 'OUGMC1', 'OUGMC2',
+                          'OUGF1', 'OUGF2', 'BOUGF1', 'OUG1F', 'OUG1S'}:
+            # OUG1F - acoustic displacements
             if table_code == 1:
                 thermal = data_code['thermal']
                 if thermal == 0:
@@ -279,7 +194,7 @@ class Subcase:
                 elif thermal == 1:
                     self.add('ANALYSIS', 'HEAT', [], 'KEY-type')
                 else:
-                    self._write_op2_error_msg(log, self.log, msg, data_code)
+                    self._write_op2_error_msg(log, msg, data_code)
             elif table_code == 7:
                 self.add('VECTOR', 'ALL', options, 'STRESS-type')
             elif table_code == 10:
@@ -291,7 +206,15 @@ class Subcase:
                 assert thermal == 0, thermal
                 self.add('DISPLACEMENT', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
+
+        elif table_name == 'OVG1':
+            if table_code in [11, 10]:
+                thermal = data_code['thermal']
+                assert thermal == 0, data_code
+                self.add('VELOCITY', 'ALL', options, 'STRESS-type')
+            else:
+                self._write_op2_error_msg(log, msg, data_code)
 
         elif table_name == 'OAG1':
             if table_code == 11:
@@ -299,7 +222,7 @@ class Subcase:
                 assert thermal == 0, data_code
                 self.add('ACCELERATION', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         # OAG-random
         elif table_name in ['OAGPSD1', 'OAGPSD2']:
@@ -320,18 +243,28 @@ class Subcase:
             if thermal == 1:
                 self.add('ANALYSIS', 'HEAT', options, 'KEY-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
+
         elif table_name in ['ROUGV1', 'ROUGV2']:
             thermal = data_code['thermal']
             if thermal == 0:
                 self.add('DISPLACEMENT', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
+        elif table_name in ['ROQGM1']:
+            thermal = data_code['thermal']
+            if thermal == 0:
+                self.add('MPCFORCES', 'ALL', options, 'STRESS-type')
+            else:
+                self._write_op2_error_msg(log, msg, data_code)
+        elif table_name in ['RAREATC', 'RARCONS']:
+            self.add('SPCFORCES', 'ALL', options, 'STRESS-type')
+
         elif table_name in ['OPHIG', 'BOPHIG', 'BOPHIGF']:
             if table_code == 7:
                 self.add('ANALYSIS', 'HEAT', [], 'KEY-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name == 'OUPV1':
             if table_code == 1:
                 self.add('SDISPLACEMENT', 'ALL', options, 'STRESS-type')
@@ -340,13 +273,13 @@ class Subcase:
             elif table_code == 11:
                 self.add('SACCELERATION', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         elif table_name == 'OPHSA':
             if table_code == 14:
                 self.add('SVECTOR', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OUXY1', 'OUXY2']:
             if table_code == 15:
                 self.add('SDISPLACEMENT', 'ALL', options, 'STRESS-type')
@@ -355,25 +288,24 @@ class Subcase:
             elif table_code == 17:
                 self.add('SACCELERATION', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
-
+                self._write_op2_error_msg(log, msg, data_code)
 
         elif table_name in ['OQG1', 'OQG2', 'OQGV1']:
             if table_code == 3:
                 self.add('SPCFORCES', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
-        elif table_name in ['OEF1X', 'OEF1', 'RAFCONS', 'RAFEATC']:
+                self._write_op2_error_msg(log, msg, data_code)
+        elif table_name in ['OEF1X', 'OEF1', 'DOEF1', 'RAFCONS', 'RAFEATC']:
             if table_code in [4]:
                 self.add('FORCE', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OEF2']:
             options.append('SORT2')
             if table_code == 4:
                 self.add('FORCE', 'ALL', options, 'STRESS-type')
             else:
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         elif table_name in ['OEFATO1', 'OEFATO2']:
             options.append('PSDF')
@@ -403,7 +335,7 @@ class Subcase:
         elif table_name in ['OESNO1', 'OESNO2', 'OESXNO1']:
             options.append('NO')
             self.add('STRESS', 'ALL', options, 'STRESS-type')
-        elif table_name in ['OESPSD1', 'OESPSD2']:
+        elif table_name in ['OESPSD1', 'OESPSD2', 'OESPSD2C']:
             options.append('PSDF')
             self.add('STRESS', 'ALL', options, 'STRESS-type')
 
@@ -419,72 +351,82 @@ class Subcase:
         elif table_name in ['OSTRNO1', 'OSTRNO2']:
             options.append('NO')
             self.add('STRAIN', 'ALL', options, 'STRESS-type')
-        elif table_name in ['OSTRPSD1', 'OSTRPSD2']:
+        elif table_name in ['OSTRPSD1', 'OSTRPSD2',
+                            'OSTPSD2C']:
             options.append('PSDF')
             self.add('STRAIN', 'ALL', options, 'STRESS-type')
+
+        elif table_name in ['OSTR1CR', 'OSTR1CRC']:
+            self.add('CRSTRN', 'ALL', options, 'STRESS-type')
+        elif table_name in ['OSTR1EL', 'OSTR1ELC']:
+            self.add('ELSTRN', 'ALL', options, 'STRESS-type')
+        elif table_name in ['OSTR1PL', 'OSTR1PLC']:
+            self.add('PLSTRN', 'ALL', options, 'STRESS-type')
+        elif table_name in ['OSTR1TH', 'OSTR1THC']:
+            self.add('THSTRN', 'ALL', options, 'STRESS-type')
 
         elif table_name in ['OEFIT', 'OEFITSTN']:
             if table_code in [25]:
                 self.add('FORCE', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OQMG1', 'OQMG2']:
             if table_code in [3, 39]:
                 self.add('MPCFORCES', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OGPFB1', 'RAGCONS', 'RAGEATC']:
             if table_code == 19:
                 self.add('GPFORCE', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         # stress
         elif table_name in ['OES1', 'OES1X', 'OES1X1', 'OES1C', 'OESCP',
                             'OESNL2', 'OESNLXD', 'OESNLXR', 'OESNLBR', 'OESTRCP',
                             'OESVM1', 'OESVM1C', 'OESNL1X',
-                            'OESNLXR2', 'RASCONS', 'RASEATC']:
+                            'OESNLXR2', 'RASCONS', 'RASEATC', 'OESNLBR2', 'OES1A']:
             #assert data_code['is_stress_flag'] == True, data_code
-            options.append('SORT1')
+            options.append(sort_str)
             if table_code == 5:
                 self.add('STRESS', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OES2', 'OES2C', 'OESVM2', ]:
             options.append('SORT2')
             if table_code == 5:
                 self.add('STRESS', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OESXRM1C']:
             if table_code == 805:
                 self.add('STRESS', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OESXNO1C']:
             if table_code == 905:
                 self.add('STRESS', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         elif table_name in ['OSTR2', 'OSTR2C']:
             options.append('SORT2')
             if table_code == 5:
                 self.add('STRAIN', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
-        elif table_name in ['OESRT']:
+        elif table_name in ['OESRT', 'OESRTN']:
             #assert data_code['is_stress_flag'] == True, data_code
-            if table_code in [25, 89]:
+            if table_code in [25, 56, 89]:
                 self.add('STRESS', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OCRUG']:
             if table_code in [1]:
                 self.add('DISP', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         # strain
         elif table_name in ['OSTR1X', 'OSTR1C', 'OSTR1', 'RAECONS', 'RAEEATC']:
@@ -492,13 +434,13 @@ class Subcase:
             if table_code == 5:
                 self.add('STRAIN', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
         elif table_name in ['OSTRVM1', 'OSTRVM1C', 'OSTRVM2']:
             #assert data_code['is_stress_flag'] == True, data_code
             if table_code == 5:
                 self.add('STRAIN', 'ALL', options, 'STRESS-type')
             else:  # pragma: no cover
-                self._write_op2_error_msg(log, self.log, msg, data_code)
+                self._write_op2_error_msg(log, msg, data_code)
 
         # special tables
         elif table_name in ['RADCONS', 'RADEFFM', 'RADEATC', 'RAPEATC', 'RAQEATC', 'RADCONS',
@@ -510,24 +452,31 @@ class Subcase:
                             'OSTRMS1C', 'OSTRRMS1', 'OSTRRMS1C',
                             'OQMPSD2']:
             pass
+        elif table_name in ['OESC1']:
+            self.add('STRESS', 'ALL', options, 'STRESS-type')
+        elif table_name in ['DOES1']:
+            self.add('STRESS', 'ALL', options, 'STRESS-type')
         else:  # pragma: no cover
-            self._write_op2_error_msg(log, self.log, msg, data_code)
+            self._write_op2_error_msg(log, msg, data_code)
         #print(self)
 
-    def _write_op2_error_msg(self, log, log_error, msg, data_code):
+    def _write_op2_error_msg(self, log: SimpleLogger,
+                             msg: str,
+                             data_code: dict[str, str | bytes | int | float],
+                             ) -> None:
         if log is not None:
-            log.error(msg)
-            log.error(data_code)
-        elif log_error is not None:
-            log_error.error(msg)
-            log_error.error(data_code)
+            if msg:
+                log.error(msg)
+            log.error(str(data_code))
         else:  # pragma: no cover
             # log_error is None
             print('Error calling subcase.add_op2_data...')
-            print(msg)
+            if msg:
+                print(msg)
             print(data_code)
             raise RuntimeError(data_code)
-        raise RuntimeError(data_code)
+        #if USER_NAME == 'sdoyle': # or 'id' in msg:
+            #raise RuntimeError(data_code)
 
     def __contains__(self, param_name: str) -> bool:
         """
@@ -540,45 +489,47 @@ class Subcase:
 
         .. code-block:: python
 
-          model = BDF()
-          model.read_bdf(bdf_filename)
-          case_control = model.case_control_deck
-          subcase1 = case_control.subcases[1]
-          if 'LOAD' in subcase1:
-              print('found LOAD for subcase 1')
+           model = BDF()
+           model.read_bdf(bdf_filename)
+           case_control = model.case_control_deck
+           subcase1 = case_control.subcases[1]
+           if 'LOAD' in subcase1:
+               print('found LOAD for subcase 1')
+
         """
         if param_name in self.params:
             return True
         return False
 
-    def has_parameter(self, *param_names) -> List[bool]:
+    def has_parameter(self, *param_names: str | list[str]) -> list[bool]:
         """
         Checks to see if one or more parameter names are in the subcase.
 
         Parameters
         ----------
-        param_names : str; List[str]
+        param_names : str; list[str]
             the case control parameters to check for
 
         Returns
         -------
-        exists : List[bool]
+        exists : list[bool]
             do the parameters exist
 
         .. code-block:: python
 
-          model = BDF()
-          model.read_bdf(bdf_filename)
-          case_control = model.case_control_deck
-          subcase1 = case_control.subcases[1]
-          if any(subcase1.has_parameter('LOAD', 'TEMPERATURE(LOAD)')):
-              print('found LOAD for subcase 1')
+           model = BDF()
+           model.read_bdf(bdf_filename)
+           case_control = model.case_control_deck
+           subcase1 = case_control.subcases[1]
+           if any(subcase1.has_parameter('LOAD', 'TEMPERATURE(LOAD)')):
+               print('found LOAD for subcase 1')
+
         """
         exists = [param_name.upper() in self.params
                   for param_name in param_names]
         return exists
 
-    def __getitem__(self, param_name):
+    def __getitem__(self, param_name: str) -> tuple[int | str, list[Any]]:
         """
         Gets the [value, options] for a subcase.
 
@@ -592,21 +543,22 @@ class Subcase:
         value : varies
             the value of the parameter
             'ALL' in STRESS(PLOT,PRINT) = ALL
-        options : List[varies]
+        options : list[varies]
             the values in parentheses
             ['PLOT', 'PRINT'] in STRESS(PLOT,PRINT) = ALL
 
         .. code-block:: python
 
-          model = BDF()
-          model.read_bdf(bdf_filename)
-          case_control = model.case_control_deck
-          subcase1 = case_control.subcases[1]
-          value, options = subcase1['LOAD']
+           model = BDF()
+           model.read_bdf(bdf_filename)
+           case_control = model.case_control_deck
+           subcase1 = case_control.subcases[1]
+           value, options = subcase1['LOAD']
+
         """
         return self.get_parameter(param_name)
 
-    def suppress_output(self, suppress_to='PLOT'):
+    def suppress_output(self, suppress_to: str='PLOT') -> None:
         """
         Replaces F06 printing with OP2 printing
 
@@ -620,19 +572,94 @@ class Subcase:
 
         .. warning:: needs more validation
         """
+        # ECHO not really a str card...
+        STR_CARDS = {'ANALYSIS', 'SUBTITLE', 'LABEL', 'TITLE', 'ECHO', 'AESYMXY', 'AESYMXZ'}
         for key, param in self.params.items():
             (unused_value, options, unused_param_type) = param
-            if key in INT_CARDS or key in ('SUBTITLE', 'LABEL', 'TITLE', 'ECHO'):
+            if key in INT_CARDS or key in STR_CARDS:
                 pass
             elif key in PLOTTABLE_TYPES:
                 if suppress_to not in options:
                     param[1].append(suppress_to)
                 if 'PRINT' in options:
                     param[1].remove('PRINT')
-            else:
+                if 'PUNCH' in options:
+                    param[1].remove('PUNCH')
+            else:  # pragma: no cover
                 raise NotImplementedError(key)
 
-    def get_parameter(self, param_name, msg='', obj=False):
+    def get_int_parameter(self, param_name: str, msg: str='',
+                          obj: bool=False) -> int:
+        """
+        Gets the value for a subcase.
+
+        Parameters
+        ----------
+        param_name : str
+            the case control parameters to get
+        obj : bool; default=False
+            should the object be returned
+
+        Returns
+        -------
+        value : int
+            the value of the parameter
+            1 in LOAD = 1
+
+        .. code-block:: python
+
+           model = BDF()
+           model.read_bdf(bdf_filename)
+           case_control = model.case_control_deck
+           subcase1 = case_control.subcases[1]
+           value = subcase1.get_int_parameter('LOAD')
+
+        """
+        value, options = self.get_parameter(param_name, msg=msg, obj=obj)
+        if not isinstance(value, integer_types):
+            raise TypeError(f'{param_name!r}={value!r} and is not an integer')
+        if len(options):
+            raise TypeError(f'{param_name!r}={value!r}; options={options} should be empty; use get_parameter({param_name!r})')
+        # if param_name in INT_CARDS:
+        #     raise RuntimeError(f'{param_name} is not an integer parameter')
+        return value
+
+    def get_str_parameter(self, param_name: str, msg: str='',
+                          obj: bool=False) -> str:
+        """
+        Gets the value for a subcase.
+
+        Parameters
+        ----------
+        param_name : str
+            the case control parameters to get
+        obj : bool; default=False
+            should the object be returned
+
+        Returns
+        -------
+        value : str
+            the value of the parameter
+            'ALL' in STRESS(PLOT,PRINT) = ALL
+
+        .. code-block:: python
+
+           model = BDF()
+           model.read_bdf(bdf_filename)
+           case_control = model.case_control_deck
+           subcase1 = case_control.subcases[1]
+           value = subcase1.get_str_parameter('STRESS')
+
+        """
+        value, options = self.get_parameter(param_name, msg=msg, obj=obj)
+        if not isinstance(value, str):
+            raise TypeError(f'{param_name!r}={value!r} and is not a str')
+        if len(options):
+            raise TypeError(f'{param_name!r}={value!r}; options={options} should be empty; use get_parameter({param_name!r})')
+        return value
+
+    def get_parameter(self, param_name: str, msg: str='',
+                      obj: bool=False) -> tuple[int | str, list[Any]]:
         """
         Gets the [value, options] for a subcase.
 
@@ -648,22 +675,27 @@ class Subcase:
         value : varies
             the value of the parameter
             'ALL' in STRESS(PLOT,PRINT) = ALL
-        options : List[varies]
+        options : list[varies]
             the values in parentheses
             ['PLOT', 'PRINT'] in STRESS(PLOT,PRINT) = ALL
 
         .. code-block:: python
 
-          model = BDF()
-          model.read_bdf(bdf_filename)
-          case_control = model.case_control_deck
-          subcase1 = case_control.subcases[1]
-          value, options = subcase1['LOAD']
+           model = BDF()
+           model.read_bdf(bdf_filename)
+           case_control = model.case_control_deck
+           subcase1 = case_control.subcases[1]
+           value, options = subcase1.get_parameter('LOAD')
+
         """
         param_name = update_param_name(param_name)
         if param_name not in self.params:
-            raise KeyError('%s doesnt exist in subcase=%s in the case '
-                           'control deck%s.' % (param_name, self.id, msg))
+            try:
+                subcase = f'\n{str(self)}'
+            except AssertionError:
+                subcase = ''
+            raise KeyError(f'{param_name} doesnt exist in subcase={self.id} in the case '
+                           f'control deck{msg}.{subcase}')
         value, options, param_type = self.params[param_name]
         #print('param_name=%r value=%s options=%s param_type=%r' % (
             #param_name, value, options, param_type))
@@ -671,7 +703,8 @@ class Subcase:
             return value.value, options
         return value, options
 
-    def _validate_param_type(self, param_type):
+    def _validate_param_type(self, param_type: str) -> None:
+        """checks to see if a valid parmater type is selected"""
         if param_type not in self.allowed_param_types:
             msg = (
                 f'param_type={param_type!r} is not supported\n'
@@ -688,19 +721,118 @@ class Subcase:
             )
             raise TypeError(msg)
 
-    def add(self, key, value, options, param_type):
+    def remove_parameter(self, key: str) -> None:
+        if self.has_parameter(key):
+            del self.params[key]
+        # TODO: warning?
+
+    def add(self, key: str, value: Any, options: list[Any], param_type: str) -> None:
         self._validate_param_type(param_type)
         self._add_data(key, value, options, param_type)
 
-    def update(self, key, value, options, param_type):
+    #def add_string_type(self, key: str, value: Any, options: list[Any], param_type: str):
+        #"""
+        #Simple way to add something of the form:
+            #ANALYSIS = HEAT
+
+        #subcase.add_integer_type('SPC', 1)
+        #vs.
+        #subcase.add('SPC', 1, [], 'STRESS-type')
+        #"""
+        #assert isinstance(value, integer_types), f'value={value!r} and is not an integer'
+        #self.add(key, value, [], 'STRESS-type')
+
+    def add_integer_type(self, key: str, value: int) -> None:
+        """
+        Simple way to add something of the form:
+            SPC = 1
+
+        subcase.add_integer_type('SPC', 1)
+        vs.
+        subcase.add('SPC', 1, [], 'STRESS-type')
+        """
+        assert isinstance(value, integer_types), f'value={value!r} and is not an integer'
+        if key not in INT_CARDS:
+            self.log.warning(f'key={key!r} is not a valid case_control integer key')
+        self.add(key, value, [], 'STRESS-type')
+
+    def add_string_type(self, key: str, value: str) -> None:
+        """
+        Simple way to add something of the form:
+            ANALYSIS = HEAT
+
+        subcase.add_string_type('ANALYSIS', 'HEAT')
+        vs.
+        subcase.add('ANALYSIS', 'HEAT', [], 'STRESS-type')
+        """
+        assert isinstance(value, str), f'value={value!r} and is not a string'
+        self.add(key, value, [], 'STRESS-type')
+
+    def add_result_type(self, key: str, value: int | str,
+                        options: list[str]) -> None:
+        """
+        Simple way to add something of the form:
+            DISP(PLOT) = ALL
+            STRESS(PLOT) = ALL
+            FORCE(PLOT) = 1
+
+        subcase.add_integer_type('SPC', 1, ['PLOT'])
+        vs.
+        subcase.add('SPC', 'ALL', ['PLOT'], 'STRESS-type')
+        """
+        assert isinstance(value, (str, integer_types)), f'value={value!r} and is not an string/integer'
+        self.add(key, value, options, 'STRESS-type')
+
+    def update(self, key: str, value, options, param_type: str) -> None:
         self._validate_param_type(param_type)
-        assert key in self.params, 'key=%r is not in isubcase=%s' % (key, self.id)
+        assert key in self.params, f'key={key!r} is not in isubcase={self.id}'
         self._add_data(key, value, options, param_type)
 
-    def _add_data(self, key, value, options, param_type):
+    def add_set_from_values(self, set_id: int, values: list[int | str]) -> None:
+        """
+        Simple way to add SET cards
+
+        Example
+        -------
+        >>> set_id1 = 42
+        >>> values1 = [1, 2, 3]
+        >>> subcase = Subcase()
+        >>> subcase.add_set_from_values(set_id1, values1)
+        >>> set_id2 = 43
+        >>> values2 = ['KAAX']
+        >>> subcase.add_set_from_values(set_id2, values2)
+        >>> subcase
+
+        SUBCASE 1
+            SET 42 = 1, 2, 3
+            SET 43 = KAAX
+
+        """
+        key = f'SET {set_id:d}'
+        param_type = 'SET-type'
+        assert isinstance(values, list), values
+        self.params[key] = [values, set_id, param_type]
+
+    def _add_data(self, key: str, value: Any, options: list[Any],
+                  param_type: str) -> None:
+        """
+        Adds the data to the subcase  in the KEY(OPTIONS)=VALUE style.
+
+        Parameters
+        ----------
+        key : str
+            the name
+
+        >>> subcase = Subcase()
+        >>> subcase._add_data(key, value, options, param_type)
+
+        """
         key = update_param_name(key)
-        if key == 'ANALYSIS' and value == 'FLUT':
-            value = 'FLUTTER'
+        if key == 'ANALYSIS':
+            value = _update_analysis_value(value)
+
+        elif param_type == 'STRESS-type' and key.startswith('SET'):
+            raise RuntimeError('%r' % key, options, param_type)
 
         #print("adding isubcase=%s key=%r value=%r options=%r "
               #"param_type=%r" %(self.id, key, value, options, param_type))
@@ -713,25 +845,15 @@ class Subcase:
             (key, value, options) = self._simplify_data(key, value, options, param_type)
             self.params[key] = [value, options, param_type]
 
-    def _simplify_data(self, key, value, options, param_type):
+    def _simplify_data(self, key: str, value: Any, options: list[Any],
+                       param_type: str) -> tuple[str, Any, Any]:
         if param_type == 'SET-type':
-            #print("adding isubcase=%s key=%r value=%r options=%r "
-                  #"param_type=%r" % (self.id, key, value, options, param_type))
-
-            #print("adding isubcase=%s key=%r value=%r options=%r "
-                  #"param_type=%r" % (self.id, key, value, options, param_type))
-            values2 = expand_thru_case_control(value)
-
-            assert isinstance(values2, list), type(values2)
-            if isinstance(options, list):
-                msg = 'invalid type for options=%s value; expected an integer; got a list' % key
-                raise TypeError(msg)
-            options = int(options)
-            return (key, values2, options)
+            (key, values2, options, param_type) = _simplify_set(key, value, options, param_type)
+            return key, values2, options
 
         elif param_type == 'CSV-type':
-            #print("adding isubcase=%s key=%r value=|%s| options=|%s| "
-            #      "param_type=%s" %(self.id, key, value, options, param_type))
+            #print(f'adding isubcase={self.id} key={key!r} value={value!r} options={options!r} '
+                  #'param_type={param_type!r}')
             if value.isdigit():  # PARAM,DBFIXED,-1
                 value = value
         #elif param_type == 'OBJ-type':
@@ -748,31 +870,36 @@ class Subcase:
                 #print("_adding isubcase=%s %-18s %-12s %-12s %-12s" %(self.id, a, b, c, d))
             if isinstance(value, integer_types) or value is None:
                 pass
-            elif isinstance(value, (list, ndarray)):  # new???
-                msg = 'invalid type for key=%s value; expected an integer; got a list' % key
+            elif isinstance(value, (list, np.ndarray)):  # new???
+                msg = f'invalid type for key={key} value; expected an integer; got a list={value}'
                 raise TypeError(msg)
             elif value.isdigit():  # STRESS = ALL
                 value = value
             #else: pass
         return key, value, options
 
-    def get_op2_data(self, sol, solmap_to_value):
+    def get_op2_data(self, sol, solmap_to_value) -> None:
         self.sol = sol
-        label = 'SUBCASE %s' % (self.id)
+        label = f'SUBCASE {self.id}'
         op2_params = {
             'isubcase': None, 'tables': [], 'analysis_codes': [],
             'device_codes': [], 'sort_codes': [], 'table_codes': [],
             'label': label, 'subtitle': None, 'title': None,
-            'format_codes': [], 'stress_codes': [], 'thermal': None}
+            'format_codes': [], 'stress_codes': [], 'thermal': None,
 
-        results = ['DISPLACEMENT', 'EKE', 'EDE', 'ELSDCON', 'ENTHALPY',
-                   'EQUILIBRIUM', 'ESE', 'FLUX', 'FORCE', 'GPFORCE', 'GPKE',
-                   'GPSDCON', 'GPSTRAIN', 'GPSTRESS', 'HOUTPUT', 'MODALKE',
-                   'MODALSE', 'MPCFORCES', 'NLSTRESS', 'NOUTPUT', 'OLOAD',
-                   'PFGRID', 'PFMODE', 'PFPANEL', 'RCROSS', 'RESVEC',
-                   'SACCELERATION', 'SDISPACEMENT', 'SPCFORCES', 'STRAIN',
-                   'STRESS', 'SVECTOR', 'SVELOCITY', 'THERMAL', 'VECTOR',
-                   'VELOCITY', 'VUGRID', 'WEIGHTCHECK']
+            # new
+            'approach_codes': [], 'tcodes': [],
+        }
+
+        results = [
+            'DISPLACEMENT', 'EKE', 'EDE', 'ELSDCON', 'ENTHALPY',
+            'EQUILIBRIUM', 'ESE', 'FLUX', 'FORCE', 'GPFORCE', 'GPKE',
+            'GPSDCON', 'GPSTRAIN', 'GPSTRESS', 'HOUTPUT', 'MODALKE',
+            'MODALSE', 'MPCFORCES', 'NLSTRESS', 'NOUTPUT', 'OLOAD',
+            'PFGRID', 'PFMODE', 'PFPANEL', 'RCROSS', 'RESVEC',
+            'SACCELERATION', 'SDISPACEMENT', 'SPCFORCES', 'STRAIN',
+            'STRESS', 'SVECTOR', 'SVELOCITY', 'THERMAL', 'VECTOR',
+            'VELOCITY', 'VUGRID', 'WEIGHTCHECK']
 
         # converts from solution 200 to solution 144
         if self.sol == 200 or 'ANALYSIS' in self.params:
@@ -792,6 +919,7 @@ class Subcase:
             (value, options, param_type) = param
             #msg = ("  -key=|%s| value=|%s| options=%s param_type=|%s|"
             #    % (key, value, options, param_type))
+            del key, value, options, param_type
 
         thermal = 0
         for (key, param) in self.params.items():
@@ -851,14 +979,18 @@ class Subcase:
             #if value is not None:
                 #print("   key=%r value=%r" % (key, value))
 
-    def print_param(self, key, param):
+    def print_param(self, key: str, param: tuple[Any, Any, str]) -> str:
         """
-        Prints a single entry of the a subcase from the global or local
+        Prints a single entry of the subcase from the global or local
         subcase list.
         """
         msg = ''
         #msg += 'id=%s   ' %(self.id)
-        (value, options, param_type) = param
+        try:
+            (value, options, param_type) = param
+        except:
+            print(param)
+            raise
 
         spaces = ''
         if self.id > 0:
@@ -867,8 +999,8 @@ class Subcase:
         #print('key=%s param=%s param_type=%s' % (key, param, param_type))
         if param_type == 'SUBCASE-type':
             if self.id > 0:
-                msgi = 'SUBCASE %s\n' % (self.id)
-                assert len(msgi) < 72, 'len(msg)=%s; msg=\n%s' % (len(msgi), msgi)
+                msgi = f'SUBCASE {self.id:d}\n'
+                assert len(msgi) < 72, f'len(msg)={len(msgi)}; msg=\n{msgi}'
                 msg += msgi
             #else:  global subcase ID=0 and is not printed
             #    pass
@@ -879,20 +1011,20 @@ class Subcase:
                 sline = value.split(',')
                 two_spaces = ',\n' + 2 * spaces
                 msgi = spaces + two_spaces.join(sline) + '\n'
-                assert len(msgi) < 68, 'len(msg)=%s; msg=\n%s' % (len(msgi), msgi)
+                assert len(msgi) < 68, f'len(msg)={len(msgi)}; msg=\n{msgi}'
                 msg += msgi
             else:
-                msgi = spaces + '%s\n' % value
+                msgi = spaces + f'{value}\n'
                 #assert len(msgi) < 68, 'len(msg)=%s; msg=\n%s' % (len(msgi), msgi)
                 msg += msgi
         elif param_type == 'STRING-type':
             msgi = spaces + '%s = %s\n' % (key, value)
             if key not in ['TITLE', 'LABEL', 'SUBTITLE']:
-                assert len(msgi) < 68, 'len(msg)=%s; msg=\n%s' % (len(msgi), msgi)
+                assert len(msgi) < 68, f'len(msg)={len(msgi)}; msg=\n{msgi}'
             msg += msgi
         elif param_type == 'CSV-type':
             msgi = spaces + '%s,%s,%s\n' % (key, value, options)
-            assert len(msgi) < 68, 'len(msg)=%s; msg=\n%s' % (len(msgi), msgi)
+            assert len(msgi) < 68, f'len(msg)={len(msgi)}; msg=\n{msgi}'
             msg += msgi
         elif param_type == 'STRESS-type':
             msg += write_stress_type(key, options, value, spaces)
@@ -904,18 +1036,17 @@ class Subcase:
             msg += value.write(spaces)
         else:
             # SET-type is not supported yet...
-            msg = ('\nkey=%r param=%r\n'
+            msg = (f'\nkey={key!r} param={param!r}\n'
                    'allowed_params=[SET-type, STRESS-type, STRING-type, SUBCASE-type, KEY-type]\n'
                    'CSV-type     -> PARAM,FIXEDB,-1\n'
-                   'KEY-type     -> ???\n' # the catch all
+                   'KEY-type     -> ???\n'  # the catch all
                    'SET-type     -> SET 99 = 1234\n'
                    'SUBCASE-type -> ???\n'
                    'STRESS-type  -> DISP(PLOT, SORT1)=ALL\n'
                    '                STRESS(PLOT, SORT1)=ALL\n'
                    'STRING-type  -> LABEL = A label\n'
                    '                TITLE = A title\n'
-                   '                SUBTITLE = A subtitle\n'
-                   ''% (key, param))
+                   '                SUBTITLE = A subtitle\n')
             raise NotImplementedError(msg)
 
         #print("msg = %r" % (msg))
@@ -972,16 +1103,16 @@ class Subcase:
         #if 'DLOAD' in self.params:  # ???
             #pass
 
-    def finish_subcase(self):
+    def finish_subcase(self) -> None:
         """
-        Removes the subcase parameter from the subcase to avoid printing it in
-        a funny spot
+        Removes the subcase parameter from the subcase to avoid printing
+        it in a funny spot
         """
         if 'SUBCASE' in self.params:
             del self.params['SUBCASE']
         #print "self.params %s = %s" %(self.id,self.params)
 
-    def write_subcase(self, subcase0):
+    def write_subcase(self, subcase0: Subcase) -> str:
         """
         Internal method to print a subcase
 
@@ -998,7 +1129,7 @@ class Subcase:
         if self.id == 0:
             msg = str(self)
         else:
-            msg = 'SUBCASE %s\n' % self.id
+            msg = f'SUBCASE {self.id:d}\n'
             nparams = 0
             for (key, param) in self.subcase_sorted(self.params.items()):
                 if key in subcase0.params and subcase0.params[key] == param:
@@ -1019,23 +1150,23 @@ class Subcase:
                           #"param_type=%r" % (key, value, options, param_type))
                     msg += self.print_param(key, param)
                     nparams += 1
-                assert nparams > 0, 'No subcase parameters are defined for isubcase=%s...' % self.id
+                assert nparams > 0, f'No subcase parameters are defined for isubcase={self.id:d}...'
 
         return msg
 
-    def subcase_sorted(self, lst):
+    def subcase_sorted(self, lst: list[str]) -> list[str]:
         """
         Does a "smart" sort on the keys such that SET cards increment in
         numerical order.  Also puts the sets first.
 
         Parameters
         ----------
-        lst : List[str]
+        lst : list[str]
             the list of subcase list objects (list_a)
 
         Returns
         -------
-        list_b : List[str]
+        list_b : list[str]
             the sorted version of list_a
         """
         # presort the list to put all the SET cards next to each other
@@ -1048,21 +1179,21 @@ class Subcase:
         list_before = []
         set_keys = []
         for (i, entry) in enumerate(lst):
-            key = entry[0]  # type: str
+            key: str = entry[0]
             if 'SET' in key[0:3]:
                 if key == 'SET':  # handles "SET = ALL"
-                    key = 0
+                    set_id = 0
                 else:  # handles "SET 100 = 1,2,3"
                     sline = key.split(' ')
                     try:
-                        key = int(sline[1])
-                    except:
-                        msg = 'error caclulating key; sline=%s' % sline
+                        set_id = int(sline[1])
+                    except Exception:
+                        msg = f'error caclulating key; sline={sline}'
                         raise RuntimeError(msg)
 
                 # store the integer ID and the SET-type list
-                set_dict[key] = entry
-                set_keys.append(key)
+                set_dict[set_id] = entry
+                set_keys.append(set_id)
             else:
                 # only store the entries before the SET cards
                 list_before.append(entry)
@@ -1081,7 +1212,7 @@ class Subcase:
         list_b = set_list + list_before + list_after
         return list_b
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Prints out EVERY entry in the subcase.  Skips parameters already in
         the global subcase.
@@ -1091,7 +1222,7 @@ class Subcase:
         #msg = "-------SUBCASE %s-------\n" %(self.id)
         msg = ''
         if self.id > 0:
-            msg += 'SUBCASE %s\n' % self.id
+            msg += f'SUBCASE {self.id:d}\n'
 
         nparams = 0
         for key, param in self.subcase_sorted(self.params.items()):
@@ -1100,130 +1231,45 @@ class Subcase:
             msg += self.print_param(key, param)
             nparams += 1
         if self.id > 0:
-            assert nparams > 0, 'No subcase parameters are defined for isubcase=%s...' % self.id
+            assert nparams > 0, f'No subcase parameters are defined for isubcase={self.id:d}...'
         return msg
 
-def _load_hdf5_param(group, key, encoding):
-    import h5py
-    from pyNastran.utils.dict_to_h5py import _cast
-    #print('-----------------------------------------')
-    #print(type(key), key)
-    sub_group = group[key]
-    keys = list(sub_group.keys())
-    #print('subgroup.keys() =', sub_group.keys())
 
-    if key == 'blank':
-        key = ''
-
-    if 'options' in sub_group:
-        keys.remove('options')
-        options = _cast(sub_group['options'])
-        if isinstance(options, (integer_types, str)):
-            pass
-        else:
-            options = options.tolist()
-            options = [
-                option.decode(encoding) if isinstance(option, bytes) else option
-                for option in options]
-    else:
-        options = None
-
-    param_type = None
-    if 'param_type' in sub_group:
-        param_type = _cast(sub_group['param_type'])
-        keys.remove('param_type')
-
-    #print('param_type ', param_type)
-    value = None
-    if 'value' in sub_group:
-        keys.remove('value')
-        value = _cast(sub_group['value'])
-        if isinstance(value, bytes):
-            value = value.decode(encoding)
-        elif isinstance(value, (integer_types, str)):
-            pass
-        else:
-            value = value.tolist()
-
-    elif 'object' in sub_group:
-        value, options = _load_hdf5_object(key, keys, sub_group, encoding)
+def _update_analysis_value(value: str) -> str:
+    """ANALYSIS = FLUT"""
+    if value == 'FLUT':
+        value = 'FLUTTER'
+    return value
 
 
-    if len(keys) > 0:
-        #keyi = _cast(sub_group['key'])
-        #print('keyi = %r' % keyi)
-        raise RuntimeError('keys = %s' % keys)
+def _simplify_set(key: str, value: Any, options: list[Any],
+                  param_type: str) -> tuple[int, str, list[str], str]:
+    """
+    Parameters
+    ----------
+    key: str
+        'SET 1'
+    value : list[str]
+        [' 1.*MAT1', '2.*MAT2', '3.*MAT3', '4.*MAT4', '5.*MAT5', '6.*MAT6', ' 7.*MAT7', '8.*MAT8', '9.*MAT9']
+    options : int
+        the SET id
+    """
+    #print("adding isubcase=%s key=%r value=%r options=%r "
+          #"param_type=%r" % (self.id, key, value, options, param_type))
 
-    #print(value, options, param_type)
-    return value, options, param_type
+    #print("adding isubcase=%s key=%r value=%r options=%r "
+          #"param_type=%r" % (self.id, key, value, options, param_type))
+    values2 = expand_thru_case_control(value)
 
-def _load_hdf5_object(key, keys, sub_group, encoding):
-    import h5py
-    from pyNastran.utils.dict_to_h5py import _cast
-    keys.remove('object')
-    sub_groupi = sub_group['object']
+    assert isinstance(values2, list), type(values2)
+    if isinstance(options, list):
+        msg = f'invalid type for options={options!r} value; expected an integer; got a list'
+        raise TypeError(msg)
+    options = int(options)
+    return key, values2, options, param_type
 
-    Type = sub_groupi.attrs['type']
-    cls = CLASS_MAP[Type]
 
-    if hasattr(cls, 'load_hdf5'):
-        class_obj, options = cls.load_hdf5(sub_groupi, 'utf8')
-        value = class_obj
-        return value, options
-
-    use_data = True
-    if 'options' in sub_groupi:
-        options2 = _cast(sub_groupi['options']).tolist()
-        value = _cast(sub_groupi['value'])
-        #print('sub_keys =', sub_groupi, sub_groupi.keys())
-
-        options_str = [
-            option.decode(encoding) if isinstance(option, bytes) else option
-            for option in options2]
-        use_data = False
-
-    data_group = sub_groupi['data']
-    keys2 = _cast(data_group['keys']).tolist()
-
-    h5_values = data_group['values']
-    if isinstance(h5_values, h5py._hl.group.Group):
-        values2 = [None] * len(keys2)
-        for ih5 in h5_values.keys():
-            ih5_int = int(ih5)
-            h5_value = _cast(h5_values[ih5])
-            values2[ih5_int] = h5_value
-    else:
-        values2 = _cast(h5_values).tolist()
-    #print('data_keys =', data_group, data_group.keys())
-
-    unused_keys_str = [
-        keyi.decode(encoding) if isinstance(keyi, bytes) else keyi
-        for keyi in keys2]
-    unused_values_str = [
-        valuei.decode(encoding) if isinstance(valuei, bytes) else valuei
-        for valuei in values2]
-
-    #print('keys2 =', keys2)
-    #print('values2 =', values2)
-    #print('options2 =', options2)
-
-    if use_data:
-        #print('keys2 =', keys2)
-        #print('values2 =', values2)
-        data = []
-        for keyi, valuei in zip(keys2, values2):
-            data.append((keyi, valuei))
-        class_obj = cls(data)
-        assert options is None, options
-    else:
-        class_obj = cls(key, value, options_str)
-        options = options_str
-    value = class_obj
-    #print(class_obj)
-    #class_obj.load_hdf5_file(hdf5_file, encoding)
-    return value, options
-
-def update_param_name(param_name):
+def update_param_name(param_name: str) -> str:
     """
     Takes an abbreviated name and expands it so the user can type DISP or
     DISPLACEMENT and get the same answer
@@ -1249,7 +1295,7 @@ def update_param_name(param_name):
     elif param_name.startswith('ELFO'):
         param_name = 'FORCE'
     elif param_name.startswith('ELST'):
-        param_name = 'STRESS' # or ELSTRESS
+        param_name = 'STRESS'  # or ELSTRESS
     elif param_name.startswith('FORC'):
         param_name = 'FORCE'
     elif param_name.startswith('FREQ'):
@@ -1293,8 +1339,8 @@ def update_param_name(param_name):
     elif param_name.startswith('THER'):
         param_name = 'THERMAL'
     elif param_name.startswith('VECT'):
-        #param_name = 'PRESSURE' # or VECTOR
-        param_name = 'DISPLACEMENT' # or VECTOR
+        #param_name = 'PRESSURE'  # or VECTOR
+        param_name = 'DISPLACEMENT'  # or VECTOR
     elif param_name.startswith('VELO'):
         param_name = 'VELOCITY'
     elif param_name.startswith('TITL'):
@@ -1329,7 +1375,8 @@ def update_param_name(param_name):
     #print '*param_name = ',param_name
     return param_name
 
-def get_analysis_code(sol):
+
+def get_analysis_code(sol: int) -> int:
     """
     Maps the solution number to the OP2 analysis code.
 
@@ -1343,29 +1390,30 @@ def get_analysis_code(sol):
     .. todo:: verify
     """
     codes = {
-        101 : 1,  # staics
-        103 : 2,  # modes
-        105 : 7,  # pre-buckling
-        106 : 10, # nonlinear statics
-        107 : 9,  # complex eigenvalues
-        108 : 5,  # frequency
-        111 : 5,
-        112 : 6,
-        114 : 1,
-        115 : 2,
-        116 : 7,
-        118 : 5,
-        129 : 6,  # nonlinear
-        144 : 1,  # static aero
-        145 : 1,
-        146 : 1,  # flutter
-        153 : 10,
-        159 : 6,  # transient thermal
+        101: 1,  # staics
+        103: 2,  # modes
+        105: 7,  # pre-buckling
+        106: 10,  # nonlinear statics
+        107: 9,  # complex eigenvalues
+        108: 5,  # frequency
+        111: 5,
+        112: 6,
+        114: 1,
+        115: 2,
+        116: 7,
+        118: 5,
+        129: 6,  # nonlinear
+        144: 1,  # static aero
+        145: 1,
+        146: 1,  # flutter
+        153: 10,
+        159: 6,  # transient thermal
     }
     #print("sol=%s" % sol)
     approach_code = codes[sol]
     #print('approach_code = %s' % approach_code)
     return approach_code
+
 
 def get_device_code(options: Any, unused_value: Any) -> int:
     """
@@ -1391,6 +1439,7 @@ def get_device_code(options: Any, unused_value: Any) -> int:
        5 - PRINT, PUNCH
        6 - PRINT, PLOT, PUNCH
     """
+    del unused_value
     device_code = 0
     if 'PRINT' in options:
         device_code += 1
@@ -1403,7 +1452,8 @@ def get_device_code(options: Any, unused_value: Any) -> int:
     #    device_code=1  # PRINT
     return device_code
 
-def get_table_code(sol, table_name, unused_options):
+
+def get_table_code(sol: int, table_name: str, unused_options) -> int:
     """
     Gets the table code of a given parameter.  For example, the
     DISPLACMENT(PLOT,POST)=ALL makes an OUGV1 table and stores the
@@ -1413,16 +1463,19 @@ def get_table_code(sol, table_name, unused_options):
 
     Parameters
     ----------
-    options : list[int/float/str]
+    table_name : str
+        DISPLACEMENT, FORCE, STRESS, ...
+    unused_options : list[int/float/str]
         the options for a parameter
-    value : int/float/str
-        the value of the parameter
+    # value : int/float/str
+    #     the value of the parameter
 
     Returns
     -------
     table_code : int
        the OP2 table_code
     """
+    del unused_options
     if table_name in ['VECTOR', 'PRESSURE']:
         table_name = 'DISPLACEMENT'  # equivalent tables...
 
@@ -1605,13 +1658,14 @@ def get_table_code(sol, table_name, unused_options):
     table_code = tables[key]
     return table_code
 
-def get_sort_code(options, unused_value):
+
+def get_sort_code(options: list[str], unused_value) -> int:
     """
     Gets the sort code of a given set of options and value
 
     Parameters
     ----------
-    options : List[int/str]
+    options : list[int/str]
         the options for a parameter
     unused_value : int; str
         the value of the parameter
@@ -1625,7 +1679,8 @@ def get_sort_code(options, unused_value):
         sort_code += 4
     return sort_code
 
-def get_format_code(options: Any, unused_value: Any) -> int:
+
+def get_format_code(options: list[str], unused_value: Any) -> int:
     """
     Gets the format code that will be used by the op2 based on
     the options.
@@ -1639,6 +1694,7 @@ def get_format_code(options: Any, unused_value: Any) -> int:
 
     .. todo::  not done...only supports REAL, IMAG, PHASE, not RANDOM
     """
+    del unused_value
     format_code = 0
     if 'REAL' in options:
         format_code += 1
@@ -1649,7 +1705,8 @@ def get_format_code(options: Any, unused_value: Any) -> int:
     format_code = max(format_code, 1)
     return format_code
 
-def get_stress_code(key: str, options: Dict[str, Any], unused_value: Any) -> int:
+
+def get_stress_code(key: str, options: dict[str, Any], unused_value: Any) -> int:
     """
     Method get_stress_code:
 
@@ -1663,6 +1720,7 @@ def get_stress_code(key: str, options: Dict[str, Any], unused_value: Any) -> int
     .. todo:: how does the MATERIAL bit get turned on?  I'm assuming it's
               element dependent...
     """
+    del unused_value
     stress_code = 0
     if 'VONMISES' in options:
         stress_code += 1

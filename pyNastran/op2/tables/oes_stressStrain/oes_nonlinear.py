@@ -5,11 +5,14 @@ defines:
 """
 from math import isnan
 from itertools import count, cycle
-from typing import List
 
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import (
+    build_dataframe_transient_header,
+    build_pandas_transient_elements, build_pandas_transient_element_node)
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import OES_Object
 from pyNastran.f06.f06_formatting import _eigenvalue_header, write_float_11e, write_float_13e
 
@@ -54,7 +57,7 @@ class RealNonlinearPlateArray(OES_Object):
             raise NotImplementedError('name=%r type=%s' % (self.element_name, self.element_type))
         return nnodes_per_element
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -62,7 +65,8 @@ class RealNonlinearPlateArray(OES_Object):
     def is_stress(self):
         return True
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = [
             #[fiber_dist, oxx, oyy, ozz, txy, es, eps, ecs, exx, eyy, ezz, etxy]
             'fiber_distance', 'oxx', 'oyy', 'ozz', 'txy',
@@ -77,7 +81,7 @@ class RealNonlinearPlateArray(OES_Object):
         #elif self.element_type in [144, 64, 82, 70, 75]:  # CQUAD4
             #return True
         #else:
-            #raise NotImplementedError('name=%s type=%s' % (self.element_name, self.element_type))
+            #raise NotImplementedError(f'name={self.element_name} type={self.element_type}')
 
     def build(self):
         """sizes the vectorized attributes of the RealNonlinearPlateArray"""
@@ -99,24 +103,41 @@ class RealNonlinearPlateArray(OES_Object):
             #return
             raise RuntimeError(msg)
 
-        self.nelements //= self.ntimes
+        if self.is_sort1:
+            self.nelements //= self.ntimes
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
-        #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
-            #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.element = np.zeros(self.nelements, dtype='int32')
+        if self.is_sort1:
+            ntimes = self.ntimes
+            ntotal = self.ntotal
+            nelements = self.nelements
+        else:
+            nelements = self.ntimes
+            ntimes = self.nelements // self.ntimes // 2
+            #print("RealNonlinearPlateArray: name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
+                #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
+            # ntotal = self.ntotal // ntimes
+            ntotal = nelements * 2 # self.nnodes_per_element
+            self.ntimes = ntimes
+            self.nelements = nelements
+            #print("-> ntimes=%s nelements=%s ntotal=%s" % (
+                #ntimes, nelements, ntotal))
+
+            assert nelements > 0, nelements
+        assert ntotal > 0, ntotal
+
+            #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
+                #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(nelements, dtype=idtype)
 
         #[fiber_dist, oxx, oyy, ozz, txy, es, eps, ecs, exx, eyy, ezz, etxy]
-        self.data = np.zeros((self.ntimes, self.ntotal, 12), dtype='float32')
+        self.data = np.zeros((ntimes, ntotal, 12), dtype=fdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -189,15 +210,15 @@ class RealNonlinearPlateArray(OES_Object):
             #          eyy                 6.747639e-06  1.349528e-05
             #          ezz                 0.000000e+00  0.000000e+00
             #          exy                 0.000000e+00  0.000000e+00
-            column_names, column_values = self._build_dataframe_transient_header()
-            #element = np.vstack([self.element, self.element]).T.flatten()
-            #element = self.element
-            #data_frame = self._build_pandas_transient_elements(
-                #column_values, column_names,
-                #headers, element, self.data[:, :, 1:])
+            column_names, column_values = build_dataframe_transient_header(self)
+            # element = np.vstack([self.element, self.element]).T.flatten()
+            # element = self.element
+            # data_frame = build_pandas_transient_elements(
+            #     self, column_values, column_names,
+            #     headers, element, self.data[:, :, 1:])
 
-            data_frame = self._build_pandas_transient_element_node(
-                column_values, column_names,
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
                 headers[iheader:], element_fd, self.data[:, :, iheader:],
                 from_tuples=False, from_array=True,
                 names=names,
@@ -217,8 +238,15 @@ class RealNonlinearPlateArray(OES_Object):
         self.ielement += 1
         self.add_sort1(dt, eid, etype, fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy)
 
+    def add_new_eid_sort2(self, dt, eid, etype, fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy):
+        ielement = self.itime
+        self.element[ielement] = eid
+        #self.ielement += 1
+        self.add_sort2(dt, eid, etype, fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy)
+
     def add_sort1(self, dt, eid, etype, fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         if isnan(fd):
             fd = 0.
@@ -235,6 +263,41 @@ class RealNonlinearPlateArray(OES_Object):
         self.data[self.itime, self.itotal, :] = [fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy]
         self.itotal += 1
 
+    def add_sort2(self, dt, eid, etype, fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy):
+        """unvectorized method for adding SORT2 transient data"""
+        assert self.sort_method == 2, self
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        if isnan(fd):
+            fd = 0.
+        if isnan(sz):
+            sz = 0.
+        if isnan(ez):
+            ez = 0.
+
+        ntimes = len(self._times)
+        nelement = len(self.element)
+        ntotal = self.data.shape[1]
+
+        ilayer = self.itotal % 2
+        ielement = self.itime
+
+        itotal = self.itotal % ntotal
+        itime = self.itotal // nelement // 2
+        #itotal = self.ielement
+
+        #try:
+        self._times[itime] = dt
+        #except:
+            #pass
+        utimes = np.round(np.unique(self._times), 3) # .tolist()
+        #print('[%s]' % (', '.join('%g' % val for val in utimes)), '; n=%s' % len(utimes))
+
+        #[fiber_dist, oxx, oyy, ozz, txy, es, eps, ecs, exx, eyy, ezz, etxy]
+        #print(f'RealNonlinearPlateArray: itime={itime}/{ntimes} ielement={ielement}/{nelement} ilayer={ilayer} itotal={itotal}/{ntotal} -> dt={dt:<-5g} eid={eid}')
+        #assert eid == self.element[ielement - 1], 'eid=%s self.element[i-1]=%s' % (eid, self.element[self.ielement - 1])
+        self.data[itime, itotal, :] = [fd, sx, sy, sz, txy, es, eps, ecs, ex, ey, ez, exy]
+        self.itotal += 1
+
     def __eq__(self, table):  # pragma: no cover
         self._eq_header(table)
         assert self.is_sort1 == table.is_sort1
@@ -243,9 +306,9 @@ class RealNonlinearPlateArray(OES_Object):
             msg += '%s\n' % str(self.code_information())
             i = 0
             for itime in range(self.ntimes):
-                for ie, eid in enumerate(self.element):
-                    t1 = self.data[itime, ie, :]
-                    t2 = table.data[itime, ie, :]
+                for ielem, eid in enumerate(self.element):
+                    t1 = self.data[itime, ielem, :]
+                    t2 = table.data[itime, ielem, :]
 
                     # TODO: this name order is wrong
                     #[fiber_dist, oxx, oyy, ozz, txy, es, eps, ecs, exx, eyy, ezz, etxy]
@@ -272,12 +335,12 @@ class RealNonlinearPlateArray(OES_Object):
                     raise ValueError(msg)
         return True
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -302,7 +365,7 @@ class RealNonlinearPlateArray(OES_Object):
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n,
                                                                  str(', '.join(headers))))
         msg.append('  data.shape=%s\n' % str(self.data.shape))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -454,15 +517,16 @@ class RealNonlinearSolidArray(OES_Object):
             raise NotImplementedError('name=%r type=%s' % (self.element_name, self.element_type))
         return nnodes_per_element
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def is_stress(self):
+    def is_stress(self) -> bool:
         return True
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = [
             'oxx', 'oyy', 'ozz', 'txy', 'tyz', 'txz',
             'eff_plastic_strain', 'eff_plastic_strain', 'eff_creep_strain',
@@ -476,7 +540,7 @@ class RealNonlinearSolidArray(OES_Object):
         #elif self.element_type in [144, 64, 82, 70, 75]:  # CQUAD4
             #return True
         #else:
-            #raise NotImplementedError('name=%s type=%s' % (self.element_name, self.element_type))
+            #raise NotImplementedError(f'name={self.element_name} type={self.element_type}')
 
     def build(self):
         """sizes the vectorized attributes of the RealNonlinearPlateArray"""
@@ -497,52 +561,79 @@ class RealNonlinearSolidArray(OES_Object):
                 self.nelements, self.ntimes, self.nelements / float(self.ntimes))
             raise RuntimeError(msg)
 
-        self.nelements //= self.ntimes
+        if self.is_sort1:
+            self.nelements //= self.ntimes
         assert self.nelements > 0
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
-        #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
-            #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.element_node = np.zeros((self.ntotal, 2), dtype='int32')
+        if self.is_sort1:
+            ntimes = self.ntimes
+            #nelements = self.nelements
+            ntotal = self.ntotal
+        else:
+            nelements = self.ntimes
+            ntimes = self.nelements // self.ntimes
+            #print("RealNonlinearSolidArray: name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
+                #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
+            # ntotal = self.ntotal // ntimes
+            ntotal = nelements * self.nnodes_per_element
+            self.ntimes = ntimes
+            self.nelements = nelements
+            #print("-> ntimes=%s nelements=%s ntotal=%s" % (
+                #ntimes, nelements, ntotal))
+            #import sys
+            #sys.stdout.flush()
+
+            assert nelements > 0, nelements
+        assert ntotal > 0, ntotal
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        self.element_node = np.zeros((ntotal, 2), dtype=idtype)
 
         #[sx, sy, sz, sxy, syz, sxz, se, eps, ecs,
         # ex, ey, ez, exy, eyz, exz]
-        self.data = np.zeros((self.ntimes, self.ntotal, 15), dtype='float32')
+        self.data = np.full((ntimes, ntotal, 15), np.nan, dtype=fdtype)
 
-    #def build_dataframe(self):
-        #"""creates a pandas dataframe"""
-        #import pandas as pd
-        #headers = self.get_headers()[1:]
-        ##nelements = self.element.shape[0]
+    def build_dataframe(self):
+        """creates a pandas dataframe"""
+        import pandas as pd
+        headers = self.headers
+        #nelements = self.element.shape[0]
 
-        #if self.nonlinear_factor not in (None, np.nan):
-            #column_names, column_values = self._build_dataframe_transient_header()
-            #self.data_frame = pd.Panel(self.data[:, :, 1:], items=column_values, major_axis=self.element, minor_axis=headers).to_frame()
-            #self.data_frame.columns.names = column_names
-            #self.data_frame.index.names = ['ElementID', 'Item']
-        #else:
-            ## option B - nice!
-            #df1 = pd.DataFrame(self.element).T
-            #df1.columns = ['ElementID']
-            #df2 = pd.DataFrame(self.data[0, :, 1:])
-            #df2.columns = headers
-            #self.data_frame = df1.join(df2)
-        #self.data_frame = self.data_frame.reset_index().set_index(['ElementID'])
-        #print(self.data_frame)
+        if self.nonlinear_factor not in (None, np.nan):
+            #             LoadStep                        1.0
+            # ElementID NodeID Item
+            # 1         0      oxx   0.000000e+00
+            #                  oyy   0.000000e+00
+            #                  ozz   0.000000e+00
+            #                  txy   0.000000e+00
+            #                  tyz   0.000000e+00
+            # ...                             ...
+            # 36        11     eyy  -1.491099e-06
+            #                  ezz  -1.503740e-06
+            #
+            column_names, column_values = build_dataframe_transient_header(self)
+            assert len(self.data.shape) == 3, self.data.shape
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
+                headers, self.element_node, self.data)
+        else:
+            index = pd.MultiIndex.from_arrays(self.element_node.T, names=['ElementID', 'NodeID'])
+            data_frame = pd.DataFrame(self.data[0], columns=headers, index=index)
+            data_frame.columns.names = ['Static']
+            print(data_frame)
+            raise RuntimeError('verify build_dataframe')
+        self.data_frame = data_frame
 
     def add_sort1(self, dt, eid, grid,
                   sx, sy, sz, sxy, syz, sxz, se, eps, ecs,
                   ex, ey, ez, exy, eyz, exz):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         #if isnan(fd):
             #fd = 0.
@@ -565,23 +656,60 @@ class RealNonlinearSolidArray(OES_Object):
                                                  ex, ey, ez, exy, eyz, exz]
         self.itotal += 1
 
+    def add_sort2(self, dt, eid, grid,
+                  sx, sy, sz, sxy, syz, sxz, se, eps, ecs,
+                  ex, ey, ez, exy, eyz, exz):
+        """unvectorized method for adding SORT2 transient data"""
+        assert self.sort_method == 2, self
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        #if isnan(fd):
+            #fd = 0.
+        #if isnan(sz):
+            #sz = 0.
+        #if isnan(ez):
+            #ez = 0.
+
+        itime = self.itotal // self.nnodes_per_element
+        ntimes = self.ntimes
+
+        itotal = self.itime * self.nnodes_per_element + self.itotal % self.nnodes_per_element
+        ntotal = len(self.element_node)
+        #print(f'RealNonlinearSolidArray: itime={itime}/{ntimes} itotal={itotal}/{ntotal} -> dt={dt} eid={eid} nid={grid}')
+        self._times[itime] = dt
+        #if self.ielement == 10:
+            #print(self.element_node[:10, :])
+            #raise RuntimeError()
+        #[fiber_dist, oxx, oyy, ozz, txy, es, eps, ecs, exx, eyy, ezz, etxy]
+        #assert eid == self.element[self.ielement - 1], 'eid=%s self.element[i-1]=%s' % (eid, self.element[self.ielement - 1])
+
+        #print(self.element_node.shape, self.itotal)
+        #self.element[ielement] = eid
+        self.element_node[itotal, :] = [eid, grid]
+        #a = [sx, sy, sz, sxy, syz, sxz, se, eps, ecs,
+             #ex, ey, ez, exy, eyz, exz]
+        self.data[itime, itotal, :] = [sx, sy, sz, sxy, syz, sxz, se, eps, ecs,
+                                       ex, ey, ez, exy, eyz, exz]
+        #print(self.element_node.tolist())
+        self.itotal += 1
+
     def __eq__(self, table):  # pragma: no cover
         self._eq_header(table)
         assert self.is_sort1 == table.is_sort1
         if not np.array_equal(self.data, table.data):
-            msg = 'table_name=%r class_name=%s\n' % (self.table_name, self.__class__.__name__)
+            msg = f'table_name={self.table_name!r} class_name={self.__class__.__name__}\n'
             msg += '%s\n' % str(self.code_information())
             i = 0
             eids = self.element_node[:, 0]
             nids = self.element_node[:, 1]
             for itime in range(self.ntimes):
-                for ie, eid, nid in zip(count(), eids, nids):
-                    t1 = self.data[itime, ie, :]
-                    t2 = table.data[itime, ie, :]
+                for ielem, eid, nid in zip(count(), eids, nids):
+                    t1 = self.data[itime, ielem, :]
+                    t2 = table.data[itime, ielem, :]
 
                     # TODO: this name order is wrong?
                     #[sx, sy, sz, sxy, syz, sxz, se, eps, ecs,
                     # ex, ey, ez, exy, eyz, exz]
+                    t1, t2 = nan_filter(t1, t2)
                     (sx1, sy1, sz1, sxy1, syz1, sxz1, se1, eps1, ecs1, ex1, ey1, ez1, exy1, eyz1, exz1) = t1
                     (sx2, sy2, sz2, sxy2, syz2, sxz2, se2, eps2, ecs2, ex2, ey2, ez2, exy2, eyz2, exz2) = t2
 
@@ -604,12 +732,12 @@ class RealNonlinearSolidArray(OES_Object):
                     raise ValueError(msg)
         return True
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -633,7 +761,7 @@ class RealNonlinearSolidArray(OES_Object):
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n,
                                                                  str(', '.join(headers))))
         msg.append('  data.shape=%s\n' % str(self.data.shape))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -778,3 +906,11 @@ class RealNonlinearSolidArray(OES_Object):
             f06_file.write(page_stamp % page_num)
             page_num += 1
         return page_num - 1
+
+def nan_filter(t1, t2):
+    is_nan1 = np.isnan(t1)
+    is_nan2 = np.isnan(t2)
+    assert np.array_equal(is_nan1, is_nan2)
+    t1[is_nan1] = 0.
+    t2[is_nan1] = 0.
+    return t1, t2

@@ -6,7 +6,10 @@ The capitalization of the sub-functions is important.
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+import re
+import sys
+import copy
+from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
 from numpy import (
     cos, sin, tan, log, log10, mean, exp, sqrt, square, mod, abs, sum,
@@ -17,37 +20,45 @@ from numpy.linalg import norm  # type: ignore
 
 from pyNastran.bdf.cards.base_card import BaseCard
 if TYPE_CHECKING:  # pragma: no cover
-    from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf import BDF, DTABLE
+
 
 def pi(num):
     """weird way to multiply π by a number"""
     return np.pi * num
 
+
 def rss(*args):  # good
     """2-norm; generalized magnitude of vector for N components"""
     return norm(args)
+
 
 def avg(*args):
     """average"""
     return np.mean(args)
 
+
 def ssq(*args):
     """sum of squares"""
     return np.square(args).sum()
+
 
 def logx(x, y):
     """log base_x(y)"""
     return log(y**x) / log(x)
 
+
 def dim(x, y):
     """positive difference"""
     return x - min(x, y)
 
-def db(p, pref):
+
+def db(p: float | np.ndarray, pref: float):
     """sound pressure in decibels"""
-    return 20. * log(p / pref)
+    return 20. * log10(p / pref)
 
 #def _Log(z):
+
 
 def atan2h(x, y):
     """
@@ -76,11 +87,13 @@ def atan2h(x, y):
     #return np.arctanh(x, y)
     raise NotImplementedError()
 
-def invdb(dbi, pref):
-    """inverse Db"""
-    return 10. ** (dbi / 20. + log(pref))
 
-def dba(p, pref, f):
+def invdb(dbi: float, pref: float) -> float:
+    """inverse Db"""
+    return 10. ** (dbi / 20. + log10(pref))
+
+
+def dba(p: float, pref: float, f: float) -> float:
     """
     sound pressure in decibels (perceived)
 
@@ -100,9 +113,10 @@ def dba(p, pref, f):
 
     """
     ta1, ta2 = _get_ta(f)
-    return 20. * log(p / pref) + 10 * log(ta1) + 10. * log(ta2)
+    return 20. * log10(p / pref) + 10 * log10(ta1) + 10. * log10(ta2)
 
-def invdba(dbai, pref, f):
+
+def invdba(dbai: float, pref: float, f: float) -> float:
     """
     Inverse Dba
 
@@ -123,9 +137,10 @@ def invdba(dbai, pref, f):
     """
     ta1, ta2 = _get_ta(f)
     #dbai = dba(p, pref, f)
-    return 10. ** ((dbai - 10. * log(ta1) - 10. * log(ta2))/20)
+    return 10. ** ((dbai - 10. * log10(ta1) - 10. * log10(ta2))/20)
 
-def _get_ta(f):
+
+def _get_ta(f: float) -> tuple[float, float]:
     """gets the factors for dba, invdba"""
     k1 = 2.242882e16
     k3 = 1.562339
@@ -137,13 +152,39 @@ def _get_ta(f):
     ta2 = k1 * f**4 / ((f**2 + p1**2)**2 * (f**2 + p4**2)**2)
     return ta1, ta2
 
+
 # we'll add _ to the beginning of these variables
 BUILTINS = ['del', 'eval', 'yield', 'async', 'await', 'property',
             'slice', 'filter', 'map']
 
-class DEQATN(BaseCard):  # needs work...
+
+def split_deqatn_line0(card: list[str]) -> tuple[int, str, str, list[str]]:
+    line0 = card[0]
+    if '\t' in line0:
+        line0 = line0.expandtabs()
+
+    name_eqid = line0[:16]
+    # print('name_eqid = %r' % name_eqid)
+    assert ',' not in name_eqid, name_eqid
+
+    try:
+        name, eq_id = name_eqid.split()
+        assert name.strip().upper() == 'DEQATN', card
+    except ValueError:
+        msg = 'cannot split %r\n' % name_eqid
+        msg += "Expected data of the form 'DEQATN  100'\n"
+        msg += 'card=%s' % card
+        raise ValueError(msg)
+
+    equation_id = int(eq_id)
+    line0_eq = line0[16:]
+    eqs_temp = [line0_eq] + card[1:]
+    return equation_id, name_eqid, line0_eq, eqs_temp
+
+
+class DEQATN(BaseCard):
     """
-    Design Equation Defintion
+    Design Equation Definition
     Defines one or more equations for use in design sensitivity analysis.
 
     +--------+------+-----+-----+-----+-----+-------+-----+
@@ -157,7 +198,13 @@ class DEQATN(BaseCard):  # needs work...
     type = 'DEQATN'
     _properties = ['dtable']
 
-    def __init__(self, equation_id, eqs, comment=''):
+    def __deepcopy__(self, memo_dict: dict[int, Any]):
+        eqs = copy.deepcopy(self.eqs)
+        card = DEQATN(self.equation_id, eqs, comment=self.comment)
+        memo_dict[id(self)] = card
+        return card
+
+    def __init__(self, equation_id: int, eqs: list[str], comment: str=''):
         """
         Creates a DEQATN card
 
@@ -165,7 +212,7 @@ class DEQATN(BaseCard):  # needs work...
         ----------
         equation_id : int
             the id of the equation
-        eqs : List[str]
+        eqs : list[str]
             the equations, which may overbound the field
             split them by a semicolon (;)
         comment : str; default=''
@@ -189,25 +236,29 @@ class DEQATN(BaseCard):  # needs work...
         if comment:
             self.comment = comment
         self.dtable = None
-        self.func = None
+        self.dtable_ref = None
         self.equation_id = equation_id
         self.eqs = eqs
+
+        self.func = None
         self.func_str = ''
+        self.func_name = ''
+        self.nargs = 0
 
     @classmethod
     def _init_from_empty(cls):
         equation_id = 1
         eqs = []
-        return DEQATN(equation_id, eqs, comment='')
+        return DEQATN(equation_id, eqs)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: list[str], comment: str=''):
         """
         Adds a DEQATN card from ``BDF.add_card(...)``
 
         Parameters
         ----------
-        card : List[str]
+        card : list[str]
             this card is special and is not a ``BDFCard`` like other cards
         comment : str; default=''
             a comment for the card
@@ -242,7 +293,7 @@ class DEQATN(BaseCard):  # needs work...
         eqs = lines_to_eqs(eqs_temp)
         return DEQATN(equation_id, eqs, comment=comment)
 
-    def _setup_equation(self):
+    def _setup_equation(self) -> None:
         """
         creates an executable equation object from self.eqs
 
@@ -256,19 +307,27 @@ class DEQATN(BaseCard):  # needs work...
             return x + 32.
 
         """
-        default_values = {}
-        if self.dtable is not None:
-            default_values = self.dtable_ref.default_values
-        func_name, nargs, func_str = fortran_to_python(
-            self.eqs, default_values, str(self))
+        #default_values = {}
+        #if self.dtable is not None:
+            #default_values = self.dtable_ref.default_values
+        #func_name, nargs, func_str = fortran_to_python(
+            #self.equation_id, self.eqs, default_values, str(self))
+        func_name, nargs, func_str = _setup_deqatn(
+            self.equation_id, self.eqs,
+            self.dtable_ref,
+            str(self),
+        )
+
         self.func_str = func_str
         self.func_name = func_name
+        exec_args = {'locals': sys._getframe().f_locals} if sys.version_info > (3, 13) else {}
         try:
-            exec(func_str)
+            exec(func_str, **exec_args)
         except SyntaxError:
             print(func_str)
             raise
         #print(locals().keys())
+
         func = locals()[func_name]
         setattr(self, func_name, func)
         #print(func)
@@ -291,7 +350,7 @@ class DEQATN(BaseCard):  # needs work...
         self.dtable_ref = self.dtable
         self._setup_equation()
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
         self.cross_reference(model)
 
     def uncross_reference(self) -> None:
@@ -304,10 +363,10 @@ class DEQATN(BaseCard):  # needs work...
         del self.nargs
         del self.dtable, self.dtable_ref
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         pass
 
-    def evaluate(self, *args):
+    def evaluate(self, *args) -> float:
         """Makes a call to self.func"""
         #args2 = args[:self.nargs]
         #print('args =', args2)
@@ -319,39 +378,51 @@ class DEQATN(BaseCard):  # needs work...
         return self.func(*args)
         #self.func(*args)
 
-    def raw_fields(self):
+    def raw_fields(self) -> list[str]:
         return [self.write_card()]
 
-    def repr_fields(self):
+    def repr_fields(self) -> list[str]:
         return self.raw_fields()
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
-        #self.evaluate(1, 2)
-        eqs = split_equations(self.eqs)
-        equation_line0 = eqs[0]
-        #assert len(equation_line0) <= 56, equation_line0
-        msg = 'DEQATN  %-8i%-56s\n' % (self.equation_id, equation_line0)
-        assert len(equation_line0) <= 56, equation_line0
-        for eq in eqs[1:]:
-            msg += '        %-64s\n' % eq
-            assert len(eq) <= 64, eq
-        #print(msg)
+        msg = write_deqatn(self.equation_id, self.eqs,
+                           size=size, is_double=is_double)
         return msg
 
-def lines_to_eqs(eqs_in):
+
+def write_deqatn(equation_id: int, eqs: list[str],
+                 size: int=8, is_double: bool=False) -> str:
+    """directly write a DEQATN"""
+    #self.evaluate(1, 2)
+    split_eqs = split_equations(eqs)
+    equation_line0 = split_eqs[0]
+    #assert len(equation_line0) <= 56, equation_line0
+    msg = 'DEQATN  %-8i%-56s\n' % (equation_id, equation_line0)
+    assert len(equation_line0) <= 56, equation_line0
+    for eq in split_eqs[1:]:
+        msg += '        %-64s\n' % eq
+        assert len(eq) <= 64, eq
+    #print(msg)
+    return msg
+
+
+def lines_to_eqs(eqs_in: list[str]) -> list[str]:
     """splits the equations"""
     eqs_wrapped = _split_equations_by_semicolon(eqs_in)
     eqs = _join_wrapped_equation_lines(eqs_in, eqs_wrapped)
     assert len(eqs) > 0, eqs
     return eqs
 
-def _split_equations_by_semicolon(eqs_in):
+
+def _split_equations_by_semicolon(eqs_in: list[str]) -> list[str]:
     """helper for ``lines_to_eqs``"""
     eqs_temp_out = []
-    nstart = 0
     nchars = 72 - 16
-    for eq in eqs_in:
-        eq2 = eq[nstart:nchars].strip(' \t\n')
+    for iline, eq in enumerate(eqs_in):
+        if iline == 0:
+            eq2 = eq[:nchars].strip(' \t\n')
+        else:
+            eq2 = eq.expandtabs()[8:nchars].strip(' \t\n')
 
         semicolon = ';' if eq2.rstrip().endswith(';') else ''
         eq2 = eq2.rstrip(' \t;')
@@ -373,7 +444,6 @@ def _split_equations_by_semicolon(eqs_in):
             #print('check_line = %r' % (check_line))
             #_check_for_valid_line(check_line, eq)
             eqs_temp_out.append(check_line)
-        nstart = 8
         nchars = 72
     return eqs_temp_out
 
@@ -385,14 +455,15 @@ def _split_equations_by_semicolon(eqs_in):
             #'full_line=%r' % (check_line, full_line))
         #raise SyntaxError(msg)
 
-def _join_wrapped_equation_lines(unused_eqs_temp_in, eqs_temp):
+
+def _join_wrapped_equation_lines(unused_eqs_temp_in, eqs_temp: list[str]) -> list[str]:
     """helper for ``lines_to_eqs``"""
     eqs = []
     neqs = len(eqs_temp)
     is_join = False
     eqi = ''
     for i, eq in enumerate(eqs_temp):
-        #print('i=%s join=%s eq=%r' % (i, is_join, eq))
+        #print(f'i={i} join={is_join} eq={eq!r}')
         if is_join:
             eq = eqi.rstrip() + eq.lstrip()
         eqi = eq.strip().replace(' ', '')
@@ -430,7 +501,8 @@ def _join_wrapped_equation_lines(unused_eqs_temp_in, eqs_temp):
         eqs.append(eqi)
     return eqs
 
-def split_equations(lines):
+
+def split_equations(lines: list[str]) -> list[str]:
     """takes an overbounded DEQATN card and shortens it"""
     # first line must be < 56
     # second line may be < 64
@@ -447,13 +519,15 @@ def split_equations(lines):
     lines2[-1] = lines2[-1][:-1]
     return lines2
 
-def _split_equation(lines_out, line, n, isplit=0):
+
+def _split_equation(lines_out: list[str], line: str, n: int,
+                    isplit: int=0) -> list[str]:
     """
     Takes an overbounded DEQATN line and shortens it using recursion
 
     Parameters
     ----------
-    lines_out : List[str]
+    lines_out : list[str]
         len(lines) = 0 : first iteration
         len(lines) = 1 : second iteration
     line : str
@@ -467,7 +541,7 @@ def _split_equation(lines_out, line, n, isplit=0):
 
     Returns
     -------
-    lines_out : List[str]
+    lines_out : list[str]
         the long line broken into shorter lines
 
     """
@@ -504,11 +578,12 @@ def _split_equation(lines_out, line, n, isplit=0):
     lines_out.append(line_out.replace('^', '**').strip())
     isplit += 1
     if isplit > 360:
-        raise RuntimeError('Recursion issue splitting line; isplit=%i' %  isplit)
+        raise RuntimeError('Recursion issue splitting line; isplit=%i' % isplit)
     lines_out = _split_equation(lines_out, line[i:], n, isplit+1)
     return lines_out
 
-def fortran_to_python_short(line, unused_default_values):
+
+def fortran_to_python_short(line: str, unused_default_values: Any) -> Any:
     """the function used by the DRESP2"""
     func_str = 'def func(args):\n'
     func_str += '    return %s(args)\n' % line.strip()
@@ -516,7 +591,8 @@ def fortran_to_python_short(line, unused_default_values):
     exec(func_str, globals(), local_dict)
     return local_dict['func']
 
-def split_to_equations(lines):
+
+def split_to_equations(lines: list[str]) -> list[str]:
     """
     Splits a line like::
 
@@ -537,16 +613,42 @@ def split_to_equations(lines):
             equation_lines.append(line)
     return equation_lines
 
-def fortran_to_python(lines, default_values, comment=''):
+
+def _setup_deqatn(equation_id: int,
+                  eqs: list[str],
+                  dtable_ref: Optional[DTABLE],
+                  comment: str):
+    default_values = {}
+    if dtable_ref is not None:
+        default_values = dtable_ref.default_values
+
+    func_name, nargs, func_str = fortran_to_python(
+        equation_id, eqs, default_values, comment)
+    return func_name, nargs, func_str
+
+
+def fortran_to_python(deqatn_id: int,
+                      lines: list[str],
+                      default_values: dict[str, float | np.ndarray],
+                      comment: str='') -> tuple[str, int, str]:
     """
     Creates the python function
 
     Parameters
     ----------
-    lines : List[str]
+    lines : list[str]
         the equations to write broken up by statement
     default_values : dict[name] = value
         the default values from the DTABLE card
+
+    Returns
+    -------
+    func_name : str
+        the name of the function
+    nargs : int
+        the number of variables to the function
+    func_msg : str
+        the python function
 
     def f(x, y=10.):
         '''
@@ -558,7 +660,7 @@ def fortran_to_python(lines, default_values, comment=''):
                 x = float(x)
             if isinstance(y, (int, float, str)):
                 y = float(y)
-        except:
+        except Exception:
             print(locals())
             raise
         f = x + y
@@ -582,7 +684,7 @@ def fortran_to_python(lines, default_values, comment=''):
             f, eq = line.split('=')
         except ValueError:
             if '=' not in line:
-                raise SyntaxError('= not found in %r' % (line))
+                raise SyntaxError(f'= not found in {line!r}')
             msg = 'only 1 = sign may be found a line\n'
             msg += 'line = %r\n' % line
             if len(lines) > 1:
@@ -612,11 +714,16 @@ def fortran_to_python(lines, default_values, comment=''):
 
     func_msg += '    return %s' % f
     #print(func_msg)
+    if func_name in variables:
+        raise RuntimeError(f'The function name {func_name!r} for DEQATN,{deqatn_id:d} '
+                           f'must not also be an argument; arguments={variables}')
     nargs = len(variables)
     return func_name, nargs, func_msg
 
 
-def write_function_header(func_header, eq, default_values, comment=''):
+def write_function_header(func_header: str, eq: str,
+                          default_values: dict[str, float],
+                          comment: str='') -> tuple[str, str, list[str]]:
     """
     initializes the python function
 
@@ -630,13 +737,13 @@ def write_function_header(func_header, eq, default_values, comment=''):
                 x = float(x)
             if isinstance(y, (int, float, str)):
                 y = float(y)
-        except:
+        except Exception:
             print(locals())
             raise
 
     Parameters
     ----------
-    f : str
+    func_header : str
         the function header
         f(a, b, c)
     eq : str
@@ -652,7 +759,7 @@ def write_function_header(func_header, eq, default_values, comment=''):
         the name of the function ``f``
     msg : str
         see above
-    variables : List[str]
+    variables : list[str]
         the variables used by the equation header
         a, b, c
 
@@ -697,10 +804,12 @@ def write_function_header(func_header, eq, default_values, comment=''):
     msg += _write_variables(variables)
     for builtin in BUILTINS:
         ubuiltin = '_' + builtin
-        if builtin in func_line and ubuiltin not in func_line:
-            raise RuntimeError('cannot have an equation with %r\n%s' % (builtin, func_line))
+        if re.search(r'\b%s\b' % builtin, func_line):
+        #if builtin in func_line and ubuiltin not in func_line:
+            raise RuntimeError(f'cannot have an equation with {builtin!r}\n{func_line}')
+        #if re.search(r'\b%s\b' % builtin, variables):
         if builtin in variables and ubuiltin not in variables:
-            raise RuntimeError('cannot have an equation with %r\n%s' % (builtin, variables))
+            raise RuntimeError(f'cannot have an equation with {builtin:!r}\n{variables}')
             #import re
             #eq = 'YIELD_A_YIELD'
             #eq = '/YIELD'
@@ -721,7 +830,9 @@ def write_function_header(func_header, eq, default_values, comment=''):
     msg += '    %s = %s\n' % (func_name, eq)
     return func_name, msg, variables
 
-def _write_function_line(func_name, variables, default_values):
+
+def _write_function_line(func_name: str, variables: list[str],
+                         default_values: dict[str, float]) -> str:
     """writes the ``def f(x, y, z=1.):`` part of the function"""
     vals = []
     is_default = False
@@ -733,7 +844,7 @@ def _write_function_line(func_name, variables, default_values):
             vals.append('%s=%s' % (var, default_values[var]))
             is_default = True
         else:
-            vals.append('%s' % (var))
+            vals.append('%s' % var)
             if is_default:
                 msg = 'default variables must be set at the end of the function\n'
                 msg += 'variables = %s\n' % variables
@@ -743,14 +854,16 @@ def _write_function_line(func_name, variables, default_values):
     msg = 'def %s(%s):\n' % (func_name, vals2)
     return msg
 
-def _write_comment(comment):
+
+def _write_comment(comment: str) -> str:
     """writes the deqatn to the comment block"""
     lines = comment.split('\n')
     msgi = '\n    '.join(lines)
     msg = '    """\n    %s"""\n' % msgi
     return msg
 
-def _write_variables(variables):
+
+def _write_variables(variables: list[str]) -> str:
     """type checks the inputs"""
     msg = '    try:\n'
     for var in variables:
@@ -760,7 +873,7 @@ def _write_variables(variables):
         #msg += '        %s = float(%s)\n' % (var, var)
         msg += '        if isinstance(%s, (int, str)):\n' % var
         msg += '            %s = float(%s)\n' % (var, var)
-    msg += '    except:\n'
+    msg += '    except Exception:\n'
     msg += '        print(locals())\n'
     msg += '        raise\n'
     return msg

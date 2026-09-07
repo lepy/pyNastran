@@ -1,18 +1,17 @@
 #pylint: disable=C0301,C0111
-from typing import List
-
 import numpy as np
 from numpy import zeros, concatenate
 
 from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_element_node
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
+from pyNastran.op2.op2_interface.write_utils import to_column_bytes, get_complex_fdtype
 from pyNastran.f06.f06_formatting import write_imag_floats_13e
 
 
 class ComplexSolidArray(OES_Object):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)
-        self.result_flag = 0
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
         #self.ntimes = 0  # or frequency/mode
@@ -27,18 +26,76 @@ class ComplexSolidArray(OES_Object):
         else:
             raise NotImplementedError('SORT2')
 
+    def h5_table_dict(self) -> dict:
+        neid = len(self.element_cid)
+        neid_nnode = len(self.element_node)
+        nnode = neid_nnode // neid
+
+        from tables import Int64Col, Float64Col, StringCol
+        h5_table_dict = {
+            'EID': Int64Col(pos=0),
+            'CID': Int64Col(pos=1),
+            'CTYPE': StringCol(4, pos=2),
+            'GRID': Int64Col(shape=(nnode,), pos=3),
+
+            'XR': Float64Col(shape=(nnode,), pos=4),
+            'YR': Float64Col(shape=(nnode,), pos=5),
+            'ZR': Float64Col(shape=(nnode,), pos=6),
+            'TXYR': Float64Col(shape=(nnode,), pos=7),
+            'TYZR': Float64Col(shape=(nnode,), pos=8),
+            'TZXR': Float64Col(shape=(nnode,), pos=9),
+
+            'XI': Float64Col(shape=(nnode,), pos=10),
+            'YI': Float64Col(shape=(nnode,), pos=11),
+            'ZI': Float64Col(shape=(nnode,), pos=12),
+            'TXYI': Float64Col(shape=(nnode,), pos=13),
+            'TYZI': Float64Col(shape=(nnode,), pos=14),
+            'TZXI': Float64Col(shape=(nnode,), pos=15),
+
+            'DOMAIN_ID': Int64Col(pos=16),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr, ntime_neid0: int, ntime_neid1: int, itime: int):
+        neid = len(self.element_cid)
+        neid_nnode = len(self.element_node)
+        nnode = neid_nnode // neid
+        ntime, neid_nnode, nresult = self.data.shape
+        
+        nodes = self.element_node[:, 1].reshape(neid, nnode)
+        data = self.data.reshape(ntime, neid, nnode, nresult)
+
+        arr["EID"][ntime_neid0:ntime_neid1] = self.element_cid[:, 0]
+        arr["CID"][ntime_neid0:ntime_neid1] = self.element_cid[:, 1]
+        arr["CTYPE"][ntime_neid0:ntime_neid1] = 'GRID'
+        arr["GRID"][ntime_neid0:ntime_neid1] = nodes
+
+        arr["XR"][ntime_neid0:ntime_neid1] = data[itime, :, :, 0].real
+        arr["YR"][ntime_neid0:ntime_neid1] = data[itime, :, :, 1].real
+        arr["ZR"][ntime_neid0:ntime_neid1] = data[itime, :, :, 2].real
+        arr["TXYR"][ntime_neid0:ntime_neid1] = data[itime, :, :, 3].real
+        arr["TYZR"][ntime_neid0:ntime_neid1] = data[itime, :, :, 4].real
+        arr["TZXR"][ntime_neid0:ntime_neid1] = data[itime, :, :, 5].real
+
+        arr["XI"][ntime_neid0:ntime_neid1] = data[itime, :, :, 0].imag
+        arr["YI"][ntime_neid0:ntime_neid1] = data[itime, :, :, 1].imag
+        arr["ZI"][ntime_neid0:ntime_neid1] = data[itime, :, :, 2].imag
+        arr["TXYI"][ntime_neid0:ntime_neid1] = data[itime, :, :, 3].imag
+        arr["TYZI"][ntime_neid0:ntime_neid1] = data[itime, :, :, 4].imag
+        arr["TZXI"][ntime_neid0:ntime_neid1] = data[itime, :, :, 5].imag
+
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
 
     def combine(self, results):
         #print('ComplexSolid combine')
         #print('data.shape1 =', self.data.shape)
-        #self.data = vstack(data)
+        #self.data = np.vstack(data)
 
         data = [self.nelements] + [result.nelements for result in results]
         self.nelements = sum(data)
@@ -60,12 +117,12 @@ class ComplexSolidArray(OES_Object):
 
         self.data = concatenate(data, axis=1)
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def nnodes_per_element(self):
+    def nnodes_per_element(self) -> int:
         if self.element_type == 39: # CTETRA
             nnodes = 5
         elif self.element_type == 68: # CPENTA
@@ -74,9 +131,13 @@ class ComplexSolidArray(OES_Object):
             nnodes = 9
         elif self.element_type == 255: # CPYRAM
             nnodes = 6
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError(self.element_name)
         return nnodes
+
+    @property
+    def nnodes_per_element_no_centroid(self) -> int:
+        return self.nnodes_per_element - 1
 
     def build(self):
         """sizes the vectorized attributes of the ComplexSolidArray"""
@@ -91,21 +152,20 @@ class ComplexSolidArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
         #print('ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
-        self._times = zeros(self.ntimes, dtype=dtype)
-        #self.element_types2 = array(self.nelements, dtype='|S8')
-        #self.element_types3 = zeros((self.nelements, 2), dtype='int32')
+        idtype, cfdtype = get_complex_times_dtype(self.size)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        #self.element_types2 = np.array(self.nelements, dtype='|S8')
+        #self.element_types3 = np.zeros((self.nelements, 2), dtype='int32')
 
 
         #self.ntotal = self.nelements * nnodes
 
         # TODO: could be more efficient by using nelements for cid
-        self.element_node = zeros((self.ntotal, 2), dtype=idtype)
-        self.element_cid = zeros((self.nelements, 2), dtype=idtype)
+        self.element_node = np.zeros((self.ntotal, 2), dtype=idtype)
+        self.element_cid = np.zeros((self.nelements, 2), dtype=idtype)
 
         # the number is messed up because of the offset for the element's properties
 
@@ -116,12 +176,8 @@ class ComplexSolidArray(OES_Object):
                                                                            #self.ntotal)
             #raise RuntimeError(msg)
 
-        if self.result_flag == 0:
-            # [oxx, oyy, ozz, txy, tyz, txz]
-            self.data = zeros((self.ntimes, self.ntotal, 6), dtype=cfdtype)
-        else:
-            # oxx
-            self.data = zeros((self.ntimes, self.ntotal, 1), 'complex64')
+        # [oxx, oyy, ozz, txy, tyz, txz]
+        self.data = np.zeros((self.ntimes, self.ntotal, 6), dtype=cfdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -141,9 +197,10 @@ class ComplexSolidArray(OES_Object):
         #                  txz        0j       0j       0j       0j     (5072.678+9539.112j)       0j       0j
         #import pandas as pd
         headers = self.get_headers()
-        column_names, column_values = self._build_dataframe_transient_header()
-        data_frame = self._build_pandas_transient_element_node(column_values, column_names,
-                                                               headers, self.element_node, self.data)
+        column_names, column_values = build_dataframe_transient_header(self)
+        data_frame = build_pandas_transient_element_node(
+            self, column_values, column_names,
+            headers, self.element_node, self.data)
 
         #element_node = [self.element_node[:, 0], self.element_node[:, 1]]
         #data_frame = pd.Panel(self.data, items=column_values, major_axis=element_node, minor_axis=headers).to_frame()
@@ -167,16 +224,16 @@ class ComplexSolidArray(OES_Object):
                         eid, nid = eid_nid
                         t1 = self.data[itime, ieid, :]
                         t2 = table.data[itime, ieid, :]
-                        (tx1, ty1, tz1, rx1, ry1, rz1) = t1
-                        (tx2, ty2, tz2, rx2, ry2, rz2) = t2
+                        (ox1, oy1, oz1, txy1, tyz1, txz1) = t1
+                        (ox2, oy2, oz2, txy2, tyz2, txz2) = t2
                         d = t1 - t2
-                        if not np.allclose([tx1.real, tx1.imag, ty1.real, ty1.imag],
-                                           [tx2.real, tx2.imag, ty2.real, ty2.imag], atol=0.0001):
+                        if not np.allclose([ox1.real, oy1.imag, oz1.real, txy1.real, tyz1.real, txz1.real],
+                                           [ox2.real, oy2.imag, oz2.real, txy2.imag, tyz2.imag, txz2.imag], atol=0.0001)  and 0:
                         #if not np.array_equal(t1, t2):
-                            msg += '%-4s  (%s, %sj, %s, %sj)\n      (%s, %sj, %s, %sj)\n  dt12=(%s, %sj, %s, %sj)\n' % (
+                            msg += '%-4s  (%s, %sj)\n      (%s, %sj)\n  dt12=(%s, %sj, %s, %sj)\n' % (
                                 eid,
-                                tx1.real, tx1.imag, ty1.real, ty1.imag,
-                                tx2.real, tx2.imag, ty2.real, ty2.imag,
+                                ox1.real, oy1.imag, #oz1.real, txy1.real, tyz1.real, txz1.real, ovm1.real,
+                                ox2.real, oy2.imag, #oz2.real, txy2.imag, tyz2.imag, txz2.imag,
                                 d[0].real, d[0].imag, d[1].real, d[1].imag,)
                             i += 1
                         if i > 10:
@@ -210,19 +267,16 @@ class ComplexSolidArray(OES_Object):
         #self.itotal += 1
 
     def add_node_sort1(self, dt, eid, grid, inode, ex, ey, ez, etxy, etyz, etzx):
-        if self.result_flag == 0:
-            self.data[self.itime, self.itotal, :] = [ex, ey, ez, etxy, etyz, etzx]
-        else:
-            self.data[self.itime, self.itotal, 0] = ex
+        self.data[self.itime, self.itotal, :] = [ex, ey, ez, etxy, etyz, etzx]
         self.element_node[self.itotal, :] = [eid, grid]
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -235,19 +289,19 @@ class ComplexSolidArray(OES_Object):
             msg.append('  type=%s ntimes=%i nelements=%i nnodes=%i; table_name=%r\n' % (
                 self.__class__.__name__, ntimes, nelements, nnodes, self.table_name))
         else:
-            msg.append('  type=%s nelements=%i nnodes=%i\n' % (
+            msg.append('  type=%s nelements=%i nnodes=%i; table_name=%r\n' % (
                 self.__class__.__name__, nelements, nnodes, self.table_name))
         msg.append('  eType, cid\n')
         msg.append('  data: [ntimes, nnodes, 6] where 6=[%s]\n' % str(', '.join(self.get_headers())))
-        msg.append('  element_node.shape = %s\n' % str(self.element_node.shape).replace('L', ''))
-        msg.append('  element_cid.shape = %s\n' % str(self.element_cid.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  element_node.shape = {self.element_node.shape}\n')
+        msg.append(f'  element_cid.shape = {self.element_cid.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg.append('  %s\n' % self.element_name)
         msg += self.get_data_code()
         return msg
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg_temp, nnodes = get_f06_header(self, is_mag_phase, is_sort1)
@@ -301,17 +355,17 @@ class ComplexSolidArray(OES_Object):
             page_num += 1
         return page_num - 1
 
-    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
                   is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
         from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #eids = self.element
@@ -319,7 +373,11 @@ class ComplexSolidArray(OES_Object):
         # table 4 info
         #ntimes = self.data.shape[0]
         #nnodes = self.data.shape[1]
+        cids = self.element_cid[:, 1]
         nelements = self.element_cid.shape[0]
+        nnodes_centroid = self.nnodes_per_element
+        nnodes_no_centroid = self.nnodes_per_element_no_centroid
+
         #print(self.element_cid)
         #print(self.element_node)
 
@@ -329,24 +387,61 @@ class ComplexSolidArray(OES_Object):
         ntotali = self.num_wide
         ntotal = ntotali * nelements
 
-        device_code = self.device_code
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        #device_code = self.device_code
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         eids = self.element_node[:, 0]
-        eids_device = eids * 10 + self.device_code
+        # eids_device = eids * 10 + self.device_code
+        eids_device_nelements = eids[::nnodes_centroid] * 10 + self.device_code
+        assert len(eids_device_nelements) == nelements, f'neids_device={len(eids_device_nelements)}; nelements={nelements}'
 
-        if self.is_sort1:
-            struct1 = Struct(endian + b'2i 4s 2i 12f')
-            struct2 = Struct(endian + b'i 12f')
-        else:
+        if not self.is_sort1:
             raise NotImplementedError('SORT2')
+        # struct1 = Struct(endian + b'2i 4s 2i 12f')
+        # struct2 = Struct(endian + b'i 12f')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        op2_ascii.write(f'nelements={nelements:d}\n')
 
-        #cid = 0
-        unused_msg_temp, nnodes = get_f06_header(self, is_mag_phase, is_sort1=True)
+        # eids2 = self.element_node[:, 0]
+        nodes = self.element_node[:, 1]
+        nelements_nodes = len(nodes)
+
+        cfdtype = self.data.dtype
+        idtype = self.element_cid.dtype
+        fdtype = get_complex_fdtype(cfdtype)
+        cen_array = np.full(nelements, b'GRID', dtype='|S4')
+        nnodes_no_centroid_array = np.full(nelements, nnodes_no_centroid, dtype=idtype)
+
+        element_wise_data = to_column_bytes([
+            eids_device_nelements, # ints
+            cids, # ints
+            cen_array, # bytes
+            nnodes_no_centroid_array, # ints
+        ], fdtype, debug=False)
+
+        # speed up transient cases, but slightly slows down static cases
+        # [eid_device, cid, b'GRID', nnodes]
+        # [node, (oxx, oyy, ozz, txy, tyz, txz)] * nnodes_centroid  # 13
+        #    node is an scalar (int)
+        #    stresses (6) are complex (real+imag), so 6*2 -> 12
+        data_out = np.full((nelements, 4+13*nnodes_centroid), np.nan, dtype=fdtype)
+
+        # setting:
+        #  - CTETRA: [element_device, cid, 'GRID', 4]
+        #  - CPYRAM: [element_device, cid, 'GRID', 5]
+        #  - CPENTA: [element_device, cid, 'GRID', 6]
+        #  - CHEXA:  [element_device, cid, 'GRID', 8]
+        data_out[:, :4] = element_wise_data
+
+        # we could tack the nodes on, so we don't have to keep stacking it
+        # but we run into issues with datai
+        #print(nodes.dtype, fdtype)
+        nodes_view = nodes.view(fdtype).reshape(nelements_nodes, 1)
+        #data_out[:, 4] = nodes_view.reshape(nelements_nodes, 1)
+
+        # unused_msg_temp, nnodes = get_f06_header(self, is_mag_phase, is_sort1=True)
         for itime in range(self.ntimes):
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             itable -= 1
@@ -355,66 +450,34 @@ class ComplexSolidArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
-            oxx = self.data[itime, :, 0]
-            oyy = self.data[itime, :, 1]
-            ozz = self.data[itime, :, 2]
-            txy = self.data[itime, :, 3]
-            tyz = self.data[itime, :, 4]
-            txz = self.data[itime, :, 5]
-
-            eids2 = self.element_node[:, 0]
-            nodes = self.element_node[:, 1]
-            assert len(eids2) == len(oxx)
             #print(len(eids2), self.num_wide)
             #(eid_device, cid, ctype, nodef) = out
             #(grid,
              #exr, eyr, ezr, etxyr, etyzr, etzxr,
             #exi, eyi, ezi, etxyi, etyzi, etzxi) = out
 
-            nwide = 0
-            ielement = -1
-            for eid_device, deid, node, doxx, doyy, dozz, dtxy, dtyz, dtxz in zip(eids_device, eids2, nodes, oxx, oyy, ozz, txy, tyz, txz):
+            # [node, oxx, oyy, ozz, txy, tyz, txz]  # 7
+            datai = self.data[itime, : :]
 
-                if node == 0:  # CENTER
-                    ielement += 1
-                    cid = self.element_cid[ielement, 1]
-                    data = [eid_device, cid, b'GRID', nnodes, node,
-                            doxx.real, doyy.real, dozz.real, dtxy.real, dtyz.real, dtxz.real,
-                            doxx.imag, doyy.imag, dozz.imag, dtxy.imag, dtyz.imag, dtxz.imag]
-                    #op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, tuple(data)))
-                    op2.write(struct1.pack(*data))
+            datai2 = np.hstack([nodes_view, datai.real, datai.imag])  # 1+2*6 = 13
 
-                    op2_ascii.write(
-                        '0 %12i %11sGRID CS %2i GP\n'
-                        '0   %22s    %-13s  %-13s  %-13s    %-13s  %-13s  %s\n'
-                        '    %22s    %-13s  %-13s  %-13s    %-13s  %-13s  %s\n' % (
-                            deid, cid, nnodes,
-                            'CENTER', doxx.real, doyy.real, dozz.real, dtxy.real, dtyz.real, dtxz.real,
-                            '', doxx.imag, doyy.imag, dozz.imag, dtxy.imag, dtyz.imag, dtxz.imag,
-                    ))
-                else:
-                    data = [node,
-                            doxx.real, doyy.real, dozz.real, dtxy.real, dtyz.real, dtxz.real,
-                            doxx.imag, doyy.imag, dozz.imag, dtxy.imag, dtyz.imag, dtxz.imag]
-                    op2.write(struct2.pack(*data))
-                    op2_ascii.write(
-                        '0   %22s    %-13s  %-13s  %-13s    %-13s  %-13s  %s\n'
-                        '    %22s    %-13s  %-13s  %-13s    %-13s  %-13s  %s\n' % (
-                            node, doxx.real, doyy.real, dozz.real, dtxy.real, dtyz.real, dtxz.real,
-                            '', doxx.imag, doyy.imag, dozz.imag, dtxy.imag, dtyz.imag, dtxz.imag,
-                    ))
-                nwide += len(data)
-                #print(data)
-            assert nwide == ntotal, 'nwide=%s ntotal=%s' % (nwide, ntotal)
+            # [eid_device, cid, b'GRID', nnodes,  #4
+            #  node,
+            #  doxx.real, doyy.real, dozz.real, dtxy.real, dtyz.real, dtxz.real, #11
+            #  doxx.imag, doyy.imag, dozz.imag, dtxy.imag, dtyz.imag, dtxz.imag]
+            # switch datai to element format and put it in the output buffer
+            data_out[:, 4:] = datai2.reshape(nelements, 13*nnodes_centroid)
+            assert data_out.size == ntotal, (data_out.shape, data_out.size, ntotal)
+            op2_file.write(data_out)
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -425,7 +488,8 @@ class ComplexSolidStressArray(ComplexSolidArray, StressObject):
         ComplexSolidArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['oxx', 'oyy', 'ozz', 'txy', 'tyz', 'txz']
         return headers
 
@@ -483,6 +547,7 @@ class ComplexSolidStrainArray(ComplexSolidArray, StrainObject):
         ComplexSolidArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['exx', 'eyy', 'ezz', 'exy', 'eyz', 'exz']
         return headers

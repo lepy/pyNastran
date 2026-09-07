@@ -8,16 +8,16 @@ All solid elements are defined in this file.  This includes:
  * CPENTA15
  * CTETRA4
  * CTETRA10
- * CIHEX1
- * CIHEX2
+
+ * CHEXCZ
+ * CPENTCZ
 
 All solid elements are SolidElement and Element objects.
 
 """
 from __future__ import annotations
-from typing import Tuple, Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 import numpy as np
-from numpy import dot, cross
 from numpy.linalg import norm  # type: ignore
 
 from pyNastran.bdf.cards.elements.elements import Element
@@ -27,7 +27,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
 
 
-_chexa_mapper = {
+HEXA_FACE_MAPPER = {
     (7, 5) : (7, 6, 5, 4),
     (5, 7) : (7, 6, 5, 4),
     (6, 4) : (7, 6, 5, 4),
@@ -73,11 +73,10 @@ def volume4(n1: Any, n2: Any, n3: Any, n4: Any) -> float:
 
     .. math:: V = \frac{(a-d) \cdot \left( (b-d) \times (c-d) \right) }{6}
     """
-    volume = -dot(n1 - n4, cross(n2 - n4, n3 - n4)) / 6.
+    volume = -np.dot(n1 - n4, np.cross(n2 - n4, n3 - n4)) / 6.
     return volume
 
-
-def area_centroid(n1: Any, n2: Any, n3: Any, n4: Any) -> Tuple[float, float]:
+def area_centroid(n1: Any, n2: Any, n3: Any, n4: Any) -> tuple[float, float]:
     """
     Gets the area, :math:`A`, and centroid of a quad.::
 
@@ -86,7 +85,7 @@ def area_centroid(n1: Any, n2: Any, n3: Any, n4: Any) -> Tuple[float, float]:
       | /   |
       4-----3
     """
-    area = 0.5 * norm(cross(n3 - n1, n4 - n2))
+    area = 0.5 * np.linalg.norm(np.cross(n3 - n1, n4 - n2))
     centroid = (n1 + n2 + n3 + n4) / 4.
     return area, centroid
 
@@ -111,7 +110,6 @@ class SolidElement(Element):
         """exports the elements in a vectorized way"""
         nnodes = nnodes_map[cls.type]
         comments = []
-        pids = []
 
         element0 = model.elements[eids[0]]
         nnodes0 = len(element0.nodes)
@@ -130,13 +128,11 @@ class SolidElement(Element):
         neids = len(eids)
         nnodes = nnodes_high_map[nnodes0]
         nnodes_low = nnodes_low_map[nnodes0]
-
-        nodes = np.zeros((neids, nnodes), dtype='int32')
-        for i, eid in enumerate(eids):
-            element = model.elements[eid]
-            #comments.append(element.comment)
-            pids.append(element.pid)
-            nodes[i, :len(element.nodes)] = [nid if nid is not None else 0 for nid in element.nodes]
+        shape = (neids, nnodes)
+        try:
+            pids, nodes = _get_nodes_array(model, shape, eids, dtype='int32')
+        except OverflowError:
+            pids, nodes = _get_nodes_array(model, shape, eids, dtype='int64')
         #h5_file.create_dataset('_comment', data=comments)
         h5_file.create_dataset('eid', data=eids)
         h5_file.create_dataset('pid', data=pids)
@@ -168,7 +164,7 @@ class SolidElement(Element):
         return self.pid_ref.mid_ref.G()
 
     def Nu(self) -> float:
-       return self.pid_ref.mid_ref.Nu()
+        return self.pid_ref.mid_ref.Nu()
 
     def Volume(self) -> float:
         """
@@ -181,8 +177,15 @@ class SolidElement(Element):
         Calculates the mass of the solid element
         Mass = Rho * Volume
         """
-        #print('  rho=%e volume=%e' % (self.Rho(), self.Volume()))
-        return self.Rho() * self.Volume()
+        rho = self.Rho()
+        if rho == 0.0:
+            return 0.0
+        mass = rho * self.Volume()
+        #if mass == 0.0:
+            #print(self.pid_ref.mid_ref)
+            #print(self.pid_ref.mid_ref.get_stats())
+            #print('  rho=%e volume=%e' % (self.Rho(), self.Volume()))
+        return mass
 
     def Mid(self) -> int:
         """
@@ -197,7 +200,7 @@ class SolidElement(Element):
         try:
             return self.pid_ref.Rho()
         except AttributeError:
-            print("self.pid = %s" % (self.pid))
+            print(f'self.pid = {self.pid:d}')
             #print("self.pid_ref.mid_ref = %s" % (str(self.pid_ref.mid_ref)))
             raise
 
@@ -211,6 +214,25 @@ class SolidElement(Element):
     def center_of_mass(self):
         return self.Centroid()
 
+    def centroid_mass(self) -> tuple[np.ndarray, float]:
+        """Returns (centroid, mass) with a single get_node_positions() call."""
+        rho = self.Rho()
+        centroid = self.Centroid()
+        if rho == 0.0:
+            return centroid, 0.0
+        volume = self.Volume()
+        return centroid, rho * volume
+
+
+def _get_nodes_array(model: BDF, shape, eids, dtype='int32'):
+    pids = []
+    nodes = np.zeros(shape, dtype=dtype)
+    for i, eid in enumerate(eids):
+        element = model.elements[eid]
+        #comments.append(element.comment)
+        pids.append(element.pid)
+        nodes[i, :len(element.nodes)] = [nid if nid is not None else 0 for nid in element.nodes]
+    return pids, nodes
 
 class CHEXA8(SolidElement):
     """
@@ -225,15 +247,15 @@ class CHEXA8(SolidElement):
     type = 'CHEXA'
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         data = [self.eid, self.Pid()] + self.node_ids
-        msg = ('CHEXA   %8i%8i%8i%8i%8i%8i%8i%8i\n'
-               '        %8i%8i\n' % tuple(data))
+        msg = ('CHEXA   %8d%8d%8d%8d%8d%8d%8d%8d\n'
+               '        %8d%8d\n' % tuple(data))
         return self.comment + msg
 
     def write_card_16(self, is_double=False):
         data = [self.eid, self.Pid()] + self.node_ids
-        msg = ('CHEXA*  %16i%16i%16i%16i\n'
-               '*       %16i%16i%16i%16i\n'
-               '*       %16i%16i\n' % tuple(data))
+        msg = ('CHEXA*  %16d%16d%16d%16d\n'
+               '*       %16d%16d%16d%16d\n'
+               '*       %16d%16d\n' % tuple(data))
         return self.comment + msg
 
     def __init__(self, eid, pid, nids, comment=''):
@@ -246,7 +268,7 @@ class CHEXA8(SolidElement):
             element id
         pid : int
             property id (PSOLID, PLSOLID)
-        nids : List[int]
+        nids : list[int]
             node ids; n=8
 
         """
@@ -285,17 +307,17 @@ class CHEXA8(SolidElement):
             integer(card, 9, 'nid7'),
             integer(card, 10, 'nid8')
         ]
-        assert len(card) == 11, 'len(CHEXA8 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 11, f'len(CHEXA8 card) = {len(card):d}\ncard={card}'
         return CHEXA8(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CHEXA8 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -321,7 +343,7 @@ class CHEXA8(SolidElement):
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -341,7 +363,7 @@ class CHEXA8(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -402,19 +424,8 @@ class CHEXA8(SolidElement):
         ye /= np.linalg.norm(ye)
         return centroid, xe, ye, ze
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(self.node_ids):
-            assert isinstance(nid, int), 'nid%i is not an integer; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool):
+        _verify_solid_elem_linear(self, xref)
 
     def Centroid(self):
         """
@@ -428,36 +439,21 @@ class CHEXA8(SolidElement):
 
     def Volume(self):
         """Calculate the volume of the hex"""
-        # https://www.osti.gov/servlets/purl/632793/
-        #volume = (
-            #det3(x7 - x0, x1 - x0, x3 - x5) +
-            #det3(x7 - x0, x4 - x0, x5 - x6) +
-            #det3(x7 - x0, x2 - x0, x6 - x3)
-        #) / 6.
-        #  swap points
-        # x2 -> x3
-        # x3 -> x2
-        #
-        # x6 -> x7
-        # x7 -> x6
-        #def det3(a, b, c):
-            #return np.det(np.vstack(a, b, c))
-        #volume = (
-            #det3(x6 - x0, x1 - x0, x2 - x5) +
-            #det3(x6 - x0, x4 - x0, x5 - x7) +
-            #det3(x6 - x0, x3 - x0, x7 - x3)
-        #) / 6.
-        # add 1
-        #volume = (
-            #det3(x7 - x1, x2 - x1, x3 - x6) +
-            #det3(x7 - x1, x5 - x1, x6 - x8) +
-            #det3(x7 - x1, x4 - x1, x8 - x4)
-        #) / 6.
         (n1, n2, n3, n4, n5, n6, n7, n8) = self.get_node_positions()
         (area1, c1) = area_centroid(n1, n2, n3, n4)
         (area2, c2) = area_centroid(n5, n6, n7, n8)
-        volume = (area1 + area2) / 2. * norm(c1 - c2)
+        volume = (area1 + area2) / 2. * np.linalg.norm(c1 - c2)
         return abs(volume)
+
+    def centroid_mass(self) -> tuple[np.ndarray, float]:
+        """Returns (centroid, mass) with a single get_node_positions() call."""
+        rho = self.Rho()
+        (n1, n2, n3, n4, n5, n6, n7, n8) = self.get_node_positions()
+        (area1, c1) = area_centroid(n1, n2, n3, n4)
+        (area2, c2) = area_centroid(n5, n6, n7, n8)
+        centroid = (c1 + c2) / 2.
+        volume = abs((area1 + area2) / 2. * np.linalg.norm(c1 - c2))
+        return centroid, rho * volume
 
     @property
     def node_ids(self):
@@ -523,6 +519,7 @@ class CHEXA8(SolidElement):
                 n1_ref, n4_ref, n3_ref, n2_ref,
                 n5_ref, n8_ref, n7_ref, n6_ref,]
 
+
 class CHEXA20(SolidElement):
     """
     +-------+-----+-----+-----+-----+-----+-----+-----+-----+
@@ -538,20 +535,20 @@ class CHEXA20(SolidElement):
     type = 'CHEXA'
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[8:]]
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[8:]]
         data = [self.eid, self.Pid()] + nodes[:8] + nodes2
-        msg = ('CHEXA   %8i%8i%8i%8i%8i%8i%8i%8i\n'
-               '        %8i%8i%8s%8s%8s%8s%8s%8s\n'
+        msg = ('CHEXA   %8d%8d%8d%8d%8d%8d%8d%8d\n'
+               '        %8d%8d%8s%8s%8s%8s%8s%8s\n'
                '        %8s%8s%8s%8s%8s%8s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[8:]]
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[8:]]
         data = [self.eid, self.Pid()] + nodes[:8] + nodes2
-        msg = ('CHEXA*  %16i%16i%16i%16i\n'
-               '*       %16i%16i%16i%16i\n'
-               '*       %16i%16i%16s%16s\n'
+        msg = ('CHEXA*  %16d%16d%16d%16d\n'
+               '*       %16d%16d%16d%16d\n'
+               '*       %16d%16d%16s%16s\n'
                '*       %16s%16s%16s%16s\n'
                '*       %16s%16s%16s%16s%16s%16s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
@@ -566,7 +563,7 @@ class CHEXA20(SolidElement):
             element id
         pid : int
             property id (PSOLID, PLSOLID)
-        nids : List[int]
+        nids : list[int]
             node ids; n=20
         """
         SolidElement.__init__(self)
@@ -617,17 +614,17 @@ class CHEXA20(SolidElement):
             integer_or_blank(card, 21, 'nid19'),
             integer_or_blank(card, 22, 'nid20'),
         ]
-        assert len(card) <= 23, 'len(CHEXA20 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 23, f'len(CHEXA20 card) = {len(card):d}\ncard={card}'
         return CHEXA20(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CHEXA20 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -650,7 +647,7 @@ class CHEXA20(SolidElement):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -670,7 +667,7 @@ class CHEXA20(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -737,20 +734,8 @@ class CHEXA20(SolidElement):
         nids = self.node_ids[:8]
         return chexa_face_area_centroid_normal(nid, nid_opposite, nids, self.nodes_ref[:8])
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        edges = self.get_edge_ids()
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(self.node_ids):
-            assert nid is None or isinstance(nid, int), 'nid%i is not an integer/blank; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_quadratic(self, xref, 8)
 
     def Centroid(self):
         """
@@ -771,7 +756,7 @@ class CHEXA20(SolidElement):
          n6, n7, n8) = self.get_node_positions()[:8]
         (area1, c1) = area_centroid(n1, n2, n3, n4)
         (area2, c2) = area_centroid(n5, n6, n7, n8)
-        volume = (area1 + area2) / 2. * norm(c1 - c2)
+        volume = (area1 + area2) / 2. * np.linalg.norm(c1 - c2)
         return abs(volume)
 
     @property
@@ -780,52 +765,39 @@ class CHEXA20(SolidElement):
         return nids
 
 
-class CIHEX1(CHEXA8):
-    type = 'CIHEX1'
 
-    def write_card(self, size: int=8, is_double: bool=False) -> str:
-        data = [self.eid, self.Pid()] + self.node_ids
-        msg = ('CIHEX1  %8i%8i%8i%8i%8i%8i%8i%8i\n'
-               '        %8i%8i\n' % tuple(data))
-        return self.comment + msg
-
-    def write_card_16(self, is_double=False):
-        data = [self.eid, self.Pid()] + self.node_ids
-        msg = ('CIHEX1* %16i%16i%16i%16i\n'
-               '*       %16i%16i%16i%16i\n'
-               '*       %16i%16i\n' % tuple(data))
-        return self.comment + msg
-
-    def __init__(self, eid, pid, nids, comment=''):
-        CHEXA8.__init__(self, eid, pid, nids, comment=comment)
-
-
-class CIHEX2(CHEXA20):
-    type = 'CIHEX2'
-
+class CHEXCZ(CHEXA20):
+    """
+    +-------+-----+-----+-----+-----+-----+-----+-----+-----+
+    |   1   |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    +=======+=====+=====+=====+=====+=====+=====+=====+=====+
+    | CHEXA | EID | PID | G1  | G2  | G3  | G4  | G5  | G6  |
+    +-------+-----+-----+-----+-----+-----+-----+-----+-----+
+    |       | G7  | G8  | G9  | G10 | G11 | G12 | G13 | G14 |
+    +-------+-----+-----+-----+-----+-----+-----+-----+-----+
+    |       | G15 | G16 | G17 | G18 | G19 | G20 |     |     |
+    +-------+-----+-----+-----+-----+-----+-----+-----+-----+
+    """
+    type = 'CHEXCZ'
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[8:]]
-
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[8:]]
         data = [self.eid, self.Pid()] + nodes[:8] + nodes2
-        msg = ('CIHEX2  %8i%8i%8i%8i%8i%8i%8i%8i\n'
-               '        %8i%8i%8s%8s%8s%8s%8s%8s\n'
+        msg = ('CHEXCZ  %8d%8d%8d%8d%8d%8d%8d%8d\n'
+               '        %8d%8d%8s%8s%8s%8s%8s%8s\n'
                '        %8s%8s%8s%8s%8s%8s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[8:]]
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[8:]]
         data = [self.eid, self.Pid()] + nodes[:8] + nodes2
-        msg = ('CIHEX2* %16i%16i%16i%16i\n'
-               '*       %16i%16i%16i%16i\n'
-               '*       %16i%16i%16s%16s\n'
+        msg = ('CHEXCZ* %16d%16d%16d%16d\n'
+               '*       %16d%16d%16d%16d\n'
+               '*       %16d%16d%16s%16s\n'
                '*       %16s%16s%16s%16s\n'
                '*       %16s%16s%16s%16s%16s%16s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
-
-    def __init__(self, eid, pid, nids, comment=''):
-        CHEXA20.__init__(self, eid, pid, nids, comment=comment)
 
 
 class CPENTA6(SolidElement):
@@ -850,14 +822,14 @@ class CPENTA6(SolidElement):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes
-        msg = 'CPENTA  %8i%8i%8i%8i%8i%8i%8i%8i\n' % tuple(data)
+        msg = 'CPENTA  %8d%8d%8d%8d%8d%8d%8d%8d\n' % tuple(data)
         return self.comment + msg
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes
-        msg = ('CPENTA  %16i%16i%16i%16i\n'
-               '        %16i%16i%16i%16i\n' % tuple(data))
+        msg = ('CPENTA* %16d%16d%16d%16d\n'
+               '*       %16d%16d%16d%16d\n' % tuple(data))
         return self.comment + msg
 
     def __init__(self, eid, pid, nids, comment=''):
@@ -870,7 +842,7 @@ class CPENTA6(SolidElement):
             element id
         pid : int
             property id (PSOLID, PLSOLID)
-        nids : List[int]
+        nids : list[int]
             node ids; n=6
         """
         SolidElement.__init__(self)
@@ -906,17 +878,17 @@ class CPENTA6(SolidElement):
             integer(card, 7, 'nid5'),
             integer(card, 8, 'nid6'),
         ]
-        assert len(card) == 9, 'len(CPENTA6 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 9, f'len(CPENTA6 card) = {len(card):d}\ncard={card}'
         return CPENTA6(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CPENTA6 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -940,7 +912,7 @@ class CPENTA6(SolidElement):
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -993,7 +965,7 @@ class CPENTA6(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -1085,7 +1057,7 @@ class CPENTA6(SolidElement):
             p1 = self.nodes_ref[n1i].get_position()
             p2 = self.nodes_ref[n2i].get_position()
             p3 = self.nodes_ref[n3i].get_position()
-            area = 0.5 * norm(cross(p1 - p2, p1 - p3))
+            area = 0.5 * np.linalg.norm(np.cross(p1 - p2, p1 - p3))
         else:
             (n1, n2, n3, n4) = pack2
             n1i = nids.index(n1 - 1)
@@ -1097,23 +1069,11 @@ class CPENTA6(SolidElement):
             p2 = self.nodes_ref[n2i].get_position()
             p3 = self.nodes_ref[n3i].get_position()
             p4 = self.nodes_ref[n4i].get_position()
-            area = 0.5 * norm(cross(p1 - p3, p2 - p4))
+            area = 0.5 * np.linalg.norm(np.cross(p1 - p3, p2 - p4))
         return [face_node_ids, area]
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        nids = self.node_ids
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(nids):
-            assert isinstance(nid, int), 'nid%i is not an integer; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_linear(self, xref)
 
     def Centroid(self):
         (n1, n2, n3, n4, n5, n6) = self.get_node_positions()
@@ -1125,13 +1085,24 @@ class CPENTA6(SolidElement):
     def Volume(self):
         """Calculate the volume of the penta"""
         (n1, n2, n3, n4, n5, n6) = self.get_node_positions()
-        area1 = 0.5 * norm(cross(n3 - n1, n2 - n1))
-        area2 = 0.5 * norm(cross(n6 - n4, n5 - n4))
+        area1 = 0.5 * np.linalg.norm(np.cross(n3 - n1, n2 - n1))
+        area2 = 0.5 * np.linalg.norm(np.cross(n6 - n4, n5 - n4))
         c1 = (n1 + n2 + n3) / 3.
         c2 = (n4 + n5 + n6) / 3.
-        volume = (area1 + area2) / 2. * norm(c1 - c2)
+        volume = (area1 + area2) / 2. * np.linalg.norm(c1 - c2)
         return abs(volume)
-        #return volume4(n1, n2, n3, n4) + volume4(n2, n3, n4, n5) + volume4(n2, n4, n5, n6)
+
+    def centroid_mass(self) -> tuple[np.ndarray, float]:
+        """Returns (centroid, mass) with a single get_node_positions() call."""
+        rho = self.Rho()
+        (n1, n2, n3, n4, n5, n6) = self.get_node_positions()
+        c1 = (n1 + n2 + n3) / 3.
+        c2 = (n4 + n5 + n6) / 3.
+        centroid = (c1 + c2) / 2.
+        area1 = 0.5 * np.linalg.norm(np.cross(n3 - n1, n2 - n1))
+        area2 = 0.5 * np.linalg.norm(np.cross(n6 - n4, n5 - n4))
+        volume = abs((area1 + area2) / 2. * np.linalg.norm(c1 - c2))
+        return centroid, rho * volume
 
     def raw_fields(self):
         list_fields = ['CPENTA', self.eid, self.Pid()] + self.node_ids
@@ -1187,7 +1158,8 @@ def cpenta_face(nid, nid_opposite, nids):
         pack2 = [i - 1 for i in pack2]
     return pack2
 
-def cpenta_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
+def cpenta_face_area_centroid_normal(nid: int, nid_opposite: int,
+                                     nids: list[int], nodes_ref):
     """
     Parameters
     ----------
@@ -1195,6 +1167,7 @@ def cpenta_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
         G1 - a grid point on the corner of a face
     nid_opposite : int / None
         G3 - the grid point diagonally opposite of G1
+
     """
     face = cpenta_face(nid, nid_opposite, nids)
 
@@ -1207,6 +1180,7 @@ def cpenta_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
         b = p2 - p1
         centroid = (p1 + p2 + p3) / 3.
     else:
+        # uses a backwards face?
         n1i, n2i, n3i, n4i = face
         p1 = nodes_ref[n1i].get_position()
         p2 = nodes_ref[n2i].get_position()
@@ -1215,8 +1189,8 @@ def cpenta_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
         a = p1 - p3
         b = p2 - p4
         centroid = (p1 + p2 + p3 + p4) / 4.
-    normal = cross(a, b)
-    n = norm(normal)
+    normal = np.cross(a, b)
+    n = np.linalg.norm(normal)
     area = 0.5 * n
     return face, area, centroid, normal / n
 
@@ -1228,7 +1202,7 @@ def chexa_face(nid_opposite, nid, nids):
     for face in _chexa_faces:
         if g1i in face and g3i in face:
             found_face = face
-    found_face = _chexa_mapper[tuple([g1i, g3i])]
+    found_face = HEXA_FACE_MAPPER[tuple([g1i, g3i])]
     return found_face
 
 def chexa_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
@@ -1239,7 +1213,7 @@ def chexa_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
         G1 - a grid point on the corner of a face
     nid_opposite : int
         G3 - the grid point diagonally opposite of G1
-    nodes_ref : List[GRID]
+    nodes_ref : list[GRID]
         the GRID objects
 
     # top   (7-6-5-4)
@@ -1256,8 +1230,8 @@ def chexa_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
     n3 = nodes_ref[nid3].get_position()
     n4 = nodes_ref[nid4].get_position()
 
-    axb = cross(n3 - n1, n4 - n2)
-    areai = norm(axb)
+    axb = np.cross(n3 - n1, n4 - n2)
+    areai = np.linalg.norm(axb)
     centroid = (n1 + n2 + n3 + n4) / 4.
     area = 0.5 * areai
     normal = axb / areai
@@ -1287,7 +1261,7 @@ class CPENTA15(SolidElement):
             element id
         pid : int
             property id (PSOLID, PLSOLID)
-        nids : List[int]
+        nids : list[int]
             node ids; n=15
         """
         SolidElement.__init__(self)
@@ -1335,17 +1309,17 @@ class CPENTA15(SolidElement):
             integer_or_blank(card, 16, 'nid14'),
             integer_or_blank(card, 17, 'nid15'),
         ]
-        assert len(card) <= 18, 'len(CPENTA15 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 18, f'len(CPENTA15 card) = {len(card):d}\ncard={card}'
         return CPENTA15(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CPENTA15 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1369,7 +1343,7 @@ class CPENTA15(SolidElement):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1389,7 +1363,7 @@ class CPENTA15(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -1443,20 +1417,8 @@ class CPENTA15(SolidElement):
             tuple(sorted([node_ids[2], node_ids[5]])),
         ]
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        nids = self.node_ids
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(nids):
-            assert nid is None or isinstance(nid, int), 'nid%i is not an integer/blank; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_quadratic(self, xref, 6)
 
     def Centroid(self):
         """
@@ -1477,7 +1439,7 @@ class CPENTA15(SolidElement):
         area2 = Area(n6 - n4, n5 - n4)
         c1 = (n1 + n2 + n3) / 3.
         c2 = (n4 + n5 + n6) / 3.
-        volume = (area1 + area2) / 2. * norm(c1 - c2)
+        volume = (area1 + area2) / 2. * np.linalg.norm(c1 - c2)
         return abs(volume)
 
     @property
@@ -1487,18 +1449,52 @@ class CPENTA15(SolidElement):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[6:]]
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[6:]]
         data = [self.eid, self.Pid()] + nodes[:6] + nodes2
-        msg = ('CPENTA  %8i%8i%8i%8i%8i%8i%8i%8i\n'
+        msg = ('CPENTA  %8d%8d%8d%8d%8d%8d%8d%8d\n'
                '        %8s%8s%8s%8s%8s%8s%8s%8s\n'
                '        %8s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%16i' % node for node in nodes[6:]]
+        nodes2 = ['' if node is None else '%16d' % node for node in nodes[6:]]
         data = [self.eid, self.Pid()] + nodes[:6] + nodes2
-        msg = ('CPENTA* %16i%16i%16i%16i\n'
+        msg = ('CPENTA* %16d%16d%16d%16d\n'
+               '*       %16s%16s%16s%16s\n'
+               '*       %16s%16s%16s%16s\n'
+               '*       %16s%16s%16s%16s\n'
+               '*       %16s' % tuple(data))
+        return self.comment + msg.rstrip() + '\n'
+
+
+class CPENTCZ(CPENTA15):
+    """
+    +---------+-----+-----+-----+-----+-----+-----+-----+-----+
+    |    1    |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    +=========+=====+=====+=====+=====+=====+=====+=====+=====+
+    | CPENTCZ | EID | PID | G1  | G2  | G3  | G4  | G5  | G6  |
+    +---------+-----+-----+-----+-----+-----+-----+-----+-----+
+    |         | G7  | G8  | G9  | G10 | G11 | G12 | G13 | G14 |
+    +---------+-----+-----+-----+-----+-----+-----+-----+-----+
+    |         | G15 |     |     |     |     |     |     |     |
+    +---------+-----+-----+-----+-----+-----+-----+-----+-----+
+    """
+    type = 'CPENTCZ'
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        nodes = self.node_ids
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[6:]]
+        data = [self.eid, self.Pid()] + nodes[:6] + nodes2
+        msg = ('CPENTCZ %8d%8d%8d%8d%8d%8d%8d%8d\n'
+               '        %8s%8s%8s%8s%8s%8s%8s%8s\n'
+               '        %8s' % tuple(data))
+        return self.comment + msg.rstrip() + '\n'
+
+    def write_card_16(self, is_double=False):
+        nodes = self.node_ids
+        nodes2 = ['' if node is None else '%16d' % node for node in nodes[6:]]
+        data = [self.eid, self.Pid()] + nodes[:6] + nodes2
+        msg = ('CPENTCZ*%16d%16d%16d%16d\n'
                '*       %16s%16s%16s%16s\n'
                '*       %16s%16s%16s%16s\n'
                '*       %16s%16s%16s%16s\n'
@@ -1545,17 +1541,17 @@ class CPYRAM5(SolidElement):
         nids = [integer(card, 3, 'nid1'), integer(card, 4, 'nid2'),
                 integer(card, 5, 'nid3'), integer(card, 6, 'nid4'),
                 integer(card, 7, 'nid5')]
-        assert len(card) == 8, 'len(CPYRAM5 1card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 8, f'len(CPYRAM5 1card) = {len(card):d}\ncard={card}'
         return CPYRAM5(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CPYRAM5 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1578,7 +1574,7 @@ class CPYRAM5(SolidElement):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1598,7 +1594,7 @@ class CPYRAM5(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -1641,20 +1637,8 @@ class CPYRAM5(SolidElement):
             tuple(sorted([node_ids[3], node_ids[4]])),
         ]
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        nids = self.node_ids
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(nids):
-            assert nid is None or isinstance(nid, int), 'nid%i is not an integer/blank; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_linear(self, xref)
 
     def Centroid(self):
         """
@@ -1674,7 +1658,7 @@ class CPYRAM5(SolidElement):
         """
         (n1, n2, n3, n4, n5) = self.get_node_positions()
         area1, c1 = area_centroid(n1, n2, n3, n4)
-        volume = area1 / 3. * norm(c1 - n5)
+        volume = area1 / 3. * np.linalg.norm(c1 - n5)
         return abs(volume)
 
     @property
@@ -1685,14 +1669,14 @@ class CPYRAM5(SolidElement):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes
-        msg = ('CPYRAM  %8i%8i%8i%8i%8i%8i%8i' % tuple(data))
+        msg = ('CPYRAM  %8d%8d%8d%8d%8d%8d%8d' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes
-        msg = ('CPYRAM  %16i%16i%16i%16i\n'
-               '        %16i%16i%16i' % tuple(data))
+        msg = ('CPYRAM* %16d%16d%16d%16d\n'
+               '*       %16d%16d%16d' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
 
@@ -1750,17 +1734,17 @@ class CPYRAM13(SolidElement):
             integer_or_blank(card, 14, 'nid12'),
             integer_or_blank(card, 15, 'nid13')
         ]
-        assert len(card) <= 16, 'len(CPYRAM13 1card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 16, f'len(CPYRAM13 1card) = {len(card):d}\ncard={card}'
         return CPYRAM13(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CPYRAM13 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1783,7 +1767,7 @@ class CPYRAM13(SolidElement):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1793,7 +1777,7 @@ class CPYRAM13(SolidElement):
             the BDF object
         """
         msg = ', which is required by CPYRAM eid=%s' % self.eid
-        self.nodes_ref = model.Nodes(self.nodes, msg=msg)
+        self.nodes_ref = model.Nodes(self.nodes[:5], msg=msg) + model.EmptyNodes(self.nodes[5:], msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 
     @property
@@ -1803,7 +1787,7 @@ class CPYRAM13(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -1847,20 +1831,8 @@ class CPYRAM13(SolidElement):
             tuple(sorted([node_ids[3], node_ids[4]])),
         ]
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        nids = self.node_ids
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(nids):
-            assert nid is None or isinstance(nid, int), 'nid%i is not an integer/blank; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_quadratic(self, xref, 5)
 
     def Centroid(self):
         """
@@ -1873,7 +1845,7 @@ class CPYRAM13(SolidElement):
         centroid = (c1 + n5) / 2.
         return centroid
 
-    def Volume(self):
+    def Volume(self) -> float:
         """
         .. seealso:: CPYRAM5.Volume
 
@@ -1884,7 +1856,7 @@ class CPYRAM13(SolidElement):
          n6, n7, n8, n9, n10,
          n11, n12, n13) = self.get_node_positions()
         area1, c1 = area_centroid(n1, n2, n3, n4)
-        volume = area1 / 3. * norm(c1 - n5)
+        volume = area1 / 3. * np.linalg.norm(c1 - n5)
         return abs(volume)
 
     @property
@@ -1894,18 +1866,18 @@ class CPYRAM13(SolidElement):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[5:]]
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[5:]]
         data = [self.eid, self.Pid()] + nodes[:5] + nodes2
-        msg = ('CPYRAM  %8i%8i%8i%8i%8i%8i%8i%8s\n'
+        msg = ('CPYRAM  %8d%8d%8d%8d%8d%8d%8d%8s\n'
                '        %8s%8s%8s%8s%8s%8s%s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%16i' % node for node in nodes[5:]]
+        nodes2 = ['' if node is None else '%16d' % node for node in nodes[5:]]
         data = [self.eid, self.Pid()] + nodes[:5] + nodes2
-        msg = ('CPYRAM* %16i%16i%16i%16i\n'
-               '*       %16i%16i%16i%16s\n'
+        msg = ('CPYRAM* %16d%16d%16d%16d\n'
+               '*       %16d%16d%16d%16s\n'
                '*       %16s%16s%16s%16s\n'
                '*       %16s%16s%s\n' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
@@ -1927,7 +1899,7 @@ class CTETRA4(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -1954,7 +1926,7 @@ class CTETRA4(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -1977,14 +1949,14 @@ class CTETRA4(SolidElement):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes
-        msg = 'CTETRA  %8i%8i%8i%8i%8i%8i\n' % tuple(data)
+        msg = 'CTETRA  %8d%8d%8d%8d%8d%8d\n' % tuple(data)
         return self.comment + msg
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
         data = [self.eid, self.Pid()] + nodes
-        msg = ('CTETRA  %16i%16i%16i%16i\n'
-               '        %16i%16i\n' % tuple(data))
+        msg = ('CTETRA* %16d%16d%16d%16d\n'
+               '*       %16d%16d\n' % tuple(data))
         return self.comment + msg
 
     def __init__(self, eid, pid, nids, comment=''):
@@ -1997,7 +1969,7 @@ class CTETRA4(SolidElement):
             element id
         pid : int
             property id (PSOLID, PLSOLID)
-        nids : List[int]
+        nids : list[int]
             node ids; n=4
         comment : str; default=''
             a comment for the card
@@ -2030,17 +2002,17 @@ class CTETRA4(SolidElement):
                 integer(card, 4, 'nid2'),
                 integer(card, 5, 'nid3'),
                 integer(card, 6, 'nid4'), ]
-        assert len(card) == 7, 'len(CTETRA4 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 7, f'len(CTETRA4 card) = {len(card):d}\ncard={card}'
         return CTETRA4(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CTETRA4 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -2064,7 +2036,7 @@ class CTETRA4(SolidElement):
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -2078,47 +2050,20 @@ class CTETRA4(SolidElement):
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 
     def material_coordinate_system(self, xyz=None):
-        """http://www.ipes.dk/Files/Ipes/Filer/nastran_2016_doc_release.pdf"""
-        #if normal is None:
-            #normal = self.Normal() # k = kmat
+        """
+        Returns
+        -------
+        centroid: (3,) float ndarray
+           the centoid
+        xe, ye, ze: (3,) float ndarray
+            the element coordinate system
 
-        if xyz is None:
-            x1 = self.nodes_ref[0].get_position()
-            x2 = self.nodes_ref[1].get_position()
-            x3 = self.nodes_ref[2].get_position()
-            x4 = self.nodes_ref[3].get_position()
-        else:
-            x1 = xyz[:, 0]
-            x2 = xyz[:, 1]
-            x3 = xyz[:, 2]
-            x4 = xyz[:, 3]
-
-        #CORDM=-2
-        centroid = (x1 + x2 + x3 + x4) / 4.
-        xe = (x2 + x3 + x4) / 3. - x1
-        xe /= np.linalg.norm(xe)
-        v = ((x1 + x3 + x4) - (x1 + x2 + x4)) / 3.
-        ze = np.cross(xe, v)
-        ze /= np.linalg.norm(ze)
-
-        ye = np.cross(ze, xe)
-        ye /= np.linalg.norm(ye)
+        """
+        centroid, xe, ye, ze = _ctetra_element_coordinate_system(self, xyz=None)
         return centroid, xe, ye, ze
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        nids = self.node_ids
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(nids):
-            assert isinstance(nid, int), 'nid%i is not an integer; nid=%s' %(i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_linear(self, xref)
 
     def get_edge_ids(self):
         """
@@ -2145,6 +2090,14 @@ class CTETRA4(SolidElement):
     def Centroid(self):
         (n1, n2, n3, n4) = self.get_node_positions()
         return (n1 + n2 + n3 + n4) / 4.
+
+    def centroid_mass(self) -> tuple[np.ndarray, float]:
+        """Returns (centroid, mass) with a single get_node_positions() call."""
+        rho = self.Rho()
+        (n1, n2, n3, n4) = self.get_node_positions()
+        centroid = (n1 + n2 + n3 + n4) / 4.
+        volume = volume4(n1, n2, n3, n4)
+        return centroid, rho * volume
 
     def get_face_nodes(self, nid_opposite, nid=None):
         assert nid is None, nid
@@ -2206,8 +2159,8 @@ def ctetra_face_area_centroid_normal(nid, nid_opposite, nids, nodes_ref):
     n2 = nodes_ref[nid2].get_position()
     n3 = nodes_ref[nid3].get_position()
 
-    axb = cross(n2 - n1, n3 - n1)
-    normi = norm(axb)
+    axb = np.cross(n2 - n1, n3 - n1)
+    normi = np.linalg.norm(axb)
     centroid = (n1 + n2 + n3) / 3.
     area = 0.5 * normi
     assert area > 0, area
@@ -2232,20 +2185,20 @@ class CTETRA10(SolidElement):
     type = 'CTETRA'
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%8i' % node for node in nodes[4:]]
+        nodes2 = ['' if node is None else '%8d' % node for node in nodes[4:]]
 
         data = [self.eid, self.Pid()] + nodes[:4] + nodes2
-        msg = ('CTETRA  %8i%8i%8i%8i%8i%8i%8s%8s\n'
+        msg = ('CTETRA  %8d%8d%8d%8d%8d%8d%8s%8s\n'
                '        %8s%8s%8s%8s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def write_card_16(self, is_double=False):
         nodes = self.node_ids
-        nodes2 = ['' if node is None else '%16i' % node for node in nodes[4:]]
+        nodes2 = ['' if node is None else '%16d' % node for node in nodes[4:]]
         data = [self.eid, self.Pid()] + nodes[:4] + nodes2
-        msg = ('CTETRA  %16i%16i%16i%16i\n'
-               '        %16i%16i%16s%16s\n'
-               '        %16s%16s%16s%16s' % tuple(data))
+        msg = ('CTETRA* %16d%16d%16d%16d\n'
+               '*       %16d%16d%16s%16s\n'
+               '*       %16s%16s%16s%16s' % tuple(data))
         return self.comment + msg.rstrip() + '\n'
 
     def get_face_area_centroid_normal(self, nid_opposite, nid=None):
@@ -2262,7 +2215,7 @@ class CTETRA10(SolidElement):
             element id
         pid : int
             property id (PSOLID, PLSOLID)
-        nids : List[int]
+        nids : list[int]
             node ids; n=10
         """
         SolidElement.__init__(self)
@@ -2302,17 +2255,17 @@ class CTETRA10(SolidElement):
                 integer_or_blank(card, 10, 'nid8'),
                 integer_or_blank(card, 11, 'nid9'),
                 integer_or_blank(card, 12, 'nid10'), ]
-        assert len(card) <= 13, 'len(CTETRA10 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 13, f'len(CTETRA10 card) = {len(card):d}\ncard={card}'
         return CTETRA10(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CTETRA10 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -2336,7 +2289,7 @@ class CTETRA10(SolidElement):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -2345,9 +2298,22 @@ class CTETRA10(SolidElement):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CTETRA eid=%s' % self.eid
-        self.nodes_ref = model.Nodes(self.nodes, msg=msg)
+        msg = f', which is required by CTETRA eid={self.eid}'
+        self.nodes_ref = model.Nodes(self.nodes[:4], msg=msg) + model.EmptyNodes(self.nodes[4:], msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
+
+    def material_coordinate_system(self, xyz=None):
+        """
+        Returns
+        -------
+        centroid: (3,) float ndarray
+           the centoid
+        xe, ye, ze: (3,) float ndarray
+            the element coordinate system
+
+        """
+        centroid, xe, ye, ze = _ctetra_element_coordinate_system(self, xyz=None)
+        return centroid, xe, ye, ze
 
     @property
     def faces(self):
@@ -2356,7 +2322,7 @@ class CTETRA10(SolidElement):
 
         Returns
         -------
-        faces : Dict[int] = [face1, face2, ...]
+        faces : dict[int] = [face1, face2, ...]
             key = face number
             value = a list of nodes (integer pointers) as the values.
 
@@ -2396,20 +2362,8 @@ class CTETRA10(SolidElement):
             tuple(sorted([node_ids[2], node_ids[3]])),
         ]
 
-    def _verify(self, xref):
-        eid = self.eid
-        pid = self.Pid()
-        nids = self.node_ids
-        assert isinstance(eid, int)
-        assert isinstance(pid, int)
-        for i, nid in enumerate(nids):
-            assert nid is None or isinstance(nid, int), 'nid%i is not an integer/blank; nid=%s' % (i, nid)
-        if xref:
-            centroid = self.Centroid()
-            volume = self.Volume()
-            assert isinstance(volume, float)
-            for i in range(3):
-                assert isinstance(centroid[i], float)
+    def _verify(self, xref: bool) -> None:
+        _verify_solid_elem_quadratic(self, xref, 4)
 
     #def N_10(self, g1, g2, g3, g4):
         #N1 = g1 * (2 * g1 - 1)
@@ -2452,3 +2406,82 @@ class CTETRA10(SolidElement):
     def node_ids(self):
         nids = self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True)
         return nids
+
+def _ctetra_element_coordinate_system(element: CTETRA4 | CTETRA10, xyz=None):
+    """
+    Returns
+    -------
+    centroid: (3,) float ndarray
+       the centoid
+    xe, ye, ze: (3,) float ndarray
+        the element coordinate system
+
+    http://www.ipes.dk/Files/Ipes/Filer/nastran_2016_doc_release.pdf"""
+    # this is the
+    #if normal is None:
+        #normal = element.Normal() # k = kmat
+
+    if xyz is None:
+        x1 = element.nodes_ref[0].get_position()
+        x2 = element.nodes_ref[1].get_position()
+        x3 = element.nodes_ref[2].get_position()
+        x4 = element.nodes_ref[3].get_position()
+    else:
+        x1 = xyz[:, 0]
+        x2 = xyz[:, 1]
+        x3 = xyz[:, 2]
+        x4 = xyz[:, 3]
+
+    #CORDM=-2
+    centroid = (x1 + x2 + x3 + x4) / 4.
+    xe = (x2 + x3 + x4) / 3. - x1
+    xe /= np.linalg.norm(xe)
+    v = ((x1 + x3 + x4) - (x1 + x2 + x4)) / 3.
+    ze = np.cross(xe, v)
+    ze /= np.linalg.norm(ze)
+
+    ye = np.cross(ze, xe)
+    ye /= np.linalg.norm(ye)
+    return centroid, xe, ye, ze
+
+def _verify_solid_elem_linear(elem: CTETRA4 | CPYRAM5 | CPENTA6 | CHEXA8,
+                              xref: bool):
+    eid = elem.eid
+    pid = elem.Pid()
+    assert isinstance(eid, int)
+    assert isinstance(pid, int)
+    for i, nid in enumerate(elem.node_ids):
+        assert isinstance(nid, int), 'nid%i is not an integer; nid=%s' % (i, nid)
+    if xref:
+        centroid = elem.Centroid()
+        volume = elem.Volume()
+        assert isinstance(volume, float), f'Volume={volume!r} must be a float; type={str(volume.__class__.__name__)}'
+        if volume < 0:
+            raise RuntimeError(f'Volume={volume} must be > 0\n{str(elem)}')
+        for i in range(3):
+            assert isinstance(centroid[i], float)
+
+def _verify_solid_elem_quadratic(elem: CTETRA10 | CPYRAM13 | CPENTA15 | CHEXA20,
+                                 xref: bool, nnodes_min: int) -> None:
+    eid = elem.eid
+    pid = elem.Pid()
+    unused_edges = elem.get_edge_ids()
+    assert isinstance(eid, int)
+    assert isinstance(pid, int)
+    nids = elem.node_ids
+    for i in range(nnodes_min):
+        nid = nids[i]
+        assert isinstance(nid, int), 'nid%i is not an integer; nid=%s' % (i, nid)
+
+    nnodes = len(nids)
+    for i in range(nnodes_min, nnodes):
+        nid = nids[i]
+        assert nid is None or isinstance(nid, int), 'nid%i is not an integer/blank; nid=%s' % (i, nid)
+    if xref:
+        centroid = elem.Centroid()
+        volume = elem.Volume()
+        assert isinstance(volume, float), f'Volume={volume!r} must be a float; type={str(volume.__class__.__name__)}'
+        if volume < 0.0:
+            raise RuntimeError(f'Volume={volume} must be > 0\n{str(elem)}')
+        for i in range(3):
+            assert isinstance(centroid[i], float)

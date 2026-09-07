@@ -1,11 +1,12 @@
 from collections import Counter
 import unittest
 
+from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 from pyNastran.bdf.field_writer_8 import print_int_card_blocks
 from pyNastran.bdf.cards.bdf_sets import (
-    SET1, SET3, ASET, ASET1, OMIT1, BSET, BSET1, CSET, CSET1, QSET, QSET1, USET, USET1,
+    SET1, SET2, SET3, ASET, ASET1, OMIT1, BSET, BSET1, CSET, CSET1, QSET, QSET1, USET, USET1,
     SEBSET, SEBSET1, SECSET, SECSET1, SEQSET, SEQSET1, #SEUSET, SEUSET1,
 )
 from pyNastran.bdf.cards.test.utils import save_load_deck
@@ -14,9 +15,10 @@ from pyNastran.bdf.cards.test.utils import save_load_deck
 class TestSets(unittest.TestCase):
 
     def test_set1_01(self):
-        bdf = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         lines = ['SET1,    1100,    100,     101']
-        card = bdf._process_card(lines)
+        card = model._process_card(lines)
         card = BDFCard(card)
 
         size = 8
@@ -63,10 +65,117 @@ class TestSets(unittest.TestCase):
         set1a = SET1(sid, ids, is_skin=False, comment='set1')
         set1b = SET1.add_card(BDFCard(['SET1', sid] + ids))
         set1a.write_card()
+        set1b.write_card()
+    
+    def test_set1_thru(self):
+        lines = [
+            'SET1         421  202416  THRU    202418',
+            '+         500001  THRU    500003',
+            '+       10000006  THRU  10000016',
+            '+       10000040  THRU  10000042',
+            '+       10000045  THRU  10000049',
+            '+       10000053  THRU  10000055',
+            '+       10000064  THRU  10000066',
+            '+       10000088  THRU  10000095',
+            '+       10000097  THRU  10000108',
+            '+       10000261  THRU  10000263',
+            '+       10000265  THRU  10000267',
+            '+       10000287  THRU  10000291',
+            '+       10000304  THRU  10000307',
+            '+       10000316  THRU  10000320',
+            '+       10000943  THRU  10000949',
+            '+       10000951  THRU  10001028',
+            '+       10001030  THRU  10001036',
+            '+       10001465  THRU  10001467',
+            '+       10002479  THRU  10002482',
+            '+       10002501  THRU  10002507',
+            '+       10002967  THRU  10002972',
+            '+       10003282  THRU  10003289',
+            '+       10003391  THRU  10003393',
+            '+       10003399  THRU  10003401',
+            '+       10003403  THRU  10003415',
+            '+       10003419  THRU  10003457',
+            '+       10003461  THRU  10003488',
+            '+       10003715  THRU  10003723',
+            '+       10003744  THRU  10003752',
+            '+       10003758  THRU  10003763',
+            '+       10003765  THRU  10003772',
+            '+       10004346  THRU  10004354',
+            '+       10004512  THRU  10004521',
+            '+       10004524  THRU  10004531',
+            '+       10004836  THRU  10004851',
+            '+       29000000  THRU  29000003',
+            '+       29000022  THRU  29000025',
+            '+       83018422  THRU  83018449',
+            '+       83018458  THRU  83018490',
+            '+       83018504  THRU  83018506',
+            '+       83018512  THRU  83018528',
+            '+       83018532  THRU  83018536',
+            '+       83018892  THRU  83018897',
+            '+       83018966  THRU  83018969',
+            '+       83019345  THRU  83019348',
+            '+       83019471  THRU  83019473',
+            '+       83019475  THRU  83019477',
+            '+          12003  202401  202403  202404  202517  203102  203106  203109',
+            '+         203112  400001  4000021000000410000019100000231000002410000027',
+            '+       1000003410000038100000511000005810000060100000611000006810000072',
+            '+       1000008310000084100000861000011110000115100002701000027210000273',
+            '+       1000031310000314100006911000069510001423100014241000142810001431',
+            '+       1000143310001434100014691000147110001472100016851000296310003234',
+            '+       1000338710003388100033951000339610004304100043081000431610004319',
+            '+       1800000118000007799999987999999983018538830189528301895383018956',
+            '+       8301895783019226830194598301946383019469830802968308055483080574',
+            '+       79999990',]
+        model = BDF(debug=False)
+        card = model._process_card(lines)
+        bdf_card = BDFCard(card)
+        set_card = SET1.add_card(bdf_card)
+        #print(str(set_card))
+        #print(len(lines))
+        nlines2 = len(str(set_card).split('\n'))
+        #print(len(lines), nlines2)
+
+    def test_set2_01(self):
+        """checks the SET2 card"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        lines = ['SET2,     110,      10,   -0.1,    1.1,   -0.1,     1.1']
+        card = model._process_card(lines)
+        card = BDFCard(card)
+
+        size = 8
+        card = SET2.add_card(card)
+        card.write_card(size, 'dummy')
+        card.raw_fields()
+
+        card2 = SET2(110, 10, -0.1, 1.1, -0.1, 1.1, comment='')
+        card2.write_card(size, 'dummy')
+        card2.raw_fields()
+
+        card3 = model.add_set2(110, 10, -0.1, 1.1, -0.1, 1.1)
+        card3.write_card(size, 'dummy')
+        card3.raw_fields()
+        save_load_deck(model, run_test_bdf=False, run_remove_unused=False)
+
+    def test_set2_02(self):
+        """checks the SET2 card"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+
+        set2 = model.add_set2(110, 10, -0.1, 1.1, -0.1, 1.1)
+        caero = model.add_caero4(10, 10, [.0, .0, .0], 1., [.0, 1., .0], 1.)
+        spline2 = model.add_spline2(10, 10, 10, 11, 110)
+        model.pop_parse_errors()
+
+        spline2.cross_reference(model)
+
+        self.assertEqual(spline2.setg_ref, set2)
+        self.assertEqual(set2.macro_ref, caero)
 
     def test_set3_01(self):
         """checks the SET3 card"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         sid = 10
         ids = [1, 2, 3, 4, 5]
         desc = 'ELEM'
@@ -77,13 +186,15 @@ class TestSets(unittest.TestCase):
         set3a.write_card()
         set3a.validate()
         set3b.validate()
+        save_load_deck(model, run_test_bdf=False, run_remove_unused=False)
         save_load_deck(model)
 
     def test_set3_02(self):
         """checks the SET3 card"""
-        model = BDF()
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
 
-        # List of grid IDs
+        # list of grid IDs
         grid_list = [1, 2, 3, 4, 5, 6, 7, 13, 15,
                      20, 21, 22, 23, 30, 31, 32, 33]
 
@@ -105,14 +216,16 @@ class TestSets(unittest.TestCase):
 
     def test_aset(self):
         """checks the ASET/ASET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         aset1a = ASET1([1, 'THRU', 10], 4, comment='aset')
         aset1b = ASET1.add_card(BDFCard(['ASET1', 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                 comment='aset1')
         aset1a.write_card()
         aset1b.write_card()
-        model._add_aset_object(aset1a)
-        model._add_aset_object(aset1b)
+        add_methods.add_aset_object(aset1a)
+        add_methods.add_aset_object(aset1b)
         #| ASET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
 
         aseta = ASET([1, 2, 3, 4, 5], [5, 4, 3, 2, 1])
@@ -131,13 +244,15 @@ class TestSets(unittest.TestCase):
 
     def test_omit(self):
         """checks the OMIT/OMIT1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         omit1a = OMIT1([1, 'THRU', 10], 4, comment='omit1')
         self.assertEqual(omit1a.components, 4)
         omit1b = OMIT1.add_card(BDFCard(['OMIT1', 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                 comment='omit1')
-        model._add_omit_object(omit1a)
-        model._add_omit_object(omit1b)
+        add_methods.add_omit_object(omit1a)
+        add_methods.add_omit_object(omit1b)
 
         nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for nid in nids:
@@ -161,22 +276,24 @@ class TestSets(unittest.TestCase):
 
     def test_bset(self):
         """checks the BSET/BSET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         bset1a = BSET1([1, 'THRU', 10], 4, comment='bset1')
         bset1b = BSET1.add_card(BDFCard(['BSET1', 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                 comment='bset1')
         bset1a.write_card()
         bset1b.write_card()
-        model._add_bset_object(bset1a)
-        model._add_bset_object(bset1b)
+        add_methods.add_bset_object(bset1a)
+        add_methods.add_bset_object(bset1b)
         #| BSET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
 
         bseta = BSET([1, 2, 3, 4, 5], [5, 4, 3, 2, 1], comment='bset')
         bsetb = BSET.add_card(BDFCard(['BSET',
                                        1, 2, 3, 4, 5,
                                        5, 4, 3, 2, 1]), comment='bset')
-        model._add_bset_object(bseta)
-        model._add_bset_object(bsetb)
+        add_methods.add_bset_object(bseta)
+        add_methods.add_bset_object(bsetb)
 
         nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for nid in nids:
@@ -189,22 +306,24 @@ class TestSets(unittest.TestCase):
 
     def test_cset(self):
         """checks the CSET/CSET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         cset1a = CSET1([1, 'THRU', 10], 4, comment='cset')
         cset1b = CSET1.add_card(BDFCard(['CSET1', 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                 comment='cset1')
         cset1a.write_card()
         cset1b.write_card()
-        model._add_cset_object(cset1a)
-        model._add_cset_object(cset1b)
+        add_methods.add_cset_object(cset1a)
+        add_methods.add_cset_object(cset1b)
         #| ASET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
 
         cseta = CSET([1, 2, 3, 4, 5], [5, 4, 3, 2, 1], comment='cset')
         csetb = CSET.add_card(BDFCard(['CSET',
                                        1, 2, 3, 4, 5,
                                        5, 4, 3, 2, 1]), comment='cset')
-        model._add_cset_object(cseta)
-        model._add_cset_object(csetb)
+        add_methods.add_cset_object(cseta)
+        add_methods.add_cset_object(csetb)
         model.add_cset([1, 2, 3], '42', comment='cset')
         model.add_cset1([1, 2, 3], [1, 2, 3], comment='cset1')
 
@@ -217,14 +336,16 @@ class TestSets(unittest.TestCase):
         csetb.write_card()
         save_load_deck(model)
 
-    def test_qset(self):
+    def test_qset_01(self):
         """checks the QSET/QSET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         qset1a = QSET1([1, 'THRU', 10], 4, comment='qset')
         qset1b = QSET1.add_card(BDFCard(['QSET1', 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                 comment='qset1')
-        model._add_qset_object(qset1a)
-        model._add_qset_object(qset1b)
+        add_methods.add_qset_object(qset1a)
+        add_methods.add_qset_object(qset1b)
         qset1a.write_card()
         qset1b.write_card()
         #| ASET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
@@ -233,8 +354,8 @@ class TestSets(unittest.TestCase):
         qsetb = QSET.add_card(BDFCard(['QSET',
                                        1, 2, 3, 4, 5,
                                        5, 4, 3, 2, 1]), comment='qset')
-        model._add_qset_object(qseta)
-        model._add_qset_object(qsetb)
+        add_methods.add_qset_object(qseta)
+        add_methods.add_qset_object(qsetb)
 
         nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for nid in nids:
@@ -245,15 +366,45 @@ class TestSets(unittest.TestCase):
         qsetb.write_card()
         save_load_deck(model)
 
-    def test_uset(self):
+    def test_qset_02(self):
+        """checks the QSET/QSET1 cards"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+
+        ids = [1, 'THRU', 10]
+        qset1a = model.add_qset1(ids, 4, comment='qset')
+
+        comps = [1, 2, 3, 4, 5]
+        ids = [6, 7, 8, 10, 9]
+        qset1b = model.add_qset1(ids, comps, comment='qset1')
+        qset1a.write_card()
+        qset1b.write_card()
+        #| ASET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
+
+        qseta = model.add_qset([1, 2, 3, 4, 5], [5, 4, 3, 2, 1], comment='qset')
+        qsetb = model.add_qset([1, 2, 3, 4, 5],
+                               [5, 4, 3, 2, 1], comment='qset')
+
+        nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for nid in nids:
+            model.add_grid(nid, [float(nid), 0., 0.])
+        qseta.validate()
+        qsetb.validate()
+        qseta.write_card()
+        qsetb.write_card()
+        save_load_deck(model)
+
+    def test_uset_01(self):
         """checks the USET/USET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         uset1a = USET1('MYSET1', [1, 'THRU', 10], 4, comment='uset')
         fields = ['USET1', 'MYSET2',
                   5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
         model.add_card(fields, 'USET1', comment='uset1')
-        model._add_uset_object(uset1a)
-        #model._add_uset_object(uset1b)
+        add_methods.add_uset_object(uset1a)
+        #add_methods.add_uset_object(uset1b)
         uset1a.write_card()
         #uset1b.write_card()
 
@@ -262,7 +413,29 @@ class TestSets(unittest.TestCase):
                   1, 2, 3, 4, 5,
                   5, 4, 3, 2, 1]
         model.add_card(fields, 'USET', comment='uset')
-        model._add_uset_object(useta)
+        add_methods.add_uset_object(useta)
+
+        nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for nid in nids:
+            model.add_grid(nid, [float(nid), 0., 0.])
+        useta.validate()
+        model.validate()
+        useta.write_card()
+        save_load_deck(model)
+
+    def test_uset_02(self):
+        """checks the USET/USET1 cards"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        uset1a = model.add_uset1(
+            'MYSET1', [1, 'THRU', 10], 4, comment='uset')
+        ids = [1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
+        model.add_uset1('MYSET2', ids, components=6, comment='uset1')
+
+        useta = model.add_uset('MYSET3', [1, 2, 3, 4, 5], [5, 4, 3, 2, 1], comment='uset')
+        ids = [1, 2, 3, 4, 5]
+        components = [5, 4, 3, 2, 1]
+        model.add_uset('MYSET4', ids, components, comment='uset')
 
         nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for nid in nids:
@@ -274,15 +447,17 @@ class TestSets(unittest.TestCase):
 
     def test_sebset(self):
         """checks the SEBSET/SEBSET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         seid = 42
         bset1a = SEBSET1(seid, [1, 'THRU', 10], 4, comment='bset1')
         bset1b = SEBSET1.add_card(BDFCard(['SEBSET1', seid, 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                 comment='sebset1')
         bset1a.write_card()
         bset1b.write_card()
-        model._add_sebset_object(bset1a)
-        model._add_sebset_object(bset1b)
+        add_methods.add_sebset_object(bset1a)
+        add_methods.add_sebset_object(bset1b)
         #| BSET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
 
         sebseta = SEBSET(seid, [1, 2, 3, 4, 5], [5, 4, 3, 2, 1], comment='sebset')
@@ -290,8 +465,8 @@ class TestSets(unittest.TestCase):
                                        1, 2, 3, 4, 5,
                                        5, 4, 3, 2, 1]), comment='sebset')
         assert len(sebseta.components) == 5, sebseta.components
-        model._add_sebset_object(sebseta)
-        model._add_sebset_object(sebsetb)
+        add_methods.add_sebset_object(sebseta)
+        add_methods.add_sebset_object(sebsetb)
 
         nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for nid in nids:
@@ -304,23 +479,25 @@ class TestSets(unittest.TestCase):
 
     def test_secset(self):
         """checks the SECSET/SECSET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         seid = 171
         secset1a = SECSET1(seid, [1, 'THRU', 10], 4, comment='cset')
         secset1b = SECSET1.add_card(BDFCard(['SECSET1', seid, 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]),
                                     comment='secset1')
         secset1a.write_card()
         secset1b.write_card()
-        model._add_secset_object(secset1a)
-        model._add_secset_object(secset1b)
+        add_methods.add_secset_object(secset1a)
+        add_methods.add_secset_object(secset1b)
         #| ASET1 |  C  | ID1 | THRU | ID2 |     |     |     |     |
 
         secseta = SECSET(seid, [1, 2, 3, 4, 5], [5, 4, 3, 2, 1], comment='secset')
         secsetb = SECSET.add_card(BDFCard(['SECSET', seid,
                                            1, 2, 3, 4, 5,
                                            5, 4, 3, 2, 1]), comment='secset')
-        model._add_secset_object(secseta)
-        model._add_secset_object(secsetb)
+        add_methods.add_secset_object(secseta)
+        add_methods.add_secset_object(secsetb)
         model.add_secset(seid, [1, 2, 3], '42', comment='secset')
         model.add_secset1(seid, [1, 2, 3], [1, 2, 3], comment='secset1')
 
@@ -335,12 +512,14 @@ class TestSets(unittest.TestCase):
 
     def test_seqset(self):
         """checks the QSET/QSET1 cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        add_methods = model._add_methods
         seid = 42
         seqset1a = SEQSET1(seid, [1, 'THRU', 10], 4, comment='qset')
         model.add_card(['SEQSET1', seid, 5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9],
                        'SEQSET1', comment='seqset1')
-        model._add_seqset_object(seqset1a)
+        add_methods.add_seqset_object(seqset1a)
         seqset1a.write_card()
         #| SEQSET1 | SEID |  C  | ID1 | THRU | ID2 |
 
@@ -349,8 +528,8 @@ class TestSets(unittest.TestCase):
                   1, 2, 3, 4, 5,
                   5, 4, 3, 2, 1]
         model.add_card(fields, 'SEQSET', comment='seqset')
-        model._add_seqset_object(seqseta)
-        #model._add_seqset_object(seqsetb)
+        add_methods.add_seqset_object(seqseta)
+        #add_methods.add_seqset_object(seqsetb)
 
         nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for nid in nids:
@@ -366,8 +545,8 @@ class TestSets(unittest.TestCase):
         #fields = ['SEUSET1', 'MYSET2',
                   #5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
         #model.add_card(fields, 'SEUSET1', comment='seuset1')
-        #model._add_seuset_object(seuset1a)
-        ##model._add_uset_object(uset1b)
+        #add_methods.add_seuset_object(seuset1a)
+        ##add_methods.add_uset_object(uset1b)
         #seuset1a.write_card()
         ##seuset1b.write_card()
 
@@ -376,7 +555,7 @@ class TestSets(unittest.TestCase):
                   #1, 2, 3, 4, 5,
                   #5, 4, 3, 2, 1]
         #model.add_card(fields, 'SEUSET', comment='seuset')
-        #model._add_uset_object(useta)
+        #add_methods.add_uset_object(useta)
 
         #nids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         #for nid in nids:

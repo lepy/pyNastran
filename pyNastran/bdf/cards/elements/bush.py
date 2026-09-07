@@ -10,18 +10,24 @@ All bush elements are BushElement and Element objects.
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+import warnings
+from typing import Optional, TYPE_CHECKING
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Element
+from pyNastran.bdf.bdf_interface.internal_get import (
+    node_id, coord_id_negative, coord_id_blank)
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, integer_double_or_blank, double_or_blank,
     string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
+from pyNastran.bdf.cards.coordinate_systems import CORD2R
 if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.cards.nodes import GRID
 
 
 class BushElement(Element):
@@ -29,34 +35,35 @@ class BushElement(Element):
         self.cid = None
         Element.__init__(self)
 
-    def Cid(self):
+    def Cid(self) -> Optional[int]:
         if self.cid is None:
             return None
         elif isinstance(self.cid, integer_types):
             return self.cid
         return self.cid_ref.cid
 
-    def Mass(self):
-        return 0.
+    def Mass(self) -> float:
+        return self.pid_ref.mass
 
-    def get_edge_ids(self):
+    def get_edge_ids(self) -> tuple[int, int]:
         """
         Return the edge IDs
         """
         return [tuple(sorted(self.node_ids))]
 
-    #def Centroid(self):
-        ## same as below, but we ignore the 2nd point it it's None
-        #p = (self.nodes_ref[1].get_position() + self.nodes_ref[0].get_position()) / 2.
+    # def Centroid(self):
+    #     # same as below, but we ignore the 2nd point it it's None
+    #     p = (self.nodes_ref[1].get_position() + self.nodes_ref[0].get_position()) / 2.
+    #
+    #     #p = self.nodes_ref[0].get_position()
+    #     #if self.nodes_ref[1] is not None:
+    #         #p += self.nodes_ref[1].get_position()
+    #         #p /= 2.
+    #     return p
 
-        ##p = self.nodes_ref[0].get_position()
-        ##if self.nodes_ref[1] is not None:
-            ##p += self.nodes_ref[1].get_position()
-            ##p /= 2.
-        #return p
+    # def center_of_mass(self):
+    #     return self.Centroid()
 
-    #def center_of_mass(self):
-        #return self.Centroid()
 
 class CBUSH(BushElement):
     """
@@ -75,13 +82,13 @@ class CBUSH(BushElement):
     """
     type = 'CBUSH'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb', 8:'cid', 9:'s', 10:'ocid'
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb', 8: 'cid', 9: 's', 10: 'ocid',
     }
     _properties = ['_field_map', ]
 
     def update_by_cp_name(self, cp_name, value):
-        #if isinstance(pname_fid, int):
-            #self._update_field_helper(pname_fid, value)
+        # if isinstance(pname_fid, int):
+        #     self._update_field_helper(pname_fid, value)
         if cp_name == 'X1':
             self.x[0] = value
         elif cp_name == 'X2':
@@ -102,7 +109,7 @@ class CBUSH(BushElement):
             raise NotImplementedError('element_type=%r has not implemented %r in update_by_cp_name' % (
                 self.type, cp_name))
 
-    def _update_field_helper(self, n, value):
+    def _update_field_helper(self, n: int, value) -> None:
         if n == 11:
             self.si[0] = value
         elif n == 12:
@@ -125,7 +132,14 @@ class CBUSH(BushElement):
                 else:
                     raise KeyError('Field %r=%r is an invalid CBUSH entry.' % (n, value))
 
-    def __init__(self, eid, pid, nids, x, g0, cid=None, s=0.5, ocid=-1, si=None, comment=''):
+    def __init__(self, eid: int, pid: int,
+                 nids: list[int],
+                 x: Optional[list[float]],
+                 g0: Optional[int],
+                 cid: Optional[int]=None,
+                 s: float=0.5,
+                 ocid: int=-1,
+                 si: Optional[list[float]]=None, comment: str=''):
         """
         Creates a CBUSH card
 
@@ -135,11 +149,11 @@ class CBUSH(BushElement):
             Element id
         pid : int
             Property id (PBUSH)
-        nids : List[int, int]
+        nids : list[int, int]
             node ids; connected grid points at ends A and B
             The nodes may be coincident, but then cid is required.
-        x : List[float, float, float]; None
-            List : the directional vector used to define the stiffnesses
+        x : list[float, float, float]; None
+            list : the directional vector used to define the stiffnesses
                    or damping from the PBUSH card
             None : use g0
         g0 : int/None
@@ -147,16 +161,16 @@ class CBUSH(BushElement):
                   or damping from the PBUSH card
             None : use x
         cid : int; default=None
-            Element coordinate system identification. A 0 means the basic
-            coordinate system. If CID is blank, then the element coordinate
-            system is determined from GO or Xi.
+            Element coordinate system identification:
+             - blank, element coordinate system is determined
+               from GO or Xi.
+             - 0 means the basic coordinate system.
         s: float; default=0.5
             Location of spring damper (0 <= s <= 1.0)
         ocid : int; default=-1
-            Coordinate system identification of spring-damper offset.
-            (Integer > -1; Default = -1, which means the offset
-            point lies on the line between GA and GB)
-        si : List[float, float, float]; default=None
+            >-1: Coordinate system of spring-damper offset
+            -1:  Offset point lies on the line between GA and GB
+        si : list[float, float, float]; default=None
             Components of spring-damper offset in the OCID coordinate system
             if OCID > 0.
             None : [None, None, None]
@@ -188,7 +202,7 @@ class CBUSH(BushElement):
         self.ocid_ref = None
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, eids):
+    def export_to_hdf5(cls, h5_file, model: BDF, eids: list[int]) -> None:
         """exports the elements in a vectorized way"""
         #comments = []
         pids = []
@@ -199,7 +213,7 @@ class CBUSH(BushElement):
         s = []
         ocid = []
         si = []
-        nan = np.full(3, np.nan)
+        nans = np.full(3, np.nan)
         for eid in eids:
             element = model.elements[eid]
             #comments.append(element.comment)
@@ -212,12 +226,12 @@ class CBUSH(BushElement):
                 #print(g0i, element.x)
                 if g0i is not None:
                     assert element.x[0] is None
-                    x.append(nan)
+                    x.append(nans)
                     g0.append(g0i)
                 else:
                     #assert element.x[0] is not None, element.get_stats()
                     if element.x[0] is None:
-                        x.append(nan)
+                        x.append(nans)
                     else:
                         x.append(element.x)
                     g0.append(-1)
@@ -226,11 +240,11 @@ class CBUSH(BushElement):
                 g0i = element.g0
                 if g0i is not None:
                     assert element.x[0] is None
-                    x.append(nan)
+                    x.append(nans)
                     g0.append(g0i)
                 else:
                     if element.x[0] is None:
-                        x.append(nan)
+                        x.append(nans)
                     else:
                         x.append(element.x)
                     #assert element.x[0] is None, element.get_stats()
@@ -240,8 +254,9 @@ class CBUSH(BushElement):
             s.append(element.s)
             ocid.append(element.ocid)
             if element.si[0] is None:
-                si.append(nan)
+                si.append(nans)
             else:
+                assert None not in element.si, element.get_stats()
                 si.append(element.si)
         #h5_file.create_dataset('_comment', data=comments)
         h5_file.create_dataset('eid', data=eids)
@@ -256,11 +271,10 @@ class CBUSH(BushElement):
 
         h5_file.create_dataset('s', data=s)
         h5_file.create_dataset('ocid', data=ocid)
-        #print('si =', si)
         h5_file.create_dataset('si', data=si)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CBUSH card from ``BDF.add_card(...)``
 
@@ -289,38 +303,41 @@ class CBUSH(BushElement):
         elif isinstance(x1_g0, float):
             g0 = None
             x1 = x1_g0
-            x2 = double_or_blank(card, 6, 'x2', 0.0)
-            x3 = double_or_blank(card, 7, 'x3', 0.0)
+            x2 = double_or_blank(card, 6, 'x2', default=0.0)
+            x3 = double_or_blank(card, 7, 'x3', default=0.0)
             x = [x1, x2, x3]
             if not isinstance(cid, integer_types):
-                assert max(x) != min(x), 'x=%s' % x
+                x_norm = np.linalg.norm(x)
+                assert x_norm != 0.0, 'x=%s' % x
         else:
             g0 = None
             x = [None, None, None]
 
         #: Location of spring damper (0 <= s <= 1.0)
-        s = double_or_blank(card, 9, 's', 0.5)
+        s = double_or_blank(card, 9, 's', default=0.5)
         #: Coordinate system identification of spring-damper offset. See
         #: Remark 9. (Integer > -1; Default = -1, which means the offset
         #: point lies on the line between GA and GB
-        ocid = integer_or_blank(card, 10, 'ocid', -1)
+        ocid = integer_or_blank(card, 10, 'ocid', default=-1)
         #: Components of spring-damper offset in the OCID coordinate system
         #: if OCID > 0.
         si = [double_or_blank(card, 11, 's1'),
               double_or_blank(card, 12, 's2'),
               double_or_blank(card, 13, 's3')]
-        assert len(card) <= 14, 'len(CBUSH card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 14, f'len(CBUSH card) = {len(card):d}\ncard={card}'
         return CBUSH(eid, pid, [ga, gb], x, g0, cid=cid, s=s, ocid=ocid, si=si, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, f, comment=''):
+    def add_op2_data(cls, data, f, comment: str=''):
         """
         Adds a CBUSH card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
+        f : int
+            flag
         comment : str; default=''
             a comment for the card
         """
@@ -332,48 +349,126 @@ class CBUSH(BushElement):
         #return [self.ga, self.gb]
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.Ga(), self.Gb()]
 
-    def _verify(self, xref):
+    def Length(self) -> float:
+        ga_ref, gb_ref = self.nodes_ref
+        p1 = ga_ref.get_position()
+        p2 = gb_ref.get_position()
+        dx = np.linalg.norm(p2 - p1)
+        return dx
+
+    def _verify(self, xref: bool) -> None:
         ga = self.Ga()
         gb = self.Gb()
         cid = self.Cid()
         ocid = self.OCid()
         pid = self.Pid()
         #si = self.si
-        assert isinstance(ga, integer_types), 'ga=%r' % ga
-        assert isinstance(gb, integer_types) or gb is None, 'gb=%r' % gb
-        assert isinstance(pid, integer_types), 'pid=%r' % pid
-        assert isinstance(cid, integer_types) or cid is None, 'cid=%r' % cid
-        assert isinstance(ocid, integer_types), 'ocid=%r' % ocid
+        assert isinstance(ga, integer_types), 'CBUSH: ga=%r' % ga
+        assert isinstance(gb, integer_types) or gb is None, 'CBUSH: gb=%r' % gb
+        assert isinstance(pid, integer_types), 'CBUSH: pid=%r' % pid
+        assert isinstance(cid, integer_types) or cid is None, 'CBUSH: cid=%r' % cid
+        assert isinstance(ocid, integer_types), 'CBUSH: ocid=%r' % ocid
+        if xref:
+            if gb is None:
+                warnings.warn(f'No GB for CBUSH eid={self.eid}\n'
+                              f'nodes={self.nodes} '
+                              f'cid={cid}; ocid={ocid}; x={self.x} g0={self.g0}\n'
+                              f'{str(self)}')
+            else:
+                if cid is None:
+                    ga_ref, gb_ref = self.nodes_ref
+                    xa = ga_ref.get_position()
+                    xb = gb_ref.get_position()
+                    dx = xb - xa
+                    inorm = np.linalg.norm(dx)
+                    jvector = self.orientation_vector()
+                    jnorm = np.linalg.norm(jvector)
+                    if inorm == 0.:
+                        warnings.warn(f'coincident CBUSH eid={self.eid}\n'
+                                      f'nodes={self.nodes} \n'
+                                      f'xa={xa} xb={xb} dx={dx} L={inorm:g}\n'
+                                      f'v={jvector}\n'
+                                      f'cid={cid}; ocid={ocid}; x={self.x} g0={self.g0}\n'
+                                      f'{str(self)}')
+                        return
+                    ihat = dx / inorm
+                    kvector = np.cross(ihat, jvector)
+                    knorm = np.linalg.norm(kvector)
+                    is_coincident = (
+                        # np.allclose(xa, xb) or
+                        np.allclose(dx, 0.) or
+                        np.allclose(jnorm, 0.) or
+                        np.allclose(knorm, 0.)
+                    )
+                    if is_coincident:
+                        warnings.warn(f'coincident CBUSH eid={self.eid}\n'
+                                      f'nodes={self.nodes} \n'
+                                      f'xa={xa} xb={xb} dx={dx} L={inorm:g} i={ihat}\n'
+                                      f'v={jvector} k={kvector} knorm={knorm:g}\n'
+                                      f'cid={cid}; ocid={ocid}; x={self.x} g0={self.g0}\n'
+                                      f'{str(self)}')
 
-    def Ga(self):
+    def element_coordinate_system(self) -> CORD2R:
+        """
+        The CBUSH coordinate system uses the:
+          - vy vector: gets tension/compression correct
+          - cid frame: messes up tension/compression. Fx>0 for force in the cid.x vector direction
+        """
+        if self.cid is not None:
+            assert self.cid_ref is not None, self.get_stats()
+            return self.cid_ref
+        node1, node2 = self.nodes_ref
+        xyz1 = node1.get_position()
+        xyz2 = node2.get_position()
+        origin = xyz1
+        iaxis = xyz2 - xyz1
+        inorm = np.linalg.norm(iaxis)
+        if inorm == 0.0:
+            raise RuntimeError(f'{self.type} nodes are coincident; must use cid\n{str(self)}')
+        # iaxis /= inorm
+        yaxis = self.orientation_vector()
+        ynorm = np.linalg.norm(yaxis)
+        yaxis /= ynorm
+        assert ynorm > 0, ynorm
+        kaxis = np.cross(iaxis, yaxis)
+        knorm = np.linalg.norm(kaxis)
+        assert knorm > 0, knorm
+        knorm /= knorm
+        return CORD2R(-1, origin, origin + kaxis, origin + iaxis)
+
+    def orientation_vector(self) -> np.ndarray:
+        if self.g0_ref is not None:
+            xa = self.nodes_ref[0].get_position()
+            x0 = self.g0_ref.get_position()
+            vector = x0 - xa
+        else:
+            assert self.x[0] is not None, self.x
+            vector = np.array(self.x, dtype='float64')
+        return vector
+
+    def Ga(self) -> int:
         if self.nodes_ref is not None:
             return self.nodes_ref[0].nid
         return self.nodes[0]
 
-    def Gb(self):
+    def Gb(self) -> int:
         if self.nodes[1] in [0, None]:
             return 0
         if self.nodes_ref is not None:
             return self.nodes_ref[1].nid
         return self.nodes[1]
 
-    def G0(self):
-        if self.g0_ref is not None:
-            return self.g0_ref.nid
-        return self.g0
+    def G0(self) -> int:
+        return node_id(self.g0_ref, self.g0)
 
-    def OCid(self):
-        if self.ocid_ref is not None:
-            return self.ocid_ref.cid
-        return self.ocid
+    def OCid(self) -> int:
+        return coord_id_negative(self.ocid_ref, self.ocid)
 
-    def Cid(self):
-        if self.cid_ref is not None:
-            return self.cid_ref.cid
-        return self.cid
+    def Cid(self) -> Optional[int]:
+        return coord_id_blank(self.cid_ref, self.cid)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -394,7 +489,7 @@ class CBUSH(BushElement):
         if self.ocid is not None and self.ocid != -1:
             self.ocid_ref = model.Coord(self.ocid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -404,7 +499,8 @@ class CBUSH(BushElement):
             the BDF object
         """
         msg = ', which is required by CBUSH eid=%s' % self.eid
-        self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
+        self.nodes_ref, missing_nodes = model.safe_empty_nodes(self.node_ids, msg=msg)
+        # self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
         if self.g0 is not None:
             self.g0_ref = model.EmptyNode(self.g0, msg=msg)
@@ -413,28 +509,40 @@ class CBUSH(BushElement):
         if self.ocid is not None and self.ocid != -1:
             self.ocid_ref = model.safe_coord(self.ocid, self.eid, xref_errors, msg=msg)
 
+    def Centroid(self):
+        xyzs_list = []
+        for nid in self.nodes_ref:
+            if nid is None:
+                continue
+            xyzs_list.append(nid.get_position())
+        if len(xyzs_list):
+            xyzs = np.vstack(xyzs_list)
+            centroid = xyzs.sum(axis=0) / xyzs.shape[0]
+        else:
+            centroid = np.zeros(3, dtype='float64')
+        return centroid
+
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
-        self.ga = self.Ga()
         self.pid = self.Pid()
         self.cid = self.Cid()
-        self.gb = self.Gb()
+        self.nodes[0] = self.Ga()
+        self.nodes[1] = self.Gb()
         self.g0 = self.G0()
         self.cid_ref = None
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.g0_ref = None
         self.pid_ref = None
         self.ocid_ref = None
 
-    def _get_x_g0(self):
+    def _get_x_g0(self) -> list:
         if self.g0 is not None:
             x = [self.G0(), None, None]
         else:
             x = self.x
         return x
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         x = self._get_x_g0()
         list_fields = (['CBUSH', self.eid, self.Pid(), self.Ga(), self.Gb()] + x +
                        [self.Cid(), self.s, self.ocid] + self.si)
@@ -457,20 +565,19 @@ class CBUSH(BushElement):
 class CBUSH1D(BushElement):
     type = 'CBUSH1D'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb', 5:'cid',
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb', 5: 'cid',
     }
 
-    def __init__(self, eid, pid, nids, cid=None, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[Optional[int]], cid=None,
+                 comment: str=''):
         if comment:
             self.comment = comment
         BushElement.__init__(self)
         self.eid = eid
         self.pid = pid
-        self.ga = nids[0]
-        self.gb = nids[1]
+        self.nodes = nids
         self.cid = cid
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.cid_ref = None
         self.pid_ref = None
 
@@ -495,7 +602,7 @@ class CBUSH1D(BushElement):
         h5_file.create_dataset('cid', data=cid)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CBUSH1D card from ``BDF.add_card(...)``
 
@@ -511,17 +618,17 @@ class CBUSH1D(BushElement):
         ga = integer(card, 3, 'ga')
         gb = integer_or_blank(card, 4, 'gb')
         cid = integer_or_blank(card, 5, 'cid')
-        assert len(card) <= 6, 'len(CBUSH1D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 6, f'len(CBUSH1D card) = {len(card):d}\ncard={card}'
         return CBUSH1D(eid, pid, [ga, gb], cid=cid, comment=comment)
 
-    #@classmethod
-    #def add_op2_data(cls, data, comment=''):
-        #eid = data[0]
-        #pid = data[1]
-        #ga = data[2]
-        #gb = data[3]
-        #raise NotImplementedError(data)
-        #return CBUSH1D(eid, pid, [ga, gb], cid, comment=comment)
+    # @classmethod
+    # def add_op2_data(cls, data, comment: str=''):
+    #     eid = data[0]
+    #     pid = data[1]
+    #     ga = data[2]
+    #     gb = data[3]
+    #     raise NotImplementedError(data)
+    #     return CBUSH1D(eid, pid, [ga, gb], cid, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -533,14 +640,12 @@ class CBUSH1D(BushElement):
             the BDF object
         """
         msg = ', which is required by CBUSH1D eid=%s' % self.eid
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        if self.gb:
-            self.gb_ref = model.Node(self.gb, msg=msg)
+        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
         if self.cid is not None:
             self.cid_ref = model.Coord(self.cid)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -550,57 +655,82 @@ class CBUSH1D(BushElement):
             the BDF object
         """
         msg = ', which is required by CBUSH1D eid=%s' % self.eid
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        if self.gb:
-            self.gb_ref = model.Node(self.gb, msg=msg)
+        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
         if self.cid is not None:
             self.cid_ref = model.safe_coord(self.cid, self.eid, xref_errors, msg=msg)
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
-        self.ga = self.Ga()
-        self.gb = self.Gb()
+        self.nodes = [self.Ga(), self.Gb()]
         self.cid = self.Cid()
         self.pid = self.Pid()
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.cid_ref = None
         self.pid_ref = None
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         ga = self.Ga()
         gb = self.Gb()
         cid = self.Cid()
         pid = self.Pid()
-        assert isinstance(ga, integer_types), 'ga=%r' % ga
-        assert isinstance(gb, integer_types) or gb is None, 'gb=%r' % gb
-        assert isinstance(pid, integer_types), 'pid=%r' % pid
-        assert isinstance(cid, integer_types) or cid is None, 'cid=%r' % cid
+        assert isinstance(ga, integer_types), 'CBUSH1D: ga=%r' % ga
+        assert isinstance(gb, integer_types) or gb is None, 'CBUSH1D: gb=%r' % gb
+        assert isinstance(pid, integer_types), 'CBUSH1D: pid=%r' % pid
+        assert isinstance(cid, integer_types) or cid is None, 'CBUSH1D: cid=%r' % cid
 
-    def Ga(self):
-        if self.ga_ref is not None:
-            return self.ga_ref.nid
-        return self.ga
+    def Ga(self) -> Optional[int]:
+        if self.nodes_ref is None:
+            return self.nodes[0]
+        return node_id(self.nodes_ref[0], self.nodes[0])
 
-    def Gb(self):
-        if self.gb_ref is not None:
-            return self.gb_ref.nid
-        return self.gb
+    def Gb(self) -> Optional[int]:
+        if self.nodes_ref is None:
+            return self.nodes[1]
+        return node_id(self.nodes_ref[1], self.nodes[1])
+
+    # @property
+    # def nodes(self) -> list[int]:
+    #     return [self.ga, self.gb]
+
+    # @property
+    # def nodes_ref(self) -> list[GRID]:
+    #     return [self.ga_ref, self.gb_ref]
 
     @property
-    def nodes(self):
-        return [self.ga, self.gb]
-
-    @property
-    def nodes_ref(self):
-        return [self.ga_ref, self.gb_ref]
-
-    @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.Ga(), self.Gb()]
 
-    def raw_fields(self):
+
+    def element_coordinate_system(self) -> CORD2R:
+        if self.cid is not None:
+            assert self.cid_ref is not None, self.get_stats()
+            return self.cid_ref
+        node1, node2 = self.nodes_ref
+        xyz1 = node1.get_position()
+        xyz2 = node2.get_position()
+        origin = xyz1
+        iaxis = xyz2 - xyz1
+        inorm = np.linalg.norm(iaxis)
+        if inorm == 0.0:
+            raise RuntimeError(f'{self.type} nodes are coincident; must use cid\n{str(self)}')
+
+        iaxis /= inorm # normalized
+        abs_iaxis = np.abs(iaxis)
+        # [0, 1, 1], [1, 1, 1]
+        imin = np.where(abs_iaxis == abs_iaxis.min())[0]
+        yaxis = iaxis.copy()
+        yaxis[imin] += 1.
+        ynorm = np.linalg.norm(yaxis)
+        yaxis /= ynorm
+        assert ynorm > 0, ynorm
+        kaxis = np.cross(iaxis, yaxis)
+        knorm = np.linalg.norm(kaxis)
+        assert knorm > 0, knorm
+        knorm /= knorm
+        return CORD2R(-1, origin, origin + kaxis, origin + iaxis)
+
+    def raw_fields(self) -> list:
         list_fields = ['CBUSH1D', self.eid, self.Pid(), self.Ga(), self.Gb(),
                        self.Cid()]
         return list_fields
@@ -617,17 +747,19 @@ class CBUSH2D(BushElement):
     """
     type = 'CBUSH2D'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb', 5:'cid', 6:'plane', 7:'sptid',
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb',
+        5: 'cid', 6: 'plane', 7: 'sptid',
     }
 
-    def __init__(self, eid, pid, nids, cid=0, plane='XY', sptid=None, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 cid: int=0, plane: str='XY', sptid=None,
+                 comment: str=''):
         BushElement.__init__(self)
         if comment:
             self.comment = comment
         self.eid = eid
         self.pid = pid
-        self.ga = nids[0]
-        self.gb = nids[1]
+        self.nodes = nids
         self.cid = cid
         self.plane = plane
         self.sptid = sptid
@@ -635,13 +767,12 @@ class CBUSH2D(BushElement):
             msg = ("plane not in required list, plane=%r\n"
                    "expected planes = ['XY','YZ','ZX']" % self.plane)
             raise RuntimeError(msg)
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.pid_ref = None
         self.cid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CBUSH2D card from ``BDF.add_card(...)``
 
@@ -656,80 +787,84 @@ class CBUSH2D(BushElement):
         pid = integer_or_blank(card, 2, 'pid')
         ga = integer(card, 3, 'ga')
         gb = integer(card, 4, 'gb')
-        cid = integer_or_blank(card, 5, 'cid', 0)
-        plane = string_or_blank(card, 6, 'plane', 'XY')
+        cid = integer_or_blank(card, 5, 'cid', default=0)
+        plane = string_or_blank(card, 6, 'plane', default='XY')
         sptid = integer_or_blank(card, 7, 'sptid')
-        assert len(card) <= 8, 'len(CBUSH2D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 8, f'len(CBUSH2D card) = {len(card):d}\ncard={card}'
         return CBUSH2D(eid, pid, [ga, gb], cid, plane, sptid, comment=comment)
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, eids, encoding='ascii'):
+    def export_to_hdf5(cls, h5_file, model: BDF, eids: list[int], encoding: str='ascii'):
         """exports the elements in a vectorized way"""
-        #comments = []
+        # comments = []
         pids = []
         nodes = []
         cid = []
         plane = []
         sptid = []
-        #nan = np.full(3, np.nan)
+        # nan = np.full(3, np.nan)
         for eid in eids:
             element = model.elements[eid]
-            #comments.append(element.comment)
+            # comments.append(element.comment)
             pids.append(element.pid)
             nodes.append(element.nodes)
             cid.append(element.cid)
             plane.append(element.plane.encode(encoding))
             sptidi = 0 if element.sptid is None else element.sptid
             sptid.append(sptidi)
-        #h5_file.create_dataset('_comment', data=comments)
+        # h5_file.create_dataset('_comment', data=comments)
         h5_file.create_dataset('eid', data=eids)
         h5_file.create_dataset('nodes', data=nodes)
         h5_file.create_dataset('pid', data=pids)
-        #print('x =', x)
-        #print('g0 =', g0)
-        #print('cid =', cid)
+        # print('x =', x)
+        # print('g0 =', g0)
+        # print('cid =', cid)
         h5_file.create_dataset('cid', data=cid)
         h5_file.create_dataset('plane', data=plane)
-        #print('si =', si)
+        # print('si =', si)
         h5_file.create_dataset('sptid', data=sptid)
 
-    #@classmethod
-    #def add_op2_data(cls, data, comment=''):
-        #eid = data[0]
-        #pid = data[1]
-        #ga = data[2]
-        #gb = data[3]
-        #raise NotImplementedError(data)
-        #return CBUSH2D(eid, pid, [ga, gb], cid, plane, sptid, comment=comment)
+    # @classmethod
+    # def add_op2_data(cls, data, comment: str=''):
+    #     eid = data[0]
+    #     pid = data[1]
+    #     ga = data[2]
+    #     gb = data[3]
+    #     raise NotImplementedError(data)
+    #     return CBUSH2D(eid, pid, [ga, gb], cid, plane, sptid, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         ga = self.Ga()
         gb = self.Gb()
         cid = self.Cid()
         pid = self.Pid()
         plane = self.plane
-        assert isinstance(ga, integer_types), 'ga=%r' % ga
-        assert isinstance(gb, integer_types), 'gb=%r' % gb
-        assert isinstance(pid, integer_types), 'pid=%r' % pid
-        assert isinstance(cid, integer_types), 'cid=%r' % cid
-        assert self.plane in ['XY', 'YZ', 'ZX'], 'plane=%r' % plane
+        assert isinstance(ga, integer_types), 'CBUSH2D: ga=%r' % ga
+        assert isinstance(gb, integer_types), 'CBUSH2D: gb=%r' % gb
+        assert isinstance(pid, integer_types), 'CBUSH2D: pid=%r' % pid
+        assert isinstance(cid, integer_types), 'CBUSH2D: cid=%r' % cid
+        assert self.plane in ['XY', 'YZ', 'ZX'], 'CBUSH2D: plane=%r' % plane
 
-    def Ga(self):
-        if isinstance(self.ga, integer_types):
-            return self.ga
-        return self.ga_ref.nid
+    def Ga(self) -> int:
+        if isinstance(self.nodes[0], integer_types):
+            return self.nodes[0]
+        return self.nodes_ref[0].nid
 
-    def Gb(self):
-        if isinstance(self.gb, integer_types):
-            return self.gb
-        return self.gb_ref.nid
-
-    @property
-    def nodes(self):
-        return [self.ga, self.gb]
+    def Gb(self) -> int:
+        if isinstance(self.nodes[1], integer_types):
+            return self.nodes[1]
+        return self.nodes_ref[1].nid
 
     @property
-    def node_ids(self):
+    def ga(self) -> int:
+        return self.nodes[0]
+
+    @property
+    def gb(self) -> int:
+        return self.nodes[1]
+
+    @property
+    def node_ids(self) -> list[int]:
         return [self.Ga(), self.Gb()]
 
     def cross_reference(self, model: BDF) -> None:
@@ -740,17 +875,17 @@ class CBUSH2D(BushElement):
         ----------
         model : BDF()
             the BDF object
+
         """
         msg = ', which is required by CBUSH2D eid=%s' % self.eid
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        self.gb_ref = model.Node(self.gb, msg=msg)
+        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid)
         if self.cid is not None:
             self.cid_ref = model.Coord(self.cid, msg=msg)
-        #if self.sptid is not None:
-            #pass
+        # if self.sptid is not None:
+        #     pass
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -760,24 +895,21 @@ class CBUSH2D(BushElement):
             the BDF object
         """
         msg = ', which is required by CBUSH2D eid=%s' % self.eid
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        self.gb_ref = model.Node(self.gb, msg=msg)
+        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
         if self.cid is not None:
             self.cid_ref = model.safe_coord(self.cid, self.eid, xref_errors, msg=msg)
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
-        self.ga = self.Ga()
-        self.gb = self.Gb()
+        self.nodes = self.node_ids
         self.cid = self.Cid()
         self.pid = self.Pid()
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.cid_ref = None
         self.pid_ref = None
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         list_fields = ['CBUSH2D', self.eid, self.Pid(), self.Ga(), self.Gb(),
                        self.Cid(), self.plane, self.sptid]
         return list_fields

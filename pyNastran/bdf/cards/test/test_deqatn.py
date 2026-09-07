@@ -5,7 +5,7 @@ from io import StringIO
 import numpy as np
 
 #import pyNastran
-from pyNastran.bdf.bdf import BDF
+from pyNastran.bdf.bdf import BDF, DEQATN
 from pyNastran.bdf.cards.test.utils import save_load_deck
 
 
@@ -23,6 +23,7 @@ class TestDEQATN(unittest.TestCase):
         """splitting a DEQATN doesnt work with is_list=False if it's a list"""
         model = BDF(debug=None)
         card = ["DEQATN", 1000, "MAXDIFF(t1,t2)=abs(t2-t1)/t1"]
+        card_lines = [''.join([f'{field:8}' for field in card])]
         #with self.assertRaises(AttributeError): # TODO: fix this...
         model.add_card(card, "DEQATN", is_list=False)
         model.cross_reference()
@@ -33,7 +34,7 @@ class TestDEQATN(unittest.TestCase):
             model.write_bdf(bdf_file)
         bdf_file.getvalue()
 
-    def _test_deqatn_1b(self):
+    def test_deqatn_1b(self):
         """splitting a DEQATN doesnt work with is_list=False if it's a list"""
         model = BDF(debug=None)
         card = ["DEQATN", 1000, "MAXDIFF(t1,t2)=abs(t2-t1)/t1"]
@@ -80,7 +81,7 @@ class TestDEQATN(unittest.TestCase):
 
     def test_deqatn_3(self):
         """
-        Much simplier method of using add_card
+        Much simpler method of using add_card
 
         Creates the following equation:
 
@@ -160,7 +161,7 @@ class TestDEQATN(unittest.TestCase):
         func_str = 'def f(x, y, z):\n'
         func_str += '    c = 3\n'
         func_str += '    return x + y + z + c\n'
-        #func = exec(fnc_str)
+        #func = exec(fnc_str, sys._getframe().f_locals)
 
         #s = StringIO()
         #s.write(s)
@@ -345,6 +346,27 @@ class TestDEQATN(unittest.TestCase):
         s.getvalue()
         s.close()
 
+    def test_deqatn_9_tab(self):
+        model = BDF(debug=None)
+        card = [
+            'deqatn  2       f(x,y,z)= 1.;',
+            '\tL=1+2+3+',
+            '\t+ 4/min(1,2);',
+            '\tb= 4.;',
+            '\th= 2.;',
+            '\tt1= 200.;',
+            '\tt2= 300.;',
+            '\tt=t1*(L-x)/L+t2*x/L',
+            '        +4'
+        ]
+        model.add_card(card, 'DEQATN', is_list=False)
+        model.cross_reference()
+
+        s = StringIO()
+        model.write_bdf(s, close=False)
+        s.getvalue()
+        s.close()
+
     def test_deqatn_10(self):
         """
         based off nast/tpl/ptdmi1.dat
@@ -488,6 +510,16 @@ class TestDEQATN(unittest.TestCase):
             'DEQATN  121     A(B,H) = B*H            $  ...equations for'
         ]
         model.add_card(deqatn_card, 'DEQATN', is_list=False)
+
+    def test_deqatn_bad_1(self):
+        """checks that a function name is not an argument"""
+        model = BDF(debug=None)
+        card = ["DEQATN      1000 A(a,b)=1"]
+        model.add_card(card, "DEQATN")
+        deqatn = model.dequations[1000]
+        with self.assertRaises(RuntimeError):
+            deqatn.cross_reference(model)
+        #print(model.dequations[1000].func_str)
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

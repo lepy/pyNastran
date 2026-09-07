@@ -1,10 +1,9 @@
 import os
 import sys
-from typing import List, Dict
 import numpy as np
 from pyNastran.bdf import read_bdf, BDF
 from pyNastran.op2 import read_op2
-from pyNastran.nptyping import NDArray3float
+from pyNastran.nptyping_interface import NDArray3float
 
 
 def remove_duplicate_nodes(node_list, model, log=None):
@@ -34,7 +33,7 @@ def run_map_deflections(node_list, bdf_filename, out_filename,
 
     Parameters
     ----------
-    node_list : List[int]
+    node_list : list[int]
         the list of nodes from the BDF to spline???
         is this just the SPLINE1 card???
     bdf_filename : str
@@ -50,11 +49,11 @@ def run_map_deflections(node_list, bdf_filename, out_filename,
 
     """
     ext = os.path.splitext(out_filename)[1]
-    if ext == ".op2":
+    if ext == '.op2':
         deflections = read_op2(out_filename, log=log)
     # elif ext == '.f06':
     # deflections = read_f06(out_filename)
-    else:
+    else:  # pragma: no cover
         raise NotImplementedError("out_filename = %r" % out_filename)
 
     model = read_bdf(bdf_filename, xref=True, punch=False, log=log, debug=True)
@@ -71,7 +70,7 @@ def run_map_deflections(node_list, bdf_filename, out_filename,
 
 def get_wa(node_list, C: NDArray3float, wS: NDArray3float,
            model: BDF,
-           aero_points: Dict[int, NDArray3float],
+           aero_points: dict[int, NDArray3float],
            log=None):
     """
     Cannot use solve
@@ -82,7 +81,7 @@ def get_wa(node_list, C: NDArray3float, wS: NDArray3float,
 
     Parameters
     ----------
-    node_list : List[int]
+    node_list : list[int]
         list of node ids
     C : (3+nnodes, 3+nnodes) float ndarray
         ???
@@ -90,7 +89,7 @@ def get_wa(node_list, C: NDArray3float, wS: NDArray3float,
         [wS] = [C]*[P]
     aero_points : ???
         ???
-    aero_points : : Dict[int, NDArray3float]
+    aero_points : : dict[int, NDArray3float]
         nid -> xyz mapping
 
     Returns
@@ -114,7 +113,7 @@ def get_wa(node_list, C: NDArray3float, wS: NDArray3float,
 
 
 def get_xk_matrix(Cws, node_list, model: BDF,
-                  aero_points: Dict[int, NDArray3float], log=None):
+                  aero_points: dict[int, NDArray3float], log=None):
     """
     Calculates the XK matrix to
 
@@ -153,19 +152,19 @@ def get_xk_matrix(Cws, node_list, model: BDF,
 
         wai = xK @ Cws
         wa[iaero] = wai[0, 0]
-        # print("w[%s]=%s" % (iaero, wi[0, 0]))
-    # print('---wa---')
-    # print('wa = ', wa)
+        #print("w[%s]=%s" % (iaero, wi[0, 0]))
+    #print('---wa---')
+    #print('wa = ', wa)
     log.info("---finished getXK_matrix---")
     sys.stdout.flush()
     return wa
 
 
-def get_ws(node_list: List[int], deflections, log=None):
+def get_ws(node_list: list[int], deflections, log=None):
     """
     Parameters
     ----------
-    node_list : List[int]
+    node_list : list[int]
         list of node ids
 
     """
@@ -180,7 +179,7 @@ def get_ws(node_list: List[int], deflections, log=None):
         w_column[i] = dz
         log.info(f"wS[{inode}={i}]={dz}")
         i += 1
-    print(w_column.max())
+    print('w_column =', w_column.max())
     log.info("---finished get_ws---")
     sys.stdout.flush()
 
@@ -189,11 +188,11 @@ def get_ws(node_list: List[int], deflections, log=None):
     return w_column
 
 
-def get_c_matrix(node_list: List[int], model: BDF, log=None):
+def get_c_matrix(node_list: list[int], model: BDF, log=None):
     """
     Parameters
     ----------
-    node_list : List[int]
+    node_list : list[int]
         list of node ids
 
     Returns

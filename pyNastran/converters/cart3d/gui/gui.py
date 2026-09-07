@@ -12,25 +12,24 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 from qtpy import QtCore, QtGui
-from qtpy.QtWidgets import (
-    QApplication, qApp)
+from qtpy.QtWidgets import QApplication
 
 # 3rd party
-import vtk
+import vtkmodules
 
 # pyNastran
 import pyNastran
 from pyNastran.gui.formats import Cart3dIO#, CLASS_MAP
 from pyNastran.gui.arg_handling import get_inputs
 #from pyNastran.gui.qt_files.gui_qt_common import GuiQtCommon
-from pyNastran.gui.gui_common import GuiCommon2
+from pyNastran.gui.gui_common import GuiCommon2, QSettingsLike
 
 
 try:
     PKG_PATH = sys._MEIPASS #@UndefinedVariable
     SCRIPT_PATH = os.path.join(PKG_PATH, 'scripts')
     ICON_PATH = os.path.join(PKG_PATH, 'icons')
-except:
+except Exception:
     PKG_PATH = pyNastran.__path__[0]
     SCRIPT_PATH = os.path.join(PKG_PATH, 'gui', 'scripts')
     ICON_PATH = os.path.join(PKG_PATH, 'gui', 'icons')
@@ -86,13 +85,13 @@ class MainWindow(GuiCommon2):
 
     def about_dialog(self):
         """ Display about dialog """
-        copyright = pyNastran.__pyqt_copyright__
+        copyright_str = pyNastran.__pyqt_copyright__
 
         about = [
             'pyCart3d Qt GUI',
             '',
             'pyCart3d v%s' % pyNastran.__version__,
-            copyright,
+            copyright_str,
             pyNastran.__author__,
             '',
             '%s' % pyNastran.__website__,
@@ -138,21 +137,27 @@ class MainWindow(GuiCommon2):
         Handling saving state before application when application is
         being closed.
         """
-        settings = QtCore.QSettings()
-        settings.setValue("main_WindowGeometry", self.saveGeometry())
-        settings.setValue("mainWindowState", self.saveState())
-        self.settings.save(settings)
+        #qsettings = QtCore.QSettings()
+        qsettings = QSettingsLike()
+        qsettings.setValue('main_window_geometry', self.saveGeometry())
+        qsettings.setValue('main_window_state', self.saveState())
+        self.settings.save(qsettings)
 
         #screen_shape = QtGui.QDesktopWidget().screenGeometry()
         main_window = self.window()
         width = main_window.frameGeometry().width()
         height = main_window.frameGeometry().height()
-        settings.setValue('screen_shape', (width, height))
+        qsettings.setValue('screen_shape', (width, height))
 
         qpos = self.pos()
         pos = qpos.x(), qpos.y()
-        settings.setValue('pos', pos)
-        qApp.quit()
+        qsettings.setValue('pos', pos)
+
+        qsettings.save_json()
+        q_app = QApplication.instance()
+        if q_app is None:
+            sys.exit()
+        q_app.quit()
 
 
 def main():

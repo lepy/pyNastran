@@ -12,15 +12,15 @@ defines:
 
 """
 from collections import Counter
-from typing import List, Union, Optional
+from typing import Optional
 import numpy as np
 
 
-def collapse_thru_by(fields: List[int], get_packs: bool=False) -> List[List[int]]:
+def collapse_thru_by(fields: list[int], get_packs: bool=False) -> list[list[int]]:
     """
     Parameters
     ----------
-    fields : List[int]
+    fields : list[int]
         the list of fields to collapse
     get_packs : bool; default=False
         get the list of packs so "special" formatting can be done
@@ -39,7 +39,7 @@ def collapse_thru_by(fields: List[int], get_packs: bool=False) -> List[List[int]
     return fields2
 
 
-def collapse_thru_by_float(fields: List) -> List[Union[int, str]]:
+def collapse_thru_by_float(fields: list[float]) -> list[int | str]:
     _check_sort_fields(fields)
     packs = condense(fields)
     fields2 = build_thru_float(packs)
@@ -47,7 +47,7 @@ def collapse_thru_by_float(fields: List) -> List[Union[int, str]]:
     return fields2
 
 
-def collapse_thru(fields, nthru=None):
+def collapse_thru(fields, nthru: Optional[int]=None) -> list[tuple[int, int, int]]:
     """
     Collapses fields into a set of packs
 
@@ -55,6 +55,8 @@ def collapse_thru(fields, nthru=None):
     ----------
     fields : list[int, int, ...]
         the list of integers to compress
+    nthru : int; default=1
+        currently unused
 
     Returns
     -------
@@ -64,11 +66,12 @@ def collapse_thru(fields, nthru=None):
     """
     _check_sort_fields(fields)
     packs = condense(fields)
-    fields2 = build_thru(packs, max_dv=1) # , nthru=nthru
+    fields2 = build_thru(packs, max_dv=1)  # , nthru=nthru
     if nthru is not None and Counter(fields2)['THRU'] > 2:
         return fields
     #assert fields == expand_thru_by(fields2), fields2  # why doesn't this work?
     return fields2
+
 
 def _check_sort_fields(fields):
     if isinstance(fields, np.ndarray):
@@ -83,8 +86,9 @@ def _check_sort_fields(fields):
         raise NotImplementedError(f'fields={fields}; type={type(fields)}')
     fields.sort()
 
-def collapse_thru_packs(fields):
-    assert isinstance(fields, list), fields
+
+def collapse_thru_packs(fields: list[int]) -> tuple[list[int], list[list[int]]]:
+    #assert isinstance(fields, list), fields
     assert 'THRU' not in fields, fields
     packs = condense(fields)
     singles, doubles = build_thru_packs(packs, max_dv=1)
@@ -93,14 +97,25 @@ def collapse_thru_packs(fields):
     return singles, doubles
 
 
-def collapse_colon_packs(fields, thru_split=3):
+def collapse_thru_ipacks(ifields: list[int], fields: list[int]):
+    #assert isinstance(fields, list), fields
+    assert 'THRU' not in fields, fields
+    packs = condensei(ifields, fields)
+    singles, doubles = build_thru_packs(packs, max_dv=1)
+
+    #assert fields == expand_thru_by(fields2), fields2  # why doesn't this work?
+    return singles, doubles
+
+
+def collapse_colon_packs(fields: list[int],
+                         thru_split: int=3) -> tuple[list[int], list[list[int]]]:
     """
     Applies colons (:) to packs to represent THRU and BY as is used by
     Patran.
 
     Parameters
     ----------
-    fields : List[int]
+    fields : list[int]
         the values to collapse
     thru_split : int; default=3
         the length to not write THRU
@@ -109,10 +124,10 @@ def collapse_colon_packs(fields, thru_split=3):
 
     Returns
     -------
-    singles : List[int]
+    singles : list[int]
         the list of singles
-    doubles : List[pack]
-        pack : List[varies]
+    doubles : list[pack]
+        pack : list[varies]
             [3, :, 13]
             [3, :, 13, :, 5]
         the double packs
@@ -131,7 +146,9 @@ def collapse_colon_packs(fields, thru_split=3):
 
     """
     packs = condense(fields)
-    singles, doubles = build_thru_packs(packs, max_dv=None, thru_split=thru_split)
+    #  max_dv=None -> large values of dv are ok
+    singles, doubles = build_thru_packs(
+        packs, max_dv=None, thru_split=thru_split)
     doubles2 = []
     for double in doubles:
         if len(double) == 3:
@@ -145,20 +162,20 @@ def collapse_colon_packs(fields, thru_split=3):
     return singles, doubles2
 
 
-def condense(value_list):
+def condense(value_list) -> list[list[int]]:
     """
     Builds a list of packs (list of 3 values representing the first, last,
     and delta values for condensing a SET card.
 
     Parameters
     ----------
-    value_list : List[int]
+    value_list : list[int]
         list of values to pack
 
     Returns
     -------
-    packs : List[pack]
-       pack : List[id_low, id_high, delta_id]
+    packs : list[pack]
+       pack : list[id_low, id_high, delta_id]
            a list representation of the min/max/delta id values
 
     .. seealso:: build_thru
@@ -204,15 +221,91 @@ def condense(value_list):
     return packs
 
 
-def build_thru_packs(packs, max_dv=1, thru_split=3):
+def condensei(value_ilist: list[int],
+              value_list: list[int]) -> list[list[int]]:
+    """
+    Builds a list of packs (list of 3 values representing the first, last,
+    and delta values for condensing a DMI card.
+
+    Parameters
+    ----------
+    value_ilist : list[int]
+        list of ivalues to pack
+    value_list : list[int]
+        list of values to pack
+
+    Returns
+    -------
+    packs : list[pack]
+       pack : list[id_low, id_high, delta_id]
+           a list representation of the min/max/delta id values
+
+    .. seealso:: build_thru
+
+    """
+    if len(value_list) == 0:
+        return []
+    if len(value_list) == 1:
+        return [[value_ilist[0], value_ilist[0], 1]]
+    #value_list.sort()
+    packs = []
+
+    dv_old = None
+    dvi_old = None
+    first_vali = value_ilist[0]
+    last_vali = first_vali
+    first_val = value_list[0]
+    last_val = first_val
+
+    for vali, val in zip(value_ilist[1:], value_list[1:], strict=True):
+        try:
+            dv = val - last_val
+        except TypeError:
+            print("last_val=%r val=%r" % (last_val, val))
+            print("value_list=%r" % value_list)
+            raise
+        dvi = vali - last_vali
+
+        # sets up the first item of the pack
+        if dv_old is None:
+            dv_old = dv
+            dvi_old = dvi
+
+        # group when both field delta and index delta are consistent
+        # and field delta is 1 (THRU on DMI requires consecutive GCi)
+        if dv_old == dv and dvi_old == dvi and dv == 1:
+            last_val = val
+            last_vali = vali
+        else:
+            packs.append([first_vali, last_vali, dvi_old])
+            last_val = val
+            last_vali = vali
+            dv_old = None
+            dvi_old = None
+            first_val = val
+            first_vali = vali
+
+    # fills the last pack
+    if dvi_old is not None and dv_old == dv and dvi_old == dvi and dv == 1:
+        packs.append([first_vali, vali, dvi])
+    elif dvi_old is not None:
+        packs.append([first_vali, vali, dvi_old])
+    else:
+        packs.append([first_vali, vali, dvi])
+    return packs
+
+
+def build_thru_packs(packs: list[int],
+                     max_dv: int=1, thru_split: int=3.
+                     ) -> tuple[list[int], list[list[int]]]:
     """
     Applies THRU and BY to packs to shorten output as Nastran does on
     cards like the SPOINT
 
     Parameters
     ----------
-    packs : List[pack]
-       pack : List[id_low, id_high, delta_id]
+    packs : list[pack]
+       pack : list[id_low, id_high, delta_id]
            a list representation of the min/max/delta id values
     max_dv : int; default=1
         maximum allowed delta between two values
@@ -223,10 +316,10 @@ def build_thru_packs(packs, max_dv=1, thru_split=3):
 
     Returns
     -------
-    singles : List[int]
+    singles : list[int]
         the list of singles
-    doubles : List[pack]
-        pack : List[varies]
+    doubles : list[pack]
+        pack : list[varies]
             [3, THRU, 13]
             [3, THRU, 13, BY, 5]
         the double packs
@@ -247,11 +340,12 @@ def build_thru_packs(packs, max_dv=1, thru_split=3):
     singles = []
     doubles = []
     for (first_val, last_val, by) in packs:
+        # assert by > 0, (first_val, last_val, by)
         if first_val == last_val:
             singles.append(first_val)
         else:
             if by == 1:
-                if last_val - first_val < thru_split: # dont make extra THRU cards
+                if last_val - first_val < thru_split:  # dont make extra THRU cards
                     singlei = list(range(first_val, last_val + 1, 1))
                     singles += singlei
                 else:
@@ -260,7 +354,12 @@ def build_thru_packs(packs, max_dv=1, thru_split=3):
             else:
                 diff = last_val - first_val
                 if max_dv == 1 or diff == by:
-                    singlei = list(range(first_val, last_val + by, by))
+                    try:
+                        rangei = range(first_val, last_val + by, by)
+                    except ValueError:
+                        raise ValueError(f'bad range loop...first_val={first_val}, last_val={last_val} '
+                                         f'by={by}; max_dv={max_dv}, thru_split={thru_split}')
+                    singlei = list(rangei)
                     singles += singlei
                 else:
                     double = [first_val, 'THRU', last_val, 'BY', by]
@@ -277,8 +376,8 @@ def build_thru(packs, max_dv: Optional[int]=None, nthru: Optional[int]=None):
 
     Parameters
     ----------
-    packs : List[pack]
-        pack : List[int first, int last, int delta]
+    packs : list[pack]
+        pack : list[int first, int last, int delta]
             the first, last, delta id values
     max_dv : int; default=None -> no limit
         defines the max allowable delta between two values
@@ -334,7 +433,7 @@ def build_thru(packs, max_dv: Optional[int]=None, nthru: Optional[int]=None):
     return fields
 
 
-def build_thru_float(packs: List[List[int]], max_dv: Optional[int]=None) -> List[Union[int, str]]:
+def build_thru_float(packs: list[list[int]], max_dv: Optional[int]=None) -> list[int | str]:
     """
     Takes a pack [1,7,2] and converts it into fields used by a SET card.
     The values correspond to the first value, last value, and delta in the
@@ -343,8 +442,8 @@ def build_thru_float(packs: List[List[int]], max_dv: Optional[int]=None) -> List
 
     Parameters
     ----------
-    packs : List[pack]
-        pack : List[first, last, delta]
+    packs : list[pack]
+        pack : list[first, last, delta]
         first, last, delta are integers
     max_dv : int; default=None -> no limit
         integer defining the max allowable delta between two values

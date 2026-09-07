@@ -56,6 +56,65 @@ class TestSolids(unittest.TestCase):
         #"""checks nonlinear static solid material"""
         #pass
 
+    def test_solid_pcompls(self):
+        model = BDF(debug=False)
+        pid = 2
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        global_ply_ids = [10, 20, 30]
+        mids = [4, 5, 6]
+        thicknesses = [1., 2., 3.]
+        thetas = [0., 45., 90.]
+        model.add_pcompls(
+            pid, global_ply_ids, mids,
+            thicknesses, thetas, comment='pcompls')
+        for mid in mids:
+            model.add_mat1(mid, E, G, nu, rho=0.1)
+
+        model.add_grid(11, [0., 0., 0.])
+        model.add_grid(12, [1., 0., 0.])
+        model.add_grid(13, [1., 1., 0.])
+        model.add_grid(15, [0., 0., 2.])
+        nids = [11, 12, 13, 15]
+        model.add_ctetra(100, pid, nids, comment='ctetra')
+        model.cross_reference()
+        save_load_deck(model, run_mass_properties=False)
+
+    def test_psolids_op2(self):
+        model = BDF(debug=False)
+        mid = 10
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_psolid(
+            1, mid, cordm=0, integ=None,
+            stress=None, isop=None, #fctn=None,
+        )
+        model.add_psolid(
+            2, mid, cordm=0, integ='BUBBLE',
+            stress=None, isop='REDUCED', fctn='SMECH',
+        )
+        model.add_psolid(
+            3, mid, cordm=0, integ='TWO',
+            stress='GRID', isop='FULL', fctn='PFLUID',
+        )
+        model.add_psolid(
+            4, mid, cordm=0, integ='THREE',
+            stress='GAUSS', isop=2, fctn='FFLUID',
+        )
+        model.add_mat1(mid, E, G, nu, rho=0.1)
+
+        model.add_grid(11, [0., 0., 0.])
+        model.add_grid(12, [1., 0., 0.])
+        model.add_grid(13, [1., 1., 0.])
+        model.add_grid(15, [0., 0., 2.])
+        nids = [11, 12, 13, 15]
+        for pid in [1, 2, 3, 4]:
+            model.add_ctetra(100+pid, pid, nids, comment='ctetra')
+        model.cross_reference()
+        save_load_deck(model, run_mass_properties=False)
+
     def test_solid_01(self):
         """checks linear static solid material"""
         mid = 2
@@ -88,7 +147,6 @@ class TestSolids(unittest.TestCase):
             #['CPENTA',19, pid+1, 21, 22, 23, 24, 25, 26],
 
             # static
-            #['PIHEX', pid+1, mid],
             ['PSOLID', pid, mid, 0],
             ['MAT1', mid, 1.0, 2.0, 3.0, rho]
         ]
@@ -186,8 +244,6 @@ class TestSolids(unittest.TestCase):
 
             # Solids
             ['CHEXA', 7, pid, 11, 12, 13, 14, 15, 16, 17, 18],
-            ['CIHEX1', 17, pid+1, 11, 12, 13, 14, 15, 16, 17, 18],
-            ['CIHEX2', 18, pid+1, 11, 12, 13, 14, 15, 16, 17, 18],
             ['CTETRA', 8, pid, 11, 12, 13, 15],
 
             # Solid Nodes
@@ -201,7 +257,6 @@ class TestSolids(unittest.TestCase):
 
             # static
             ['PSOLID', pid, mid, 0],
-            ['PIHEX', pid+1, mid, 0],
             ['MAT1', mid, 1.0, 2.0, 3.0, rho],
             ['MATS1', mid, None, 'PLASTIC', 0.0, 1, 1, 100000., ],
         ]
@@ -258,8 +313,8 @@ class TestSolids(unittest.TestCase):
         mat = model.Material(mid)
         mat.E()
 
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
         save_load_deck(model)
@@ -299,11 +354,11 @@ class TestSolids(unittest.TestCase):
         end_checks(model)
 
         model.cross_reference()
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
-        save_load_deck(model)
+        save_load_deck(model, run_mass_properties=False)  # no PCOMPS support
 
     def test_solids_ctetra4_mat9(self):
         """tests a CTETRA4"""
@@ -328,8 +383,8 @@ class TestSolids(unittest.TestCase):
         end_checks(model)
 
         model.cross_reference()
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
     def test_solids_ctetra10(self):
@@ -369,8 +424,8 @@ class TestSolids(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
 
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
         save_load_deck(model)
@@ -515,7 +570,7 @@ class TestSolids(unittest.TestCase):
 
     def test_solids_cpenta(self):
         """tests a CPENTA6"""
-        model = BDF(debug=False)
+        model = BDF(debug=None)
         eid = 10
         pid = 20
         mid = 30
@@ -576,6 +631,27 @@ class TestSolids(unittest.TestCase):
         elem2.write_card(size=8)
         elem2.write_card(size=16)
         elem2.write_card_16(is_double=False)
+        model.pop_parse_errors()
+
+        eid10 = 20
+        pid10 = 10
+        mid10 = 10
+        bulk = 1.
+        c = 1.
+        rho = None
+        model.add_mat10(mid10, bulk, rho, c, ge=0.0, gamma=None,
+                        table_bulk=None, table_rho=None, table_ge=None, table_gamma=None,
+                        comment='')
+        model.add_psolid(pid10, mid10, fctn='PFLUID')
+        model.pop_parse_errors()
+        elem3 = model.add_chexa(eid10, pid10, nids, comment='chexa')
+        model.pop_parse_errors()
+
+        elem3.write_card(size=8)
+        elem3.write_card(size=16)
+        elem3.write_card_16(is_double=False)
+        model.cross_reference()
+        assert elem3.Mass() >= 0., elem3.Mass()
 
         end_checks(model)
         elem = model.elements[eid]

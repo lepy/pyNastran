@@ -21,17 +21,27 @@ All table cards are defined in this file.  This includes:
  * TABRNDG
 
 """
-from typing import Any
+from __future__ import annotations
+import warnings
+from typing import TYPE_CHECKING
 import numpy as np
 
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
 
+from pyNastran.bdf import MAX_INT
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, string, string_or_blank,
     double_or_string, double_or_blank, integer_or_string)
+from pyNastran.bdf.bdf_interface.assign_type_force import force_double_or_string
+from pyNastran.bdf.field_writer_8 import array_float_8
+
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
+
 
 def make_xy(table_id, table_type, xy):
     try:
@@ -57,17 +67,73 @@ def make_xy(table_id, table_type, xy):
 class Table(BaseCard):
     def __init__(self):
         BaseCard.__init__(self)
+        self.tid = -1
+        self.x = np.array([])
+        self.y = np.array([])
 
     #def parse_fields(self, xy, nrepeated, is_data=False):
         #self.table = TableObj(xy, nrepeated, is_data)
 
+    def plot(self, figure_id=None):
+        import matplotlib.pyplot as plt
+        fig = plt.figure(figure_id)
+        ax = fig.gca()
+        ax.suptitle(f'{self.type}: {self.tid}')
+        ax.plot(self.x, self.y)
+        ax.grid(True)
+        return fig, ax
+
+    def _write_header_fields(self) -> list:
+        """Returns the header fields (first line) for write_card_8.
+        Subclasses override this to provide the correct header."""
+        return self.repr_fields()[:8]
+
     def write_card(self, size: int=8, is_double: bool=False) -> str:
+        y_arr = np.asarray(self.y)
+        if size == 8 and not is_double and self.tid <= MAX_INT and y_arr.dtype.kind == 'f':
+            return self.write_card_8()
         card = self.repr_fields()
         if size == 8:
+            if self.tid > MAX_INT:
+                return self.comment + print_card_16(card)
             return self.comment + print_card_8(card)
         if is_double:
             return self.comment + print_card_double(card)
         return self.comment + print_card_16(card)
+
+    def write_card_8(self) -> str:
+        """Fast size=8 writer using vectorized float formatting for xy data."""
+        header = self._write_header_fields()
+        header_str = print_card_8(header).rstrip('\n')
+
+        x = np.asarray(self.x, dtype='float64')
+        y = np.asarray(self.y, dtype='float64')
+        x_str = array_float_8(x)
+        y_str = array_float_8(y)
+        npts = len(x)
+
+        lines = [header_str]
+        line = '\n        '
+        col = 0
+        for i in range(npts):
+            line += x_str[i]
+            col += 1
+            if col == 8:
+                lines.append(line)
+                line = '\n        '
+                col = 0
+            line += y_str[i]
+            col += 1
+            if col == 8:
+                lines.append(line)
+                line = '\n        '
+                col = 0
+        # ENDT
+        line += '    ENDT'
+        col += 1
+        lines.append(line)
+        result = ''.join(lines).rstrip(' ') + '\n'
+        return self.comment + result
 
     #cxy = np.array(self.tc.table.table)
     #fc = cxy[:, 0]
@@ -85,7 +151,7 @@ class DTABLE(BaseCard):
     @classmethod
     def _init_from_empty(cls):
         default_values = {'CAT' : 1}
-        return DTABLE(default_values, comment='')
+        return DTABLE(default_values)
 
     def _finalize_hdf5(self, encoding):
         """hdf5 helper function"""
@@ -93,7 +159,7 @@ class DTABLE(BaseCard):
         self.default_values = {key : value if not np.isnan(value) else None
                                for key, value in zip(keys, values)}
 
-    def __init__(self, default_values, comment=''):
+    def __init__(self, default_values, comment: str=''):
         """
         Creates a DTABLE card
 
@@ -119,7 +185,7 @@ class DTABLE(BaseCard):
         #print(self)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a DTABLE card from ``BDF.add_card(...)``
 
@@ -203,9 +269,11 @@ class TABLED1(Table):
         tid = 1
         x = [0., 1.]
         y = [0., 1.]
-        return TABLED1(tid, x, y, xaxis='LINEAR', yaxis='LINEAR', extrap=0, comment='')
+        return TABLED1(tid, x, y, xaxis='LINEAR', yaxis='LINEAR', extrap=0)
 
-    def __init__(self, tid, x, y, xaxis='LINEAR', yaxis='LINEAR', extrap=0, comment=''):
+    def __init__(self, tid: int, x: np.ndarray, y: np.ndarray,
+                 xaxis: str='LINEAR', yaxis: str='LINEAR',
+                 extrap: int=0, comment: str=''):
         """
         Creates a TABLED1, which is a dynamic load card that is applied
         by the DAREA card
@@ -214,9 +282,9 @@ class TABLED1(Table):
         ----------
         tid : int
             table id
-        x : List[float]
+        x : list[float]
             nvalues
-        y : List[float]
+        y : list[float]
             nvalues
         xaxis : str
             LINEAR, LOG
@@ -240,11 +308,11 @@ class TABLED1(Table):
         self.y = np.asarray(y, dtype='float64')
         self.xaxis = xaxis
         self.yaxis = yaxis
-        assert self.xaxis in ['LINEAR', 'LOG'], 'xaxis=%r' % (self.xaxis)
-        assert self.yaxis in ['LINEAR', 'LOG'], 'yaxis=%r' % (self.yaxis)
+        assert self.xaxis in ['LINEAR', 'LOG'], f'xaxis={self.xaxis!r}'
+        assert self.yaxis in ['LINEAR', 'LOG'], f'yaxis={self.yaxis!r}'
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLED1 card from ``BDF.add_card(...)``
 
@@ -257,24 +325,42 @@ class TABLED1(Table):
 
         """
         table_id = integer(card, 1, 'tid')
-        xaxis = string_or_blank(card, 2, 'xaxis', 'LINEAR')
-        yaxis = string_or_blank(card, 3, 'yaxis', 'LINEAR')
-        extrap = integer_or_blank(card, 4, 'yaxis', 0)
+        xaxis = string_or_blank(card, 2, 'xaxis', default='LINEAR')
+        yaxis = string_or_blank(card, 3, 'yaxis', default='LINEAR')
+        extrap = integer_or_blank(card, 4, 'extrap', default=0)
 
         x, y = read_table(card, table_id, 'TABLED1')
         return TABLED1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
-        table_id = data[0]
-        xaxis = _map_axis(data[1])
-        yaxis = _map_axis(data[2])
-        xy = data[3:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
-        return TABLED1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, comment=comment)
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a TABLED1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        xaxis = string_or_blank(card, 2, 'xaxis', default='LINEAR')
+        yaxis = string_or_blank(card, 3, 'yaxis', default='LINEAR')
+        extrap = integer_or_blank(card, 4, 'yaxis', default=0)
+
+        x, y = read_table_lax(card, table_id, 'TABLED1')
+        return TABLED1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
+        table_id, extrap, xcode, ycode, xs, ys = data
+        xaxis = _map_axis(xcode)
+        yaxis = _map_axis(ycode)
+        x = np.array(xs, dtype='float64')
+        y = np.array(ys, dtype='float64')
+        return TABLED1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, extrap=extrap, comment=comment)
 
     def raw_fields(self):
         xy = []
@@ -353,9 +439,11 @@ class TABLED2(Table):
         x1 = 1.
         x = [0., 1.]
         y = [0., 1.]
-        return TABLED2(tid, x1, x, y, extrap=0, comment='')
+        return TABLED2(tid, x1, x, y, extrap=0)
 
-    def __init__(self, tid, x1, x, y, extrap=0, comment=''):
+    def __init__(self, tid: int, x1: float,
+                 x: np.ndarray, y: np.ndarray,
+                 extrap: int=0, comment: str=''):
         """
         Parameters
         ----------
@@ -363,9 +451,9 @@ class TABLED2(Table):
             table id
         x1 : float
             y = yT(x - x1)
-        x : List[float]
+        x : list[float]
             the x values
-        y : List[float]
+        y : list[float]
             the y values
         extrap : int; default=0
             Extrapolation method:
@@ -386,7 +474,7 @@ class TABLED2(Table):
         self.y = np.asarray(y, dtype='float64')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLED2 card from ``BDF.add_card(...)``
 
@@ -399,13 +487,32 @@ class TABLED2(Table):
 
         """
         table_id = integer(card, 1, 'tid')
-        x1 = double(card, 2, 'x1')
+        x1 = double_or_blank(card, 2, 'x1', default=0.0)
         extrap = integer_or_blank(card, 3, 'extrap', default=0)
         x, y = read_table(card, table_id, 'TABLED2')
         return TABLED2(table_id, x1, x, y, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a TABLED2 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        x1 = double_or_blank(card, 2, 'x1', default=0.0)
+        extrap = integer_or_blank(card, 3, 'extrap', default=0)
+        x, y = read_table_lax(card, table_id, 'TABLED2')
+        return TABLED2(table_id, x1, x, y, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         table_id = data[0]
         x1 = data[1]
         xy = data[2:]
@@ -478,9 +585,11 @@ class TABLED3(Table):
         x2 = 2.
         x = [0., 1.]
         y = [0., 1.]
-        return TABLED3(tid, x1, x2, x, y, extrap=0, comment='')
+        return TABLED3(tid, x1, x2, x, y, extrap=0)
 
-    def __init__(self, tid, x1, x2, x, y, extrap=0, comment=''):
+    def __init__(self, tid: int, x1: float, x2: float,
+                 x: np.ndarray, y: np.ndarray,
+                 extrap: int=0, comment: str=''):
         """
         Parameters
         ----------
@@ -490,9 +599,9 @@ class TABLED3(Table):
             y = yT(x - x1)
         x2 : ???
             ???
-        x : List[float]
+        x : list[float]
             the x values
-        y : List[float]
+        y : list[float]
             the y values
         extrap : int; default=0
             Extrapolation method:
@@ -515,7 +624,7 @@ class TABLED3(Table):
         assert self.x2 != 0.0
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLED3 card from ``BDF.add_card(...)``
 
@@ -535,16 +644,34 @@ class TABLED3(Table):
         return TABLED3(table_id, x1, x2, x, y, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABLED3 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        x1 = double(card, 2, 'x1')
+        x2 = double(card, 3, 'x2')
+        extrap = integer_or_blank(card, 4, 'extrap', default=0)
+        x, y = read_table_lax(card, table_id, 'TABLED3')
+        return TABLED3(table_id, x1, x2, x, y, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         table_id = data[0]
         x1 = data[1]
         x2 = data[2]
-        xy = data[3:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
-        return TABLED3(table_id, x1, x2, x, y, comment=comment)
+        extrap = data[3]
+        x = np.array(data[4], dtype='float64')
+        y = np.array(data[5], dtype='float64')
+        return TABLED3(table_id, x1, x2, x, y, extrap=extrap, comment=comment)
 
     def raw_fields(self):
         xy = []
@@ -582,9 +709,11 @@ class TABLED4(Table):
         x3 = 1.
         x4 = 1.
         a = [1., 2.]
-        return TABLED4(tid, x1, x2, x3, x4, a, comment='')
+        return TABLED4(tid, x1, x2, x3, x4, a)
 
-    def __init__(self, tid, x1, x2, x3, x4, a, comment=''):
+    def __init__(self, tid: int,
+                 x1: float, x2: float, x3: float, x4: float,
+                 a: list[float], comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -599,7 +728,7 @@ class TABLED4(Table):
         assert self.x3 <= self.x4, 'x3=%s x4=%s\n%s' % (self.x3, self.x4, str(self))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLED4 card from ``BDF.add_card(...)``
 
@@ -625,20 +754,15 @@ class TABLED4(Table):
         a = []
         j = 0
         for i in range(9, nfields):
-            ai = double(card, i, 'a%i' % (j))
+            ai = double(card, i, f'a{j:d}')
             a.append(ai)
             j += 1
         string(card, nfields, 'ENDT')
         return TABLED4(table_id, x1, x2, x3, x4, a, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
-        table_id = data[0]
-        x1 = data[1]
-        x2 = data[2]
-        x3 = data[3]
-        x4 = data[4]
-        a = data[5:]
+    def add_op2_data(cls, data, comment: str=''):
+        table_id, x1, x2, x3, x4, a = data
         return TABLED4(table_id, x1, x2, x3, x4, a, comment=comment)
 
     def raw_fields(self):
@@ -682,7 +806,7 @@ class TABLED5(Table):
 
     """
     type = 'TABLED5'
-    def __init__(self, tid, xs, table_ids, comment=''):
+    def __init__(self, tid, xs, table_ids, comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -691,7 +815,7 @@ class TABLED5(Table):
         self.table_ids = table_ids
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLED5 card from ``BDF.add_card(...)``
 
@@ -730,7 +854,7 @@ class TABLED5(Table):
         return TABLED5(table_id, xs, table_ids, comment=comment)
 
     #@classmethod
-    #def add_op2_data(cls, data, comment=''):
+    #def add_op2_data(cls, data, comment: str=''):
         #table_id = data[0]
         #x1 = data[1]
         #x2 = data[2]
@@ -781,11 +905,13 @@ class TABDMP1(Table):
     @classmethod
     def _init_from_empty(cls):
         tid = 1
-        x = [0., 1.]
-        y = [0., 1.]
-        return TABDMP1(tid, x, y, Type='G', comment='')
+        x = np.array([0., 1.])
+        y = np.array([0., 1.])
+        return TABDMP1(tid, x, y, Type='G')
 
-    def __init__(self, tid: int, x: Any, y: Any, Type: str='G', comment: str='') -> None:
+    def __init__(self, tid: int,
+                 x: np.ndarray, y: np.ndarray,
+                 Type: str='G', comment: str='') -> None:
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -796,7 +922,7 @@ class TABDMP1(Table):
         assert self.Type in ['G', 'CRIT', 'Q'], 'Type=%r' % self.Type
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABDMP1 card from ``BDF.add_card(...)``
 
@@ -809,12 +935,30 @@ class TABDMP1(Table):
 
         """
         table_id = integer(card, 1, 'tid')
-        Type = string_or_blank(card, 2, 'Type', 'G')
+        Type = string_or_blank(card, 2, 'Type', default='G')
         x, y = read_table(card, table_id, 'TABDMP1')
         return TABDMP1(table_id, x, y, Type=Type, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a TABDMP1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        Type = string_or_blank(card, 2, 'Type', default='G')
+        x, y = read_table_lax(card, table_id, 'TABDMP1')
+        return TABDMP1(table_id, x, y, Type=Type, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         table_id = data[0]
         unused_x1 = data[1]
         Type = data[2]
@@ -834,6 +978,55 @@ class TABDMP1(Table):
 
     def repr_fields(self):
         return self.raw_fields()
+
+    def interpolate(self, freq_hz: float) -> float:
+        """Interpolate damping at a given frequency.
+
+        Returns the structural damping coefficient g (hysteretic).
+        Converts from CRIT (ζ) or Q as needed:
+            - Type='G': returns g directly
+            - Type='CRIT': returns g = 2*ζ
+            - Type='Q': returns g = 1/Q
+
+        Parameters
+        ----------
+        freq_hz : float
+            Frequency [Hz] at which to interpolate.
+
+        Returns
+        -------
+        g : float
+            Structural damping coefficient at freq_hz.
+        """
+        val = float(np.interp(freq_hz, self.x, self.y))
+        if self.Type == 'CRIT':
+            return 2.0 * val
+        elif self.Type == 'Q':
+            return 1.0 / val if val > 0 else 0.0
+        return val
+
+    def interpolate_array(self, freqs_hz) -> np.ndarray:
+        """Interpolate damping at an array of frequencies.
+
+        Returns structural damping coefficient g at each frequency.
+
+        Parameters
+        ----------
+        freqs_hz : array-like
+            Frequencies [Hz].
+
+        Returns
+        -------
+        g : ndarray
+            Structural damping coefficients.
+        """
+        freqs_hz = np.asarray(freqs_hz, dtype='float64')
+        vals = np.interp(freqs_hz, self.x, self.y)
+        if self.Type == 'CRIT':
+            return 2.0 * vals
+        elif self.Type == 'Q':
+            return np.where(vals > 0, 1.0 / vals, 0.0)
+        return vals
 
 
 class TABLEM1(Table):
@@ -873,9 +1066,36 @@ class TABLEM1(Table):
         tid = 1
         x = [0., 1.]
         y = [0., 1.]
-        return TABLEM1(tid, x, y, xaxis='LINEAR', yaxis='LINEAR', comment='')
+        return TABLEM1(tid, x, y, xaxis='LINEAR', yaxis='LINEAR')
 
-    def __init__(self, tid, x, y, xaxis='LINEAR', yaxis='LINEAR', comment=''):
+    def __init__(self, tid: int, x, y,
+                 xaxis: str='LINEAR', yaxis: str='LINEAR',
+                 extrap: int=0, comment: str=''):
+        """
+        Creates a TABLEM1, which is a dynamic load card that is applied
+        by the DAREA card
+
+        Parameters
+        ----------
+        tid : int
+            table id
+        x : list[float]
+            nvalues
+        y : list[float]
+            nvalues
+        xaxis : str
+            LINEAR, LOG
+        yaxis : str
+            LINEAR, LOG
+        extrap : int; default=0
+            Extrapolation method:
+                0 : linear
+                1 : constant
+            .. note:: this is NX specific
+        comment : str; default=''
+            a comment for the card
+
+        """
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -884,9 +1104,30 @@ class TABLEM1(Table):
         self.yaxis = yaxis # linear/log
         self.x = np.asarray(x, dtype='float64')
         self.y = np.asarray(y, dtype='float64')
+        self.extrap = extrap
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a TABLEM1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        xaxis = string_or_blank(card, 2, 'xaxis', default='LINEAR')
+        yaxis = string_or_blank(card, 3, 'yaxis', default='LINEAR')
+        extrap = integer_or_blank(card, 4, 'extrap', default=0)
+        x, y = read_table(card, table_id, 'TABLEM1')
+        return TABLEM1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEM1 card from ``BDF.add_card(...)``
 
@@ -901,34 +1142,35 @@ class TABLEM1(Table):
         table_id = integer(card, 1, 'tid')
         xaxis = string_or_blank(card, 2, 'xaxis', 'LINEAR')
         yaxis = string_or_blank(card, 3, 'yaxis', 'LINEAR')
-        x, y = read_table(card, table_id, 'TABLEM1')
-        return TABLEM1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, comment=comment)
+        extrap = integer_or_blank(card, 4, 'extrap', default=0)
+        x, y = read_table_lax(card, table_id, 'TABLEM1')
+        return TABLEM1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
-        table_id = data[0]
-        xy = data[1:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
-        return TABLEM1(table_id, x, y, comment=comment)
+    def add_op2_data(cls, data, comment: str=''):
+        table_id, extrap, xcode, ycode, x, y = data
+        xaxis = _map_axis(xcode)
+        yaxis = _map_axis(ycode)
+        x = np.array(x, dtype='float64')
+        y = np.array(y, dtype='float64')
+        return TABLEM1(table_id, x, y, extrap=extrap, comment=comment)
 
     def raw_fields(self):
         xy = []
         for xi, yi in zip(self.x, self.y):
             xy.extend([xi, yi])
-        list_fields = ['TABLEM1', self.tid, self.xaxis, self.yaxis, None, None,
+        list_fields = ['TABLEM1', self.tid, self.xaxis, self.yaxis, self.extrap, None,
                        None, None, None] + xy + ['ENDT']
         return list_fields
 
     def repr_fields(self):
         xaxis = set_blank_if_default(self.xaxis, 'LINEAR')
         yaxis = set_blank_if_default(self.yaxis, 'LINEAR')
+        extrap = set_blank_if_default(self.extrap, 0)
         xy = []
         for xi, yi in zip(self.x, self.y):
             xy.extend([xi, yi])
-        list_fields = ['TABLEM1', self.tid, xaxis, yaxis, None, None,
+        list_fields = ['TABLEM1', self.tid, xaxis, yaxis, extrap, None,
                        None, None, None] + xy + ['ENDT']
         return list_fields
 
@@ -958,9 +1200,9 @@ class TABLEM2(Table):
         x1 = 1.
         x = [0., 1.]
         y = [0., 1.]
-        return TABLEM2(tid, x1, x, y, extrap=0, comment='')
+        return TABLEM2(tid, x1, x, y, extrap=0)
 
-    def __init__(self, tid, x1, x, y, extrap=0, comment=''):
+    def __init__(self, tid, x1, x, y, extrap=0, comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -971,7 +1213,7 @@ class TABLEM2(Table):
         self.y = np.asarray(y, dtype='float64')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEM2 card from ``BDF.add_card(...)``
 
@@ -987,13 +1229,35 @@ class TABLEM2(Table):
         # defined in MSC as an integer and used as a float...int > 0
         # defined in NX as a float; real
         # no default given in either, but from context, let's assume 0.0
-        x1 = double_or_blank(card, 2, 'x1', 0.0)
+        x1 = double_or_blank(card, 2, 'x1', default=0.0)
         extrap = integer_or_blank(card, 3, 'EXTRAP', default=0)
         x, y = read_table(card, table_id, 'TABLEM2')
         return TABLEM2(table_id, x1, x, y, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABLEM2 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+        """
+        table_id = integer(card, 1, 'tid')
+
+        # defined in MSC as an integer and used as a float...int > 0
+        # defined in NX as a float; real
+        # no default given in either, but from context, let's assume 0.0
+        x1 = double_or_blank(card, 2, 'x1', default=0.0)
+        extrap = integer_or_blank(card, 3, 'EXTRAP', default=0)
+        x, y = read_table_lax(card, table_id, 'TABLEM2')
+        return TABLEM2(table_id, x1, x, y, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         table_id = data[0]
         x1 = data[1]
         xy = data[2:]
@@ -1047,9 +1311,9 @@ class TABLEM3(Table):
         x2 = 2.
         x = [0., 1.]
         y = [0., 1.]
-        return TABLEM3(tid, x1, x2, x, y, extrap=0, comment='')
+        return TABLEM3(tid, x1, x2, x, y, extrap=0)
 
-    def __init__(self, tid, x1, x2, x, y, extrap=0, comment=''):
+    def __init__(self, tid, x1, x2, x, y, extrap=0, comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -1062,7 +1326,7 @@ class TABLEM3(Table):
         assert self.x2 != 0.0
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEM3 card from ``BDF.add_card(...)``
 
@@ -1082,16 +1346,34 @@ class TABLEM3(Table):
         return TABLEM3(table_id, x1, x2, x, y, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABLEM3 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        x1 = double(card, 2, 'x1')
+        x2 = double(card, 3, 'x2')
+        extrap = integer_or_blank(card, 4, 'extrap', default=0)
+        x, y = read_table_lax(card, table_id, 'TABLEM3')
+        return TABLEM3(table_id, x1, x2, x, y, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         table_id = data[0]
         x1 = data[1]
         x2 = data[2]
-        xy = data[3:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
-        return TABLEM3(table_id, x1, x2, x, y, comment=comment)
+        extrap = data[3]
+        x = np.array(data[4], dtype='float64')
+        y = np.array(data[5], dtype='float64')
+        return TABLEM3(table_id, x1, x2, x, y, extrap=extrap, comment=comment)
 
     def raw_fields(self):
         xy = []
@@ -1135,9 +1417,9 @@ class TABLEM4(Table):
         x3 = 1.
         x4 = 2.
         a = [1., 2.]
-        return TABLEM4(tid, x1, x2, x3, x4, a, comment='')
+        return TABLEM4(tid, x1, x2, x3, x4, a)
 
-    def __init__(self, tid, x1, x2, x3, x4, a, comment=''):
+    def __init__(self, tid, x1, x2, x3, x4, a, comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -1151,7 +1433,7 @@ class TABLEM4(Table):
         assert self.x3 <= self.x4, 'x3=%s x4=%s\n%s' % (self.x3, self.x4, str(self))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEM4 card from ``BDF.add_card(...)``
 
@@ -1177,31 +1459,26 @@ class TABLEM4(Table):
         a = []
         j = 0
         for i in range(9, nfields):
-            ai = double_or_blank(card, i, 'a%i' % (j), 0.0)
+            ai = double_or_blank(card, i, f'a{j:d}', 0.0)
             a.append(ai)
             j += 1
         string(card, nfields, 'ENDT')
         return TABLEM4(table_id, x1, x2, x3, x4, a, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TABLEM4 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
-        table_id = data[0]
-        x1 = data[1]
-        x2 = data[2]
-        x3 = data[3]
-        x4 = data[4]
-        a = data[3:]
+        table_id, x1, x2, x3, x4, a = data
         return TABLEM4(table_id, x1, x2, x3, x4, a, comment=comment)
 
     def raw_fields(self):
@@ -1234,9 +1511,9 @@ class TABLES1(Table):
         tid = 1
         x = [0., 1.]
         y = [0., 1.]
-        return TABLES1(tid, x, y, Type=1, comment='')
+        return TABLES1(tid, x, y, Type=1)
 
-    def __init__(self, tid, x, y, Type=1, comment=''):
+    def __init__(self, tid, x, y, Type=1, comment: str=''):
         """
         Adds a TABLES1 card, which defines a stress dependent material
 
@@ -1250,7 +1527,7 @@ class TABLES1(Table):
             2 - Cauchy (true) stress vs. plastic true strain (MSC only)
             Type is MSC-specific and was added somewhere between
             2006 and 2016.
-        x, y : List[float]
+        x, y : list[float]
             table values
         comment : str; default=''
             a comment for the card
@@ -1266,7 +1543,7 @@ class TABLES1(Table):
         assert self.Type in [1, 2], 'TABLES1 Type=%s' % self.Type
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLES1 card from ``BDF.add_card(...)``
 
@@ -1284,13 +1561,31 @@ class TABLES1(Table):
         return TABLES1(table_id, x, y, Type=Type, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABLES1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        Type = integer_or_blank(card, 2, 'Type', 1)
+        x, y = read_table_lax(card, table_id, 'TABLES1')
+        return TABLES1(table_id, x, y, Type=Type, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TABLES1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1326,30 +1621,34 @@ class TABLES1(Table):
 
 class TABLEST(Table):
     """
-    +---------+-------+-------+-------+--------+------+------+------+------+
-    |    1    |   2   |   3   |   4   |    5   |  6  |   7   |  8   |   9  |
-    +=========+=======+=======+=======+========+=====+=======+======+======+
-    | TABLEST |  TID  |       |       |        |      |      |      |      |
-    +---------+-------+-------+-------+--------+------+------+------+------+
-    |         |   x1  |  y1   |   x2  |   y2   |  x3  |  y3  | etc. | ENDT |
-    +---------+-------+-------+-------+--------+------+------+------+------+
-    | TABLEST |   32  |       |       |        |      |      |      |      |
-    +---------+-------+-------+-------+--------+------+------+------+------+
-    |         | 150.0 |  10.0 | 175.0 |  20.   | ENDT |      |      |      |
-    +---------+-------+-------+-------+--------+------+------+------+------+
+    +---------+-------+--------+-------+--------+------+------+------+------+
+    |    1    |   2   |    3   |   4   |    5   |  6  |   7   |  8   |   9  |
+    +=========+=======+========+=======+========+=====+=======+======+======+
+    | TABLEST |  TID  | EXTRAP |       |        |      |      |      |      |
+    +---------+-------+--------+-------+--------+------+------+------+------+
+    |         |   x1  |   y1   |   x2  |   y2   |  x3  |  y3  | etc. | ENDT |
+    +---------+-------+--------+-------+--------+------+------+------+------+
+    | TABLEST |   32  |        |       |        |      |      |      |      |
+    +---------+-------+--------+-------+--------+------+------+------+------+
+    |         | 150.0 |  10    | 175.0 |   20   | ENDT |      |      |      |
+    +---------+-------+--------+-------+--------+------+------+------+------+
+
+    Extrap is an NX specific flag
     """
     type = 'TABLEST'
 
-    def __init__(self, tid, x, y, comment=''):
+    def __init__(self, tid: int, x, y, extrap: int=0, comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
         self.tid = tid
         self.x = np.asarray(x, dtype='float64')
-        self.y = np.asarray(y, dtype='float64')
+        self.y = np.asarray(y, dtype='int64')
+        self.extrap = extrap
+        self.yref = []
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEST card from ``BDF.add_card(...)``
 
@@ -1362,35 +1661,59 @@ class TABLEST(Table):
 
         """
         table_id = integer(card, 1, 'tid')
-        x, y = read_table(card, table_id, 'TABLEST')
-        return TABLEST(table_id, x, y, comment=comment)
+        x, y = read_tablest(card, table_id, 'TABLEST')
+        extrap = integer_or_blank(card, 2, 'extrap', default=0)
+        return TABLEST(table_id, x, y, extrap=extrap, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABLEST card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        extrap = integer_or_blank(card, 2, 'extrap', default=0)
+        x, y = read_table_lax(card, table_id, 'TABLEST')
+        return TABLEST(table_id, x, y, extrap=extrap, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TABLEST card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
         table_id = data[0]
-        xy = data[1:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
-        return TABLEST(table_id, x, y, comment=comment)
+        extrap = data[1]
+        x = np.array(data[2], dtype='float64')
+        y = np.array(data[3], dtype='int64')
+        return TABLEST(table_id, x, y, extrap=extrap, comment=comment)
+
+    def cross_reference(self, model: BDF) -> None:
+        self.yref = []
+        for tid in self.y:
+            table = model.Table(tid, msg='')
+            self.yref.append(table)
 
     def raw_fields(self):
         xy = []
         for xi, yi in zip(self.x, self.y):
             xy.extend([xi, yi])
-        list_fields = ['TABLEST', self.tid, None, None, None, None,
+        extrap = None if self.extrap == 0 else self.extrap
+        list_fields = ['TABLEST', self.tid, extrap, None, None, None,
                        None, None, None] + xy + ['ENDT']
         return list_fields
 
@@ -1419,9 +1742,9 @@ class TABLEH1(Table):
         tid = 1
         x = [0., 1.]
         y = [0., 1.]
-        return TABLEH1(tid, x, y, comment='')
+        return TABLEH1(tid, x, y)
 
-    def __init__(self, tid, x, y, comment=''):
+    def __init__(self, tid, x, y, comment: str=''):
         """
         Adds a TABLEH1 card, which defines convection heat transfer coefficient.
         It's referenced by a TABLEHT.
@@ -1430,7 +1753,7 @@ class TABLEH1(Table):
         ----------
         tid : int
             Table ID
-        x, y : List[float]
+        x, y : list[float]
             table values
         comment : str; default=''
             a comment for the card
@@ -1444,7 +1767,7 @@ class TABLEH1(Table):
         self.y = np.asarray(y, dtype='float64')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEH1 card from ``BDF.add_card(...)``
 
@@ -1461,24 +1784,43 @@ class TABLEH1(Table):
         return TABLEH1(table_id, x, y, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABLEH1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        x, y = read_table_lax(card, table_id, 'TABLEH1')
+        return TABLEH1(table_id, x, y, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TABLEH1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
-        table_id = data[0]
-        xy = data[1:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
+        table_id, extrap, xcode, ycode, xs, ys = data
+        assert extrap == 0, extrap
+        assert xcode == 0, xcode
+        assert ycode == 0, ycode
+        #xaxis = _map_axis(xcode)
+        #yaxis = _map_axis(ycode)
+        x = np.array(xs, dtype='float64')
+        y = np.array(ys, dtype='float64')
         return TABLEH1(table_id, x, y, comment=comment)
 
     def raw_fields(self):
@@ -1519,9 +1861,9 @@ class TABLEHT(Table):
         tid = 1
         x = [0., 1.]
         y = [0., 1.]
-        return TABLEHT(tid, x, y, comment='')
+        return TABLEHT(tid, x, y)
 
-    def __init__(self, tid: int, x, y, comment=''):
+    def __init__(self, tid: int, x, y, comment: str=''):
         """
         Adds a TABLEHT card, which a function of two variables for
         convection heat transfer coefficient.
@@ -1530,7 +1872,7 @@ class TABLEHT(Table):
         ----------
         tid : int
             Table ID
-        x, y : List[float]
+        x, y : list[float]
             table values
         comment : str; default=''
             a comment for the card
@@ -1544,7 +1886,7 @@ class TABLEHT(Table):
         self.y = np.asarray(y, dtype='int32')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABLEHT card from ``BDF.add_card(...)``
 
@@ -1561,24 +1903,19 @@ class TABLEHT(Table):
         return TABLEHT(table_id, x, y, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TABLEHT card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
-        table_id = data[0]
-        xy = data[1:]
-        xy = np.array(xy, dtype='float64')
-        xy = xy.reshape(xy.size // 2, 2)
-        x = xy[:, 0]
-        y = xy[:, 1]
+        table_id, extrap, code_x, code_y, x, y = data
         return TABLEHT(table_id, x, y, comment=comment)
 
     def raw_fields(self):
@@ -1608,9 +1945,9 @@ class TABRND1(Table):
         tid = 1
         x = [0., 1.]
         y = [0., 1.]
-        return TABRND1(tid, x, y, xaxis='LINEAR', yaxis='LINEAR', comment='')
+        return TABRND1(tid, x, y, xaxis='LINEAR', yaxis='LINEAR')
 
-    def __init__(self, tid, x, y, xaxis='LINEAR', yaxis='LINEAR', comment=''):
+    def __init__(self, tid, x, y, xaxis='LINEAR', yaxis='LINEAR', comment: str=''):
         Table.__init__(self)
         if comment:
             self.comment = comment
@@ -1620,11 +1957,11 @@ class TABRND1(Table):
         self.y = np.asarray(y, dtype='float64')
         self.xaxis = xaxis
         self.yaxis = yaxis
-        assert self.xaxis in ['LINEAR', 'LOG'], 'xaxis=%r' % (self.xaxis)
-        assert self.yaxis in ['LINEAR', 'LOG'], 'yaxis=%r' % (self.yaxis)
+        assert self.xaxis in ['LINEAR', 'LOG'], f'xaxis={self.xaxis!r}'
+        assert self.yaxis in ['LINEAR', 'LOG'], f'yaxis={self.yaxis!r}'
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABRND1 card from ``BDF.add_card(...)``
 
@@ -1643,13 +1980,32 @@ class TABRND1(Table):
         return TABRND1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card, comment: str=''):
+        """
+        Adds a TABRND1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        table_id = integer(card, 1, 'tid')
+        xaxis = string_or_blank(card, 2, 'xaxis', 'LINEAR')
+        yaxis = string_or_blank(card, 3, 'yaxis', 'LINEAR')
+        x, y = read_table_lax(card, table_id, 'TABRND1')
+        return TABRND1(table_id, x, y, xaxis=xaxis, yaxis=yaxis, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a TABRND1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1702,9 +2058,10 @@ class TABRNDG(Table):
         Type = 1
         LU = 1.
         WG = 1.
-        return TABRNDG(tid, Type, LU, WG, comment='')
+        return TABRNDG(tid, Type, LU, WG)
 
-    def __init__(self, tid, Type, LU, WG, comment=''):
+    def __init__(self, tid: int, psd_type: int,
+                 LU: float, WG: float, comment: str=''):
         """
         Creates a TABRNDG card
 
@@ -1712,7 +2069,7 @@ class TABRNDG(Table):
         ----------
         tid : int
             table id
-        Type : int
+        psd_type : int
            PSD type
            1 : von Karman
            2 : Dryden
@@ -1730,16 +2087,16 @@ class TABRNDG(Table):
         #: Table identification number. (Integer >0)
         self.tid = tid
         #: PSD Type: 1. von Karman; 2. Dryden
-        self.Type = Type
+        self.psd_type = psd_type
         #: Scale of turbulence divided by velocity (units of time; Real)
         self.LU = LU
         #: Root-mean-square gust velocity. (Real)
         self.WG = WG
-        assert self.Type in [1, 2], ('Type must be 1 or 2.  '
-                                     'Type=%s' % (self.Type))
+        assert self.psd_type in [1, 2], ('psd_type must be 1 or 2.  '
+                                     f'psd_type={self.psd_type}')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a TABRNDG card from ``BDF.add_card(...)``
 
@@ -1752,29 +2109,29 @@ class TABRNDG(Table):
 
         """
         table_id = integer(card, 1, 'tid')
-        Type = integer(card, 2, 'Type')
+        psd_type = integer(card, 2, 'Type')
         LU = double(card, 3, 'LU')
         WG = double(card, 4, 'WG')
-        return TABRNDG(table_id, Type, LU, WG, comment=comment)
+        return TABRNDG(table_id, psd_type, LU, WG, comment=comment)
 
     def raw_fields(self):
-        list_fields = ['TABRNDG', self.tid, self.Type, self.LU, self.WG]
+        list_fields = ['TABRNDG', self.tid, self.psd_type, self.LU, self.WG]
         return list_fields
 
     def repr_fields(self):
         return self.raw_fields()
 
 
-def _map_axis(axis):
+def _map_axis(axis: int) -> str:
     if axis == 0:
         axis_type = 'LINEAR'
     elif axis == 1:
         axis_type = 'LOG'
     else: # pragma: no cover
-        raise ValueError('axis=%r' % axis)
+        raise ValueError(f'axis={axis!r}')
     return axis_type
 
-def read_table(card, table_id, table_type):
+def read_table(card: BDFCard, table_id: int, table_type: str) -> tuple[np.ndarray, np.ndarray]:
     """common method for reading tables that handles SKIP"""
     nfields = len(card) - 1
     nterms = (nfields - 9) // 2
@@ -1784,10 +2141,56 @@ def read_table(card, table_id, table_type):
     xy = []
     for i in range(nterms):
         n = 9 + i * 2
-        if card.field(n) == 'ENDT':
+        if card.field(n) == 'ENDT' or card.field(n+1) == 'ENDT':
             break
         xi = double_or_string(card, n, 'x' + str(i + 1))
         yi = double_or_string(card, n + 1, 'y' + str(i + 1))
+        if xi == 'SKIP' or yi == 'SKIP':
+            continue
+        xy.append([xi, yi])
+    x, y = make_xy(table_id, table_type, xy)
+    return x, y
+
+def read_table_lax(card: BDFCard, table_id: int,
+                   table_type: str,
+                   require_endt: bool=True) -> tuple[np.ndarray, np.ndarray]:
+    """common method for reading tables that handles SKIP"""
+    nfields = len(card) - 1
+    nterms = (nfields - 9) // 2
+    if nterms < 0:
+        raise SyntaxError('%r card is too short' % table_type)
+
+    xy = []
+    for i in range(nterms):
+        n = 9 + i * 2
+        if card.field(n) == 'ENDT' or card.field(n+1) == 'ENDT':
+            break
+        xi = force_double_or_string(card, n, 'x' + str(i + 1))
+        yi = force_double_or_string(card, n + 1, 'y' + str(i + 1))
+        if xi == 'SKIP' or yi == 'SKIP':
+            continue
+        xy.append([xi, yi])
+
+    endt_value = card.field(nfields).strip()
+    if endt_value.upper() != 'ENDT':
+        warnings.warn(f'expected ENDT; found {endt_value!r}')
+    x, y = make_xy(table_id, table_type, xy)
+    return x, y
+
+def read_tablest(card: BDFCard, table_id: int, table_type: str) -> tuple[np.ndarray, np.ndarray]:
+    """common method for reading tables that handles SKIP"""
+    nfields = len(card) - 1
+    nterms = (nfields - 9) // 2
+    if nterms < 0:
+        raise SyntaxError('%r card is too short' % table_type)
+
+    xy = []
+    for i in range(nterms):
+        n = 9 + i * 2
+        if card.field(n) == 'ENDT' or card.field(n+1) == 'ENDT':
+            break
+        xi = double_or_string(card, n, 'x' + str(i + 1))
+        yi = integer_or_string(card, n + 1, 'y' + str(i + 1))
         if xi == 'SKIP' or yi == 'SKIP':
             continue
         xy.append([xi, yi])
@@ -1795,7 +2198,8 @@ def read_table(card, table_id, table_type):
     x, y = make_xy(table_id, table_type, xy)
     return x, y
 
-def read_table_float_int(card, table_id, table_type):
+def read_table_float_int(card: BDFCard, table_id: int,
+                         table_type: str) -> tuple[np.ndarray, np.ndarray]:
     """common method for reading tables that handles SKIP"""
     nfields = len(card) - 1
     nterms = (nfields - 9) // 2
@@ -1815,3 +2219,6 @@ def read_table_float_int(card, table_id, table_type):
     string(card, nfields, 'ENDT')
     x, y = make_xy(table_id, table_type, xy)
     return x, y
+
+TABLEDs = TABLED1 | TABLED2 | TABLED3 | TABLED4 | TABLED5
+TABLEMs = TABLEM1 | TABLEM2 | TABLEM3 | TABLEM4

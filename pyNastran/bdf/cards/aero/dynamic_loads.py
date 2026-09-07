@@ -13,20 +13,27 @@ All cards are BaseCard objects.
 """
 from __future__ import annotations
 from itertools import count
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.cards.base_card import BaseCard
-from pyNastran.utils.atmosphere import make_flfacts_alt_sweep, make_flfacts_mach_sweep, atm_density, _velocity_factor
+from pyNastran.utils.atmosphere import (
+    make_flfacts_eas_sweep_constant_alt,
+    make_flfacts_eas_sweep_constant_mach,
+    make_flfacts_alt_sweep_constant_mach,
+    make_flfacts_mach_sweep_constant_alt,
+    make_flfacts_tas_sweep_constant_alt,
+    make_flfacts_alt_sweep_constant_tas,
+    atm_density, _velocity_factor)
 from pyNastran.bdf.bdf_interface.assign_type import (
-    integer, integer_or_blank, double, double_or_blank, string,
-    fields, string_or_blank, double_string_or_blank, interpret_value)
-from pyNastran.bdf.cards.utils import wipe_empty_fields
+    integer, integer_or_blank, double, double_or_blank,
+    fields, string_or_blank, double_string_or_blank)
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 class Aero(BaseCard):
@@ -52,37 +59,37 @@ class Aero(BaseCard):
         self.acsid = None
         self.acsid_ref = None
 
-    def Acsid(self):
+    def Acsid(self) -> int:
         try:
             return self.acsid_ref.cid
         except AttributeError:
             return self.acsid
 
     @property
-    def is_symmetric_xy(self):
+    def is_symmetric_xy(self) -> bool:
         if self.sym_xy == 1:
             return True
         return False
 
     @property
-    def is_symmetric_xz(self):
+    def is_symmetric_xz(self) -> bool:
         if self.sym_xz == 1:
             return True
         return False
 
     @property
-    def is_anti_symmetric_xy(self):
+    def is_anti_symmetric_xy(self) -> bool:
         if self.sym_xy == -1:
             return True
         return False
 
     @property
-    def is_anti_symmetric_xz(self):
+    def is_anti_symmetric_xz(self) -> bool:
         if self.sym_xz == -1:
             return True
         return False
 
-    def set_ground_effect(self, enable):  # TODO: verify
+    def set_ground_effect(self, enable: bool) -> None:  # TODO: verify
         if enable:
             self.sym_xy = -1
         else:
@@ -105,8 +112,8 @@ class AERO(Aero):
     _properties = ['is_anti_symmetric_xy', 'is_anti_symmetric_xz',
                    'is_symmetric_xy', 'is_symmetric_xz']
     _field_map = {
-        1: 'acsid', 2:'velocity', 3:'cRef', 4:'rhoRef', 5:'symXZ',
-        6:'symXY',
+        1: 'acsid', 2: 'velocity', 3: 'cref', 4: 'rho_ref', 5: 'sym_xz',
+        6: 'sym_xy',
     }
 
     @classmethod
@@ -114,15 +121,17 @@ class AERO(Aero):
         velocity = 1.
         cref = 1.
         rho_ref = 1.
-        return AERO(velocity, cref, rho_ref, acsid=0, sym_xz=0, sym_xy=0, comment='')
+        return AERO(velocity, cref, rho_ref, acsid=0, sym_xz=0, sym_xy=0)
 
-    def __init__(self, velocity, cref, rho_ref, acsid=0, sym_xz=0, sym_xy=0, comment=''):
+    def __init__(self, velocity: Optional[float], cref: float,
+                 rho_ref: float, acsid: int=0,
+                 sym_xz: int=0, sym_xy: int=0, comment: str=''):
         """
         Creates an AERO card
 
         Parameters
         ----------
-        velocity : float
+        velocity : float | None
             the airspeed
         cref : float
             the aerodynamic chord
@@ -184,7 +193,7 @@ class AERO(Aero):
 
     def cross_reference(self, model: BDF) -> None:
         """
-        Cross refernece aerodynamic coordinate system.
+        Cross reference aerodynamic coordinate system.
 
         Parameters
         ----------
@@ -195,9 +204,9 @@ class AERO(Aero):
         msg = ', which is required by AERO'
         self.acsid_ref = model.Coord(self.acsid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
-        Safe cross refernece aerodynamic coordinate system.
+        Safe cross reference aerodynamic coordinate system.
 
         Parameters
         ----------
@@ -209,7 +218,7 @@ class AERO(Aero):
         self.acsid_ref = model.safe_coord(self.acsid, None, xref_errors, msg=msg)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an AERO card from ``BDF.add_card(...)``
 
@@ -227,12 +236,12 @@ class AERO(Aero):
         rho_ref = double(card, 4, 'rho_ref')
         sym_xz = integer_or_blank(card, 5, 'symXZ', 0)
         sym_xy = integer_or_blank(card, 6, 'symXY', 0)
-        assert len(card) <= 7, 'len(AERO card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(AERO card) = {len(card):d}\ncard={card}'
         return AERO(velocity, cref, rho_ref, acsid=acsid, sym_xz=sym_xz, sym_xy=sym_xy,
                     comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         acsid = data[0]
         velocity = data[1]
         cref = data[2]
@@ -240,7 +249,8 @@ class AERO(Aero):
         sym_xz = data[4]
         sym_xy = data[5]
         assert len(data) == 6, 'data = %s' % data
-        return AERO(acsid, velocity, cref, rho_ref, sym_xz, sym_xy,
+        return AERO(velocity, cref, rho_ref,
+                    acsid=acsid, sym_xz=sym_xz, sym_xy=sym_xy,
                     comment=comment)
 
         # T is the tabular function
@@ -266,7 +276,7 @@ class AERO(Aero):
 
         Returns
         -------
-        fields : List[int/float/str]
+        fields : list[int/float/str]
            the fields that define the card
 
         """
@@ -280,7 +290,7 @@ class AERO(Aero):
 
         Returns
         -------
-        fields : List[varies]
+        fields : list[varies]
           the fields that define the card
 
         """
@@ -339,9 +349,10 @@ class FLFACT(BaseCard):
     def _init_from_empty(cls):
         sid = 1
         factors = [1.]
-        return FLFACT(sid, factors, comment='')
+        return FLFACT(sid, factors)
 
-    def __init__(self, sid, factors, comment=''):
+    def __init__(self, sid: int, factors: np.ndarray,
+                 comment: str=''):
         """
         Creates an FLFACT card, which defines factors used for flutter
         analysis.  These factors define either:
@@ -357,9 +368,9 @@ class FLFACT(BaseCard):
             the id of a density, reduced_frequency, mach, or velocity table
             the FLUTTER card defines the meaning
         factors : varies
-            values : List[float, ..., float]
+            values : list[float, ..., float]
                 list of factors
-            List[f1, THRU, fnf, nf, fmid]
+            list[f1, THRU, fnf, nf, fmid]
                 f1 : float
                     first value
                 THRU : str
@@ -408,7 +419,7 @@ class FLFACT(BaseCard):
             raise ValueError('FLFACT sid=%s is empty; factors=%s' % (self.sid, str(self.factors)))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an FLFACT card from ``BDF.add_card(...)``
 
@@ -442,15 +453,15 @@ class FLFACT(BaseCard):
         return FLFACT(sid, factors, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         sid = data[0]
         factors = data[1:]
         return FLFACT(sid, factors, comment=comment)
 
-    def max(self):
+    def max(self) -> float:
         return self.factors.max()
 
-    def min(self):
+    def min(self) -> float:
         return self.factors.min()
 
     #def uncross_reference(self) -> None:
@@ -475,6 +486,14 @@ class FLFACT(BaseCard):
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
+FLUTTER_MSG = """
++---------+-----+--------+------+------+-------+-------+-------------+------+
+|    1    |  2  |   3    |  4   |  5   |   6   |   7   |      8      |  9   |
++=========+=====+========+======+======+=======+=======+=============+======+
+| FLUTTER | SID | METHOD | DENS | MACH | RFREQ | IMETH | NVALUE/OMAX | EPS  |
++---------+-----+--------+------+------+-------+-------+-------------+------+
+| FLUTTER | 19  |   K    | 119  | 219  | 319   |   S   |      5      | 1.-4 |
++---------+-----+--------+------+------+-------+-------+-------------+------+""".strip()
 
 class FLUTTER(BaseCard):
     """
@@ -490,8 +509,8 @@ class FLUTTER(BaseCard):
     """
     type = 'FLUTTER'
     _field_map = {
-        1: 'sid', 2:'method', 3:'density', 4:'mach', 5:'reduced_freq_velocity', 6:'imethod',
-        8:'epsilon',
+        1: 'sid', 2: 'method', 3: 'density', 4: 'mach', 5: 'reduced_freq_velocity', 6: 'imethod',
+        8: 'epsilon',
     }
     _properties = ['_field_map', 'headers', ]
 
@@ -503,7 +522,7 @@ class FLUTTER(BaseCard):
         mach = 1
         reduced_freq_velocity = 1
         return FLUTTER(sid, method, density, mach, reduced_freq_velocity,
-                       imethod='L', nvalue=None, omax=None, epsilon=1.0e-3, comment='')
+                       imethod='L', nvalue=None, omax=None, epsilon=1.0e-3)
 
     def _get_field_helper(self, n):
         """
@@ -529,9 +548,9 @@ class FLUTTER(BaseCard):
                 value = self.nvalue
             return value
         else:
-            raise KeyError('Field %r is an invalid FLUTTER entry.' % (n))
+            raise KeyError(f'Field {n!r} is an invalid FLUTTER entry.')
 
-    def _update_field_helper(self, n, value):
+    def _update_field_helper(self, n: int, value):
         """
         Updates complicated parameters on the FLUTTER card
 
@@ -553,8 +572,11 @@ class FLUTTER(BaseCard):
         else:
             raise KeyError('Field %r=%r is an invalid FLUTTER entry.' % (n, value))
 
-    def __init__(self, sid, method, density, mach, reduced_freq_velocity,
-                 imethod='L', nvalue=None, omax=None, epsilon=1.0e-3, comment=''):
+    def __init__(self, sid: int, method: str,
+                 density: int, mach: int, reduced_freq_velocity: int,
+                 imethod: str='L', nvalue=None, omax=None,
+                 epsilon: float=1.0e-3, comment: str='',
+                 validate: bool=False):
         """
         Creates a FLUTTER card, which is required for a flutter (SOL 145)
         analysis.
@@ -623,18 +645,20 @@ class FLUTTER(BaseCard):
         self.density_ref = None
         self.mach_ref = None
         self.reduced_freq_velocity_ref = None
+        if validate:
+            self.validate()
 
     def validate(self):
         msg = ''
-        if self.method not in ['K', 'KE', 'PK', 'PKNL', 'PKS', 'PKNLS']:
-            msg += 'method = %r; allowed=[K, KE, PKS, PKNLS, PKNL, PK]\n' % self.method
-        if self.imethod not in ['L', 'S', 'TCUB']:
-            msg += 'imethod = %r; allowed=[L, S, TCUB]\n' % self.imethod
+        if self.method not in {'K', 'KE', 'PK', 'PKNL', 'PKS', 'PKNLS'}:
+            msg += f'method = {self.method!r}; allowed=[K, KE, PKS, PKNLS, PKNL, PK]\n'
+        if self.imethod not in {'L', 'S', 'TCUB'}:
+            msg += f'imethod = {self.imethod!r}; allowed=[L, S, TCUB]\n'
         if msg:
             raise ValueError(msg + str(self))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a FLUTTER card from ``BDF.add_card(...)``
 
@@ -647,47 +671,110 @@ class FLUTTER(BaseCard):
 
         """
         sid = integer(card, 1, 'sid')
-        method = string(card, 2, 'method (K, KE, PKS, PKNLS, PKNL, PK)')
+        method = string_or_blank(card, 2, 'method (K, KE, PKS, PKNLS, PKNL, PK)', default='L')
         density_id = integer(card, 3, 'density')
         mach_id = integer(card, 4, 'mach')
         reduced_freq_velocity_id = integer(card, 5, 'reduced_freq_velocity')
 
+        omax = None
+        imethod = string_or_blank(card, 6, 'imethod', default='L')
         if method in ['K', 'KE']:
-            imethod = string_or_blank(card, 6, 'imethod', 'L')
             nvalue = integer_or_blank(card, 7, 'nvalue')
-            omax = None
             assert imethod in ['L', 'S', 'TCUB'], 'imethod = %s' % imethod  # linear-surface
         elif method in ['PKS', 'PKNLS']:
-            imethod = None
             nvalue = None
             omax = double_or_blank(card, 7, 'omax')
         elif method == 'PKNL':
             nvalue = integer_or_blank(card, 7, 'nvalue')
-            omax = None
-            imethod = None
         elif method == 'PK':
             nvalue = integer_or_blank(card, 7, 'nvalue')
-            omax = None
-            imethod = None
         else:
             raise NotImplementedError('FLUTTER method=%r' % method)
 
         assert method in ['K', 'KE', 'PK', 'PKS', 'PKNL', 'PKNLS', None], method
-        epsilon = double_or_blank(card, 8, 'epsilon', 1e-3)  # not defined in QRG
-        assert len(card) <= 9, 'len(FLUTTER card) = %i\ncard=%s' % (len(card), card)
+        epsilon = double_or_blank(card, 8, 'epsilon', default=1e-3)  # not defined in QRG
+        assert len(card) <= 9, f'len(FLUTTER card) = {len(card):d}\ncard={card}'
         return FLUTTER(sid, method, density_id, mach_id, reduced_freq_velocity_id,
                        imethod=imethod, nvalue=nvalue, omax=omax,
                        epsilon=epsilon, comment=comment)
 
-    def make_flfacts_alt_sweep(self, model, mach, alts, eas_limit=1000.,
-                               alt_units='m',
-                               velocity_units='m/s',
-                               density_units='kg/m^3',
-                               eas_units='m/s'):
+    def make_flfacts_eas_sweep_constant_alt(self, model: BDF,
+                                            alt: float, eass: list[float],
+                                            minus_eas: Optional[list[float]]=None,
+                                            alt_units: str='m',
+                                            velocity_units: str='m/s',
+                                            density_units: str='kg/m^3',
+                                            eas_units: str='m/s') -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Makes a sweep across equivalent airspeed for a constant altitude.
+
+        Parameters
+        ----------
+        model : BDF
+            the BDF model object
+        alt : float
+            Altitude in alt_units
+        eass : list[float]
+            Equivalent airspeed in eas_units
+        alt_units : str; default='m'
+            the altitude units; ft, kft, m
+        velocity_units : str; default='m/s'
+            the velocity units; ft/s, m/s, in/s, knots
+        density_units : str; default='kg/m^3'
+            the density units; slug/ft^3, slinch/in^3, kg/m^3
+        eas_units : str; default='m/s'
+            the equivalent airspeed units; ft/s, m/s, in/s, knots
+
+        """
+        if minus_eas is None:
+            minus_eas = []
+        eass.sort()
+        rho, mach, velocity = make_flfacts_eas_sweep_constant_alt(
+            alt, eass,
+            alt_units=alt_units, velocity_units=velocity_units,
+            density_units=density_units, eas_units=eas_units)
+        flfact_rho = self.sid + 1
+        flfact_mach = self.sid + 2
+        flfact_velocity = self.sid + 3
+        flfact_eas = self.sid + 4
+
+        self.mach = flfact_mach
+        self.reduced_freq_velocity = flfact_velocity
+        self.density = flfact_rho
+
+        comment = ' density: min=%.3e max=%.3e %s' % (
+            rho.min(), rho.max(), density_units,
+        )
+        model.add_flfact(flfact_rho, rho, comment=comment)
+        model.add_flfact(flfact_mach, mach, comment=' Mach: %s' % mach.min())
+        comment = ' velocity: min=%.3f max=%.3f %s' % (
+            velocity.min(), velocity.max(), velocity_units)
+        model.add_flfact(flfact_velocity, velocity, comment=comment)
+
+        # eas in velocity units
+        comment = ' EAS: min=%.3f max=%.3f %s' % (
+            eass.min(), eass.max(), eas_units)
+        model.add_flfact(flfact_eas, eass, comment=comment)
+
+        nmach = len(mach)
+        alts = np.ones(nmach) * alt
+        return alts, mach, eass
+
+    def make_flfacts_alt_sweep_constant_mach(self,
+                                             model: BDF,
+                                             mach: float, alts: np.ndarray,
+                                             eas_limit: float=1000.,
+                                             minus_eas: Optional[list[float]]=None,
+                                             alt_units: str='m',
+                                             velocity_units: str='m/s',
+                                             density_units: str='kg/m^3',
+                                             eas_units: str='m/s') -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """makes an altitude sweep"""
+        if minus_eas is None:
+            minus_eas = []
         alts.sort()
         alts = alts[::-1]
-        rho, mach, velocity = make_flfacts_alt_sweep(
+        rho, mach, velocity = make_flfacts_alt_sweep_constant_mach(
             mach, alts, eas_limit=eas_limit,
             alt_units=alt_units,
             velocity_units=velocity_units,
@@ -723,15 +810,187 @@ class FLUTTER(BaseCard):
 
         comment = ' Alt: min=%.3f max=%.3f %s' % (alts2.min(), alts2.max(), alt_units)
         model.add_flfact(flfact_alt, alts2, comment=comment)
+        return alts2, mach, eas
 
-    def make_flfacts_mach_sweep(self, model, alt, machs, eas_limit=1000., alt_units='m',
-                                velocity_units='m/s',
-                                density_units='kg/m^3',
-                                eas_units='m/s'):
+    def make_flfacts_alt_sweep_constant_tas(self,
+                                            model: BDF,
+                                            tas: float, alts: np.ndarray,
+                                            eas_limit: float=1000.,
+                                            minus_eas: Optional[list[float]]=None,
+                                            alt_units: str='m',
+                                            velocity_units: str='m/s',
+                                            density_units: str='kg/m^3',
+                                            eas_units: str='m/s') -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """untested"""
+        if minus_eas is None:
+            minus_eas = []
+        alts.sort()
+        alts = alts[::-1]
+        rho, mach, velocity = make_flfacts_alt_sweep_constant_tas(
+            tas, alts,
+            alt_units=alt_units,
+            eas_limit=eas_limit,
+            velocity_units=velocity_units,
+            density_units=density_units,
+            eas_units=eas_units)
+
+        flfact_rho = self.sid + 1
+        flfact_mach = self.sid + 2
+        flfact_velocity = self.sid + 3
+        flfact_eas = self.sid + 4
+        #flfact_alt = self.sid + 5
+
+        #alts2 = alts[:len(rho)]
+        #assert len(rho) == len(alts2)
+        comment = ' density: min=%.3e max=%.3e %s; alt min=%.0f max=%.0f %s' % (
+            rho.min(), rho.max(), density_units,
+            alts.min(), alts.min(), alt_units,
+        )
+        model.add_flfact(flfact_rho, rho, comment=comment)
+        model.add_flfact(flfact_mach, mach, comment=' Mach: %s' % mach.min())
+        comment = ' velocity: min=%.3f max=%.3f %s' % (
+            velocity.min(), velocity.max(), velocity_units)
+        model.add_flfact(flfact_velocity, velocity, comment=comment)
+
+        # eas in velocity units
+        rho0 = atm_density(0., alt_units=alt_units, density_units=density_units)
+        eas = velocity * np.sqrt(rho / rho0)
+        kvel = _velocity_factor(velocity_units, eas_units)
+
+        eas_in_eas_units = eas * kvel
+        comment = ' EAS: min=%.3f max=%.3f %s' % (
+            eas_in_eas_units.min(), eas_in_eas_units.max(), eas_units)
+        model.add_flfact(flfact_eas, eas_in_eas_units, comment=comment)
+        return alts, mach, eas
+
+    def make_flfacts_tas_sweep_constant_alt(self,
+                                            model: BDF,
+                                            alt: float, tass: np.ndarray,
+                                            eas_limit: float=1000.,
+                                            minus_eas: Optional[list[float]]=None,
+                                            alt_units: str='m',
+                                            velocity_units: str='m/s',
+                                            density_units: str='kg/m^3',
+                                            eas_units: str='m/s') -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """makes an altitude sweep (dev...not validated)"""
+        if minus_eas is None:
+            minus_eas = []
+        tass.sort()
+        rho, mach, velocity = make_flfacts_tas_sweep_constant_alt(
+            alt, tass, eas_limit=eas_limit,
+            alt_units=alt_units,
+            velocity_units=velocity_units,
+            density_units=density_units,
+            eas_units=eas_units)
+
+        flfact_rho = self.sid + 1
+        flfact_mach = self.sid + 2
+        flfact_velocity = self.sid + 3
+        flfact_eas = self.sid + 4
+        #flfact_alt = self.sid + 5
+
+        #alts2 = alts[:len(rho)]
+        #assert len(rho) == len(alts2)
+        comment = ' density: min=%.3e max=%.3e %s; alt min=%.0f max=%.0f %s' % (
+            rho.min(), rho.max(), density_units,
+            alt, alt, alt_units,
+        )
+        model.add_flfact(flfact_rho, rho, comment=comment)
+        model.add_flfact(flfact_mach, mach, comment=' Mach: %s' % mach.min())
+        comment = ' velocity: min=%.3f max=%.3f %s' % (
+            velocity.min(), velocity.max(), velocity_units)
+        model.add_flfact(flfact_velocity, velocity, comment=comment)
+
+        # eas in velocity units
+        rho0 = atm_density(0., alt_units=alt_units, density_units=density_units)
+        eas = velocity * np.sqrt(rho / rho0)
+        kvel = _velocity_factor(velocity_units, eas_units)
+
+        eas_in_eas_units = eas * kvel
+        comment = ' EAS: min=%.3f max=%.3f %s' % (
+            eas_in_eas_units.min(), eas_in_eas_units.max(), eas_units)
+        model.add_flfact(flfact_eas, eas_in_eas_units, comment=comment)
+
+        #comment = ' Alt: min=%.3f max=%.3f %s' % (alt, al, alt_units)
+        #model.add_flfact(flfact_alt, alts2, comment=comment)
+        alts = np.ones(len(mach)) * alt
+        return alts, mach, eas
+
+    def make_flfacts_eas_sweep_constant_mach(self, model: BDF,
+                                             mach: float, eass: np.ndarray,
+                                             gamma: float=1.4,
+                                             minus_eas: Optional[list[float]]=None,
+                                             alt_units: str='m',
+                                             velocity_units: str='m/s',
+                                             density_units: str='kg/m^3',
+                                             eas_units: str='m/s',
+                                             pressure_units: str='Pa') -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        eas = tas * sqrt(rho/rho0)
+        ainf*Minf = V
+        eas = ainf*Minf * sqrt(rho_inf/rho0)
+        rho = p/RT
+        eas = ainf*Minf * sqrt(p_inf/(R*T_inf*rho0))
+            = sqrt(gamma*R*Tinf) * Minf * sqrt(p_inf/(R*T_inf*rho0))
+            = Minf * sqrt(gamma*p_inf/rho0)
+        """
+        if minus_eas is None:
+            minus_eas = []
+        neas = len(eass)
+        #machs = mach * np.ones(neas)
+        rho, machs, velocity, alts = make_flfacts_eas_sweep_constant_mach(
+            mach, eass,
+            gamma=gamma,
+            minus_eas=minus_eas,
+            alt_units=alt_units,
+            velocity_units=velocity_units,
+            density_units=density_units,
+            eas_units=eas_units,
+            #pressure_units=pressure_units,
+        )
+        machs2 = machs[:len(rho)]
+        assert len(rho) == len(machs2)
+
+        flfact_rho = self.sid + 1
+        flfact_mach = self.sid + 2
+        flfact_velocity = self.sid + 3
+        flfact_eas = self.sid + 4
+
+        comment = ' density: min=%.3e max=%.3e %s; alts min=%.0f %.0f %s' % (
+            rho.min(), rho.max(), density_units,
+            alts.min(), alts.max(), alt_units,
+        )
+        model.add_flfact(flfact_rho, rho, comment=comment)
+        comment = ' Mach: min=%s max=%s' % (machs.min(), machs.max())
+        model.add_flfact(flfact_mach, machs, comment=comment)
+        comment = ' velocity: min=%.3f max=%.3f %s' % (
+            velocity.min(), velocity.max(), velocity_units)
+        model.add_flfact(flfact_velocity, velocity, comment=comment)
+
+        # eas in velocity units
+        rho0 = atm_density(0., alt_units=alt_units, density_units=density_units)
+        eas = velocity * np.sqrt(rho / rho0)
+        kvel = _velocity_factor(velocity_units, eas_units)
+
+        eas_in_eas_units = eas * kvel
+        comment = ' EAS: min=%.3f max=%.3f %s' % (
+            eas_in_eas_units.min(), eas_in_eas_units.max(), eas_units)
+        model.add_flfact(flfact_eas, eas_in_eas_units, comment=comment)
+        return alts, machs, eas
+
+    def make_flfacts_mach_sweep_constant_alt(self, model: BDF, alt, machs,
+                                             eas_limit=1000.,
+                                             minus_eas: Optional[list[float]]=None,
+                                             alt_units='m',
+                                             velocity_units='m/s',
+                                             density_units='kg/m^3',
+                                             eas_units='m/s') -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """makes a mach sweep"""
+        if minus_eas is None:
+            minus_eas = []
         machs.sort()
-        machs = machs[::-1]
-        rho, mach, velocity = make_flfacts_mach_sweep(
+        #machs = machs[::-1]
+        rho, mach, velocity = make_flfacts_mach_sweep_constant_alt(
             alt, machs, eas_limit=eas_limit,
             alt_units=alt_units,
             velocity_units=velocity_units,
@@ -766,6 +1025,8 @@ class FLUTTER(BaseCard):
         comment = ' EAS: min=%.3f max=%.3f %s' % (
             eas_in_eas_units.min(), eas_in_eas_units.max(), eas_units)
         model.add_flfact(flfact_eas, eas_in_eas_units, comment=comment)
+        alts = np.ones(len(machs)) * alt
+        return alts, machs, eas
 
     @property
     def headers(self):
@@ -779,7 +1040,7 @@ class FLUTTER(BaseCard):
         return headers
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         assert len(data) == 8, 'FLUTTER = %s' % data
         sid = data[0]
         method = data[1]
@@ -792,8 +1053,8 @@ class FLUTTER(BaseCard):
         omax = data[8]
         epsilon = None
         return FLUTTER(sid, method, density, mach, reduced_freq_velocity,
-                       imethod, nvalue, omax,
-                       epsilon, comment=comment)
+                       imethod=imethod, nvalue=nvalue, omax=omax,
+                       epsilon=epsilon, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -810,7 +1071,7 @@ class FLUTTER(BaseCard):
         self.mach_ref = model.FLFACT(self.mach, msg=msg)
         self.reduced_freq_velocity_ref = model.FLFACT(self.reduced_freq_velocity, msg=msg)
 
-    def safe_cross_reference(self, model):
+    def safe_cross_reference(self, model: BDF, xref_error) -> None:
         msg = ', which is required by FLUTTER sid=%s' % self.sid
         try:
             self.density_ref = model.FLFACT(self.density, msg=msg)
@@ -895,6 +1156,111 @@ class FLUTTER(BaseCard):
         return self.comment + print_card_8(card)
 
 
+def gust_function(omega: np.ndarray, L: float, V: float,
+                  gust_model: str = 'von_karman') -> np.ndarray:
+    """Normalized gust PSD shape function.
+
+    Returns the dimensionless shape factor S(omega) such that:
+        Phi_g(omega) = sigma_g^2 * (L / (pi*V)) * S(omega)
+
+    Parameters
+    ----------
+    omega : ndarray
+        Circular frequency [rad/s].
+    L : float
+        Turbulence scale length [length units].
+    V : float
+        True airspeed [length/time].
+    gust_model : str
+        'von_karman' or 'dryden'.
+
+    Returns
+    -------
+    ndarray
+        Dimensionless PSD shape factor at each omega.
+    """
+    omega = np.asarray(omega, dtype=float)
+    if gust_model == 'von_karman':
+        k = 1.339
+        p = 1.0 / 3.0
+    elif gust_model == 'dryden':
+        k = 1.0
+        p = 0.5
+    else:
+        raise NotImplementedError(gust_model)
+    q = (k * L * omega / V) ** 2
+    num = 1.0 + 2.0 * (p + 1.0) * q
+    denom = (1.0 + q) ** (p + 1.5)
+    return num / denom
+
+
+def von_karman_psd(omega: np.ndarray, sigma: float, L: float,
+                   V: float) -> np.ndarray:
+    """Von Karman vertical turbulence power spectral density.
+
+    Phi_g(omega) = sigma^2 * L / (pi*V)
+                   * (1 + (8/3)*(1.339*L*omega/V)^2)
+                   / (1 + (1.339*L*omega/V)^2)^(11/6)
+
+    One-sided PSD (omega >= 0) per MIL-STD-1797 / FAR 25.
+
+    Parameters
+    ----------
+    omega : (N,) ndarray
+        Circular frequency [rad/s].
+    sigma : float
+        RMS gust velocity [length/time].
+    L : float
+        Turbulence scale length [length].
+    V : float
+        True airspeed [length/time].
+
+    Returns
+    -------
+    (N,) ndarray
+        PSD [velocity^2 / (rad/s)].
+    """
+    omega = np.asarray(omega, dtype=float)
+    c = 1.339
+    Omega_bar = c * L * omega / V
+    return (sigma**2 * L / (np.pi * V)
+            * (1.0 + (8.0 / 3.0) * Omega_bar**2)
+            / (1.0 + Omega_bar**2) ** (11.0 / 6.0))
+
+
+def dryden_psd(omega: np.ndarray, sigma: float, L: float,
+               V: float) -> np.ndarray:
+    """Dryden vertical turbulence power spectral density.
+
+    Phi_g(omega) = sigma^2 * L / (pi*V)
+                   * (1 + 3*(L*omega/V)^2)
+                   / (1 + (L*omega/V)^2)^2
+
+    Rational form suitable for state-space coloring filter representation.
+
+    Parameters
+    ----------
+    omega : (N,) ndarray
+        Circular frequency [rad/s].
+    sigma : float
+        RMS gust velocity [length/time].
+    L : float
+        Turbulence scale length [length].
+    V : float
+        True airspeed [length/time].
+
+    Returns
+    -------
+    (N,) ndarray
+        PSD [velocity^2 / (rad/s)].
+    """
+    omega = np.asarray(omega, dtype=float)
+    Omega_bar = L * omega / V
+    return (sigma**2 * L / (np.pi * V)
+            * (1.0 + 3.0 * Omega_bar**2)
+            / (1.0 + Omega_bar**2) ** 2)
+
+
 class GUST(BaseCard):
     """
     Defines a stationary vertical gust for use in aeroelastic response
@@ -910,7 +1276,7 @@ class GUST(BaseCard):
     """
     type = 'GUST'
     _field_map = {
-        1: 'sid', 2:'dload', 3:'wg', 4:'x0', 5:'V',
+        1: 'sid', 2: 'dload', 3: 'wg', 4: 'x0', 5: 'V',
     }
 
     @classmethod
@@ -919,9 +1285,10 @@ class GUST(BaseCard):
         dload = 1
         wg = 1.
         x0 = 0.
-        return GUST(sid, dload, wg, x0, V=None, comment='')
+        return GUST(sid, dload, wg, x0, V=None)
 
-    def __init__(self, sid, dload, wg, x0, V=None, comment=''):
+    def __init__(self, sid: int, dload: int, wg: float, x0: float,
+                 V: Optional[float]=None, comment: str=''):
         """
         Creates a GUST card, which defines a stationary vertical gust
         for use in aeroelastic response analysis.
@@ -957,7 +1324,7 @@ class GUST(BaseCard):
         self.V = V
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a GUST card from ``BDF.add_card(...)``
 
@@ -974,11 +1341,11 @@ class GUST(BaseCard):
         wg = double(card, 3, 'wg')
         x0 = double(card, 4, 'x0')
         V = double_or_blank(card, 5, 'V')
-        assert len(card) <= 6, 'len(GUST card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 6, f'len(GUST card) = {len(card):d}\ncard={card}'
         return GUST(sid, dload, wg, x0, V=V, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         sid = data[0]
         dload = data[1]
         wg = data[2]
@@ -1016,6 +1383,18 @@ class GUST(BaseCard):
         card = self.repr_fields()
         return self.comment + print_card_8(card)
 
+    @staticmethod
+    def get_von_karman_psd(omega: np.ndarray, sigma: float, L: float,
+                           V: float) -> np.ndarray:
+        """Von Karman vertical turbulence PSD. See ``von_karman_psd``."""
+        return von_karman_psd(omega, sigma, L, V)
+
+    @staticmethod
+    def get_dryden_psd(omega: np.ndarray, sigma: float, L: float,
+                       V: float) -> np.ndarray:
+        """Dryden vertical turbulence PSD. See ``dryden_psd``."""
+        return dryden_psd(omega, sigma, L, V)
+
 
 class MKAERO1(BaseCard):
     """
@@ -1036,18 +1415,18 @@ class MKAERO1(BaseCard):
     def _init_from_empty(cls):
         machs = [1.]
         reduced_freqs = [1.]
-        return MKAERO1(machs, reduced_freqs, comment='')
+        return MKAERO1(machs, reduced_freqs)
 
-    def __init__(self, machs, reduced_freqs, comment=''):
+    def __init__(self, machs, reduced_freqs, comment: str=''):
         """
         Creates an MKAERO1 card, which defines a set of mach and
         reduced frequencies.
 
         Parameters
         ----------
-        machs : List[float]
+        machs : list[float]
             series of Mach numbers
-        reduced_freqs : List[float]
+        reduced_freqs : list[float]
             series of reduced frequencies
         comment : str; default=''
             a comment for the card
@@ -1073,7 +1452,7 @@ class MKAERO1(BaseCard):
             raise ValueError(msg.rstrip())
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an MKAERO1 card from ``BDF.add_card(...)``
 
@@ -1085,18 +1464,22 @@ class MKAERO1(BaseCard):
             a comment for the card
 
         """
-        list_fields = [interpret_value(field, card) for field in card[1:]]
-        nfields = len(list_fields) - 8
         machs = []
         reduced_freqs = []
-        for i in range(1, 1 + nfields):
-            machs.append(double_or_blank(card, i, 'mach'))
-            reduced_freqs.append(double_or_blank(card, i + 8, 'rFreq'))
-        machs = wipe_empty_fields(machs)
-        reduced_freqs = wipe_empty_fields(reduced_freqs)
+        for i in range(1, 9):
+            mach = double_or_blank(card, i, 'mach')
+            if mach is not None:
+                machs.append(mach)
+
+        for i in range(9, 17):
+            reduced_freq = double_or_blank(card, i, 'rFreq')
+            if reduced_freq is not None:
+                reduced_freqs.append(reduced_freq)
+        assert len(machs) > 0, machs
+        assert len(reduced_freqs) > 0, reduced_freqs
         return MKAERO1(machs, reduced_freqs, comment=comment)
 
-    def mklist(self):
+    def mklist(self) -> list[list[float]]:
         mklist = []
         for mach in self.machs:
             for kfreq in self.reduced_freqs:
@@ -1188,18 +1571,18 @@ class MKAERO2(BaseCard):
     def _init_from_empty(cls):
         machs = [1.]
         reduced_freqs = [1.]
-        return MKAERO2(machs, reduced_freqs, comment='')
+        return MKAERO2(machs, reduced_freqs)
 
-    def __init__(self, machs, reduced_freqs, comment=''):
+    def __init__(self, machs, reduced_freqs, comment: str=''):
         """
         Creates an MKAERO2 card, which defines a set of mach and
         reduced frequency pairs.
 
         Parameters
         ----------
-        machs : List[float]
+        machs : list[float]
             series of Mach numbers
-        reduced_freqs : List[float]
+        reduced_freqs : list[float]
             series of reduced frequencies
         comment : str; default=''
             a comment for the card
@@ -1224,7 +1607,7 @@ class MKAERO2(BaseCard):
             raise ValueError(msg)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds an MKAERO2 card from ``BDF.add_card(...)``
 
@@ -1236,15 +1619,13 @@ class MKAERO2(BaseCard):
             a comment for the card
 
         """
-        list_fields = card.fields(1)
-        nfields = len(list_fields)
+        nfields = len(card)
         machs = []
         reduced_freqs = []
-        for i in range(1, 1 + nfields, 2):
+        for i in range(1, nfields, 2):
             machs.append(double(card, i, 'mach'))
             reduced_freqs.append(double(card, i + 1, 'rFreq'))
         return MKAERO2(machs, reduced_freqs, comment=comment)
-
 
     def mklist(self):
         mklist = []

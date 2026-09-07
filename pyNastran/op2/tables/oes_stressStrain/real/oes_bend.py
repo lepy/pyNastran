@@ -1,9 +1,11 @@
 from itertools import cycle
-from typing import List
+from typing import Optional
 
 import numpy as np
 
-from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types, integer_float_types
+from pyNastran.op2.result_objects.op2_objects import (
+    get_times_dtype, combination_inplace)
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_floats_13e, write_floats_8p1e
@@ -31,14 +33,14 @@ class RealBendArray(OES_Object):
             #raise NotImplementedError('SORT2')
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -51,41 +53,56 @@ class RealBendArray(OES_Object):
             self.subtitle = self.data_code['subtitle']
         #print('ntimes=%s nelements=%s ntotal=%s subtitle=%s' % (
             #self.ntimes, self.nelements, self.ntotal, self.subtitle))
-        nnodes = 1
+        #nnodes = 1
 
         #self.names = []
         #self.nelements //= nnodes
-        self.nelements //= self.ntimes
-        self.ntotal = self.nelements * nnodes * 2
-        #self.ntotal
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
-        #print('ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
 
-        #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        self._times = np.zeros(self.ntimes, 'float32')
+        if self.is_sort1:
+            #print('CBEND SORT1 ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
+            self.nelements //= self.ntimes
+            ntotal = self.nelements * 2
+            ntimes = self.ntimes
+            self.ntotal = ntotal
+        else:
+            # other / tr1091x.bdf
+            # CBEAM n=2
+            #ntimes = [0., 0.0001, 0.0002, 0.0003, 0.0004]; n=4
+            #nnodes /element = 1
+            #print("CBEND ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
+            ntimes = self.ntotal
+            ntotal = self.nelements // 2
+            #self.ntotal = ntotal
+            #print("**BEND: ntimes=%s ntotal=%s" % (ntimes, ntotal))
+            self.ntimes = ntimes
+            self.ntotal = ntotal
+        #self.ntotal = nelements * nnodes * 2
+
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
         #self.ntotal = self.nelements * nnodes
 
-        self.element_node = np.zeros((self.ntotal, 2), 'int32')
+        self.element_node = np.zeros((ntotal, 2), dtype=idtype)
 
         # the number is messed up because of the offset for the element's properties
-        if not self.nelements * nnodes * 2 == self.ntotal:
-            msg = 'ntimes=%s nelements=%s nnodes=%s ne*nn=%s ntotal=%s' % (
-                self.ntimes, self.nelements, nnodes, self.nelements * nnodes,
+        if not self.nelements * 2 == self.ntotal:
+            msg = 'ntimes=%s nelements=%s ne=%s ntotal=%s' % (
+                self.ntimes, self.nelements, self.nelements,
                 self.ntotal)
             raise RuntimeError(msg)
 
         # [angle, sc, sd, se, sf, omax, omin, mst, msc]
-        self.data = np.zeros((self.ntimes, self.ntotal, 9), 'float32')
+        self.data = np.zeros((ntimes, ntotal, 9), dtype=fdtype)
 
     #def build_dataframe(self):
         #"""creates a pandas dataframe"""
         #import pandas as pd
         #print(self.data_code)
         #headers = self.headers
-        #column_names, column_values = self._build_dataframe_transient_header()
+        #column_names, column_values = build_dataframe_transient_header(self)
         #self.data_frame = pd.Panel(self.data, items=column_values,
                                    #major_axis=self.element_node, minor_axis=headers).to_frame()
         #self.data_frame.columns.names = column_names
@@ -129,6 +146,7 @@ class RealBendArray(OES_Object):
 
     def add_sort1(self, dt, eid, grid, angle, sc, sd, se, sf, omax, omin, mst, msc):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.data[self.itime, self.itotal] = [angle, sc, sd, se, sf, omax, omin, mst, msc]
@@ -136,12 +154,26 @@ class RealBendArray(OES_Object):
         #self.ielement += 1
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_sort2(self, dt, eid, grid, angle, sc, sd, se, sf, omax, omin, mst, msc):
+        """unvectorized method for adding SORT2 transient data"""
+        assert self.is_sort2, self
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        itime = self.itotal
+        itotal = self.itime
+        print(f'RealBendArray SORT2: itime={itime}/{len(self._times)} itotal={itotal}/{len(self.element_node)}')
+        self._times[itime] = dt
+        #print(f'itime={itime} itotal={itotal}; data.shape={self.data.shape}')
+        self.data[itime, itotal, :] = [angle, sc, sd, se, sf, omax, omin, mst, msc]
+        self.element_node[itotal] = [eid, grid]
+        #self.ielement += 1
+        self.itotal += 1
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -154,22 +186,28 @@ class RealBendArray(OES_Object):
                        % (self.__class__.__name__, ntimes, nelements, nnodes))
         else:
             msg.append('  type=%s nelements=%i nnodes=%i\n' % (self.__class__.__name__, nelements, nnodes))
-        msg.append('  data: [ntimes, nnodes, 5] where 5=[%s]\n' % str(', '.join(self._get_headers())))
-        msg.append('  element_node.shape = %s\n' % str(self.element_node.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  %s\n' % self.element_name)
+        msg.append('  data: [ntimes, nnodes, 9] where 9=[%s]\n' % str(', '.join(self._get_headers())))
+        msg.append(f'  element_node.shape = {self.element_node.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
-    @property
-    def headers(self):
-        return self._get_headers()
+    def linear_combination(self, factor: integer_float_types,
+                           data: Optional[np.ndarray]=None,
+                           update: bool=True) -> None:
+        # [angle, sc, sd, se, sf, omax, omin, mst, msc]
+        import warnings
+        warnings.warn('update oes_bend margins/angle')
+        combination_inplace(self.data, data, factor)
+        if update:
+            self.update_data_components()
 
-    def get_headers(self) -> List[str]:
-        return self.headers
+    def update_data_components(self):
+        return
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         """
         '                                   S T R A I N S    I N   B E N D   E L E M E N T S        ( C B E N D )'
         '                        CIRC.'
@@ -272,8 +310,10 @@ class RealBendStressArray(RealBendArray, StressObject):
         RealBendArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def _get_headers(self):
+    @property
+    def headers(self) -> list[str]:
         return ['angle', 'sc', 'sd', 'se', 'sf', 'omax', 'omin', 'mst', 'msc']
+
 
 class RealBendStrainArray(RealBendArray, StrainObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
@@ -281,5 +321,6 @@ class RealBendStrainArray(RealBendArray, StrainObject):
         StrainObject.__init__(self, data_code, isubcase)
         assert self.is_strain, self.stress_bits
 
-    def _get_headers(self):
+    @property
+    def headers(self) -> list[str]:
         return ['angle', 'sc', 'sd', 'se', 'sf', 'emax', 'emin', 'mst', 'msc']

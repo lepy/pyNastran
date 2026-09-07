@@ -18,20 +18,24 @@ All cards are Material objects.
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 import numpy as np
-from numpy import zeros, array
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Material, BaseCard
+from pyNastran.bdf.bdf_interface.internal_get import material_id
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank,
-    string, string_or_blank, integer_or_double, blank)
+    string, string_or_blank, integer_or_double, blank,)
+from pyNastran.bdf.bdf_interface.assign_type_force import (
+    force_double, force_double_or_blank)
+
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 #from functools import wraps
 #def unicode_check(func):
@@ -61,6 +65,11 @@ class OrthotropicMaterial(Material):
 
 class AnisotropicMaterial(Material):
     """Anisotropic Material Class"""
+    def __init__(self):
+        Material.__init__(self)
+
+class ViscoelasticMaterial(Material):
+    """Viscoelastic Material Class"""
     def __init__(self):
         Material.__init__(self)
 
@@ -99,10 +108,10 @@ class CREEP(Material):
         f = 13.
         g = 14.
         return CREEP(mid, T0, exp, form, tidkp, tidcp, tidcs, thresh, Type,
-                     a, b, c, d, e, f, g, comment='')
+                     a, b, c, d, e, f, g)
 
     def __init__(self, mid, T0, exp, form, tidkp, tidcp, tidcs, thresh, Type,
-                 a, b, c, d, e, f, g, comment=''):
+                 a, b, c, d, e, f, g, comment: str=''):
         Material.__init__(self)
         if comment:
             self.comment = comment
@@ -125,7 +134,7 @@ class CREEP(Material):
         self.mid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CREEP card from ``BDF.add_card(...)``
 
@@ -154,18 +163,18 @@ class CREEP(Material):
         e = double_or_blank(card, 14, 'e')
         f = double_or_blank(card, 15, 'f')
         g = double_or_blank(card, 16, 'g')
-        assert len(card) <= 17, 'len(CREEP card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 17, f'len(CREEP card) = {len(card):d}\ncard={card}'
         return CREEP(mid, T0, exp, form, tidkp, tidcp, tidcs, thresh, Type,
                      a, b, c, d, e, f, g, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CREEP card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -180,8 +189,7 @@ class CREEP(Material):
         elif form == 1:
             form = 'TABLE'
         else:
-            raise NotImplementedError('CREEP: mid=%s, form=%s, not form: 0=CRLAW, 1=TABLE' % (
-                mid, form))
+            raise NotImplementedError(f'CREEP: mid={mid:d}, form={form!r}, not form: 0=CRLAW, 1=TABLE')
         tidkp = data[4]
         tidcp = data[5]
         tidcs = data[6]
@@ -215,12 +223,10 @@ class CREEP(Material):
         self.mid = self.Mid()
         self.mid_ref = None
 
-    def Mid(self):  # links up to MAT1, MAT2, MAT9 or same mid
-        if self.mid_ref is not None:
-            return self.mid_ref.mid
-        return self.mid
+    def Mid(self) -> int:  # links up to MAT1, MAT2, MAT9 or same mid
+        return material_id(self.mid_ref, self.mid)
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         list_fields = ['CREEP', self.Mid(), self.T0, self.exp, self.form,
                        self.tidkp, self.tidcp, self.tidcs, self.thresh, self.Type,
                        self.a, self.b, self.c, self.d, self.e, self.f, self.g]
@@ -276,23 +282,23 @@ class NXSTRAT(BaseCard):
     def _init_from_empty(cls):
         sid = 1
         params = {'AUTO' : 1}
-        return NXSTRAT(sid, params, comment='')
+        return NXSTRAT(sid, params)
 
     def _finalize_hdf5(self, encoding):
         """hdf5 helper function"""
         keys, values = self.params
         self.params = dict(zip(keys, values))
 
-    def __init__(self, sid, params, comment=''):
+    def __init__(self, sid, params, comment: str=''):
         if comment:
             self.comment = comment
         self.sid = sid
         self.params = params
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
-        Adds a NXSTRAT card from ``BDF.add_card(...)``
+        Adds an NXSTRAT card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -324,7 +330,7 @@ class NXSTRAT(BaseCard):
         #nleftover = (nfields - 2) % 2
         #assert nleftover == ileftover, 'nparams=%s nleftover=%s card=%s' % (nparams, nleftover, card)
 
-        #assert len(card) <= 13, 'len(NXSTRAT card) = %i\ncard=%s' % (len(card), card)
+        #assert len(card) <= 13, f'len(NXSTRAT card) = {len(card):d}\ncard={card}'
         return NXSTRAT(sid, params, comment=comment)
 
     def raw_fields(self):
@@ -388,9 +394,11 @@ class MAT1(IsotropicMaterial):
     }
     _properties = ['_field_map', 'mp_name_map']
 
-    def __init__(self, mid, E, G, nu,
-                 rho=0.0, a=0.0, tref=0.0, ge=0.0,
-                 St=0.0, Sc=0.0, Ss=0.0, mcsid=0, comment=''):
+    def __init__(self, mid: int,
+                 E: Optional[float], G: Optional[float], nu: Optional[float],
+                 rho: float=0.0, a: float=0.0, tref: float=0.0, ge: float=0.0,
+                 St: float=0.0, Sc: float=0.0, Ss: float=0.0,
+                 mcsid: int=0, comment: str=''):
         """
         Creates a MAT1 card
 
@@ -428,7 +436,7 @@ class MAT1(IsotropicMaterial):
         self.matt1_ref = None
         if comment:
             self.comment = comment
-        E, G, nu = self.set_E_G_nu(E, G, nu)
+        E, G, nu = mat1_E_G_nu(E, G, nu)
 
         self.mid = mid
         self.e = E
@@ -442,9 +450,10 @@ class MAT1(IsotropicMaterial):
         self.Sc = Sc
         self.Ss = Ss
         self.mcsid = mcsid
+        assert rho is not None, rho
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, mids):
+    def export_to_hdf5(cls, h5_file, model: BDF, mids: np.ndarray):
         """exports the materials in a vectorized way"""
         #comments = []
         e = []
@@ -468,7 +477,7 @@ class MAT1(IsotropicMaterial):
                 e.append(material.e)
 
             if material.g is None:
-                e.append(np.nan)
+                g.append(np.nan)
             else:
                 g.append(material.g)
 
@@ -500,7 +509,7 @@ class MAT1(IsotropicMaterial):
         h5_file.create_dataset('mcsid', data=mcsid)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT1 card from ``BDF.add_card(...)``
 
@@ -517,26 +526,78 @@ class MAT1(IsotropicMaterial):
         G = double_or_blank(card, 3, 'G')
         nu = double_or_blank(card, 4, 'nu')
 
-        rho = double_or_blank(card, 5, 'rho', 0.)
-        a = double_or_blank(card, 6, 'a', 0.0)
-        tref = double_or_blank(card, 7, 'tref', 0.0)
-        ge = double_or_blank(card, 8, 'ge', 0.0)
-        St = double_or_blank(card, 9, 'St', 0.0)
-        Sc = double_or_blank(card, 10, 'Sc', 0.0)
-        Ss = double_or_blank(card, 11, 'Ss', 0.0)
+        rho = double_or_blank(card, 5, 'rho', default=0.)
+        a = double_or_blank(card, 6, 'a', default=0.0)
+        tref = double_or_blank(card, 7, 'tref', default=0.0)
+        ge = double_or_blank(card, 8, 'ge', default=0.0)
+        St = double_or_blank(card, 9, 'St', default=0.0)
+        Sc = double_or_blank(card, 10, 'Sc', default=0.0)
+        Ss = double_or_blank(card, 11, 'Ss', default=0.0)
+        mcsid = integer_or_blank(card, 12, 'mcsid', default=0)
+        assert len(card) <= 13, f'len(MAT1 card) = {len(card):d}\ncard={card}'
+        return MAT1(mid, E, G, nu,
+                    rho=rho, a=a, tref=tref, ge=ge,
+                    St=St, Sc=Sc, Ss=Ss, mcsid=mcsid, comment=comment)
+
+    @classmethod
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT1 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        E = force_double_or_blank(card, 2, 'E')
+        G = force_double_or_blank(card, 3, 'G')
+        nu = force_double_or_blank(card, 4, 'nu')
+
+        rho = force_double_or_blank(card, 5, 'rho', default=0.0)
+        a = force_double_or_blank(card, 6, 'a', default=0.0)
+        tref = force_double_or_blank(card, 7, 'tref', default=0.0)
+        ge = force_double_or_blank(card, 8, 'ge', default=0.0)
+        St = force_double_or_blank(card, 9, 'St', default=0.0)
+        Sc = force_double_or_blank(card, 10, 'Sc', default=0.0)
+        Ss = force_double_or_blank(card, 11, 'Ss', default=0.0)
+        mcsid = integer_or_blank(card, 12, 'mcsid', default=0)
+        assert len(card) <= 13, f'len(MAT1 card) = {len(card):d}\ncard={card}'
+        return MAT1(mid, E, G, nu,
+                    rho=rho, a=a, tref=tref, ge=ge,
+                    St=St, Sc=Sc, Ss=Ss, mcsid=mcsid, comment=comment)
+
+    @classmethod
+    def add_card_lax(cls, card, comment: str=''):
+        """see ``add_card``"""
+        mid = integer(card, 1, 'mid')
+        E = force_double_or_blank(card, 2, 'E')
+        G = force_double_or_blank(card, 3, 'G')
+        nu = force_double_or_blank(card, 4, 'nu')
+
+        rho = force_double_or_blank(card, 5, 'rho', 0.)
+        a = force_double_or_blank(card, 6, 'a', 0.0)
+        tref = force_double_or_blank(card, 7, 'tref', 0.0)
+        ge = force_double_or_blank(card, 8, 'ge', 0.0)
+        St = force_double_or_blank(card, 9, 'St', 0.0)
+        Sc = force_double_or_blank(card, 10, 'Sc', 0.0)
+        Ss = force_double_or_blank(card, 11, 'Ss', 0.0)
         mcsid = integer_or_blank(card, 12, 'mcsid', 0)
-        assert len(card) <= 13, 'len(MAT1 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 13, f'len(MAT1 card) = {len(card):d}\ncard={card}'
         return MAT1(mid, E, G, nu, rho, a, tref, ge,
                     St, Sc, Ss, mcsid, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -547,14 +608,14 @@ class MAT1(IsotropicMaterial):
         g = data[2]
         nu = data[3]
         rho = data[4]
-        a = data[5]
+        alpha = data[5]
         tref = data[6]
         ge = data[7]
         St = data[8]
         Sc = data[9]
         Ss = data[10]
         mcsid = data[11]
-        return MAT1(mid, e, g, nu, rho, a, tref, ge,
+        return MAT1(mid, e, g, nu, rho, alpha, tref, ge,
                     St, Sc, Ss, mcsid, comment=comment)
 
     def _verify(self, xref):
@@ -595,7 +656,7 @@ class MAT1(IsotropicMaterial):
 
     def E_stress(self, stress):
         if self.mats1 is not None:
-            E = self.matt1_ref.E(self.e, stress)
+            E = self.mats1_ref.E(self.e, stress)
         else:
             E = self.e
         return E
@@ -606,30 +667,6 @@ class MAT1(IsotropicMaterial):
         else:
             E = self.e
         return E
-
-    @classmethod
-    def set_E_G_nu(cls, E, G, nu):
-        r"""\f[ G = \frac{E}{2 (1+\nu)} \f]"""
-        if G is None and E is None:  # no E,G
-            raise ValueError('G=%s E=%s cannot both be None' % (G, E))
-        elif E is not None and G is not None and nu is not None:
-            pass
-        elif E is not None and nu is not None:
-            G = E / 2. / (1 + nu)
-        elif G is not None and nu is not None:
-            E = 2 * (1 + nu) * G
-        elif G is not None and E is not None:
-            nu = E / (2 * G) - 1.
-        elif G is None and nu is None:
-            G = 0.0
-            nu = 0.0
-        elif E is None and nu is None:
-            E = 0.0
-            nu = 0.0
-        else:
-            msg = 'G=%s E=%s nu=%s' % (G, E, nu)
-            raise ValueError(msg)
-        return E, G, nu
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -664,19 +701,6 @@ class MAT1(IsotropicMaterial):
                        self.tref, self.ge, self.St, self.Sc, self.Ss, self.mcsid]
         return list_fields
 
-    def getG_default(self):
-        if self.g == 0.0 or self.nu == 0.0:
-            G = self.g
-        else:
-            #G_default = self.e/2./(1+self.nu)
-            if self.e is None:
-                G = None
-            else:
-                G = self.e / 2. / (1 + self.nu)
-        #print("MAT1 - self.e=%s self.nu=%s self.g=%s Gdef=%s G=%s"
-        #      % (self.e, self.nu,self.g, G_default, G))
-        return G
-
     def repr_fields(self):
         """
         Gets the fields in their simplified form
@@ -687,7 +711,7 @@ class MAT1(IsotropicMaterial):
             the fields that define the card
 
         """
-        Gdefault = self.getG_default()
+        Gdefault = get_G_default(self.e, self.g, self.nu)
         G = set_blank_if_default(self.g, Gdefault)
 
         rho = set_blank_if_default(self.rho, 0.)
@@ -712,15 +736,14 @@ class MAT1(IsotropicMaterial):
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
-
     def D(self):
         E11 = self.E()
         E22 = E11
         nu12 = self.Nu()
         G12 = self.G()
 
-        D = zeros((3, 3))
-        #D = zeros((6,6))
+        D = np.zeros((3, 3))
+        #D = np.zeros((6,6))
         mu = 1. - nu12 * nu12  # *E11/E22    # not necessary b/c they're equal
         D[0, 0] = E11 / mu
         D[1, 1] = E22 / mu
@@ -762,7 +785,7 @@ class MAT1(IsotropicMaterial):
     #def returnComplMat(self, th, **kwargs):
         #"""Returns the material 6x6 compliance matrix.
 
-        #Mainly inteded as a private method although kept public, and
+        #Mainly intended as a private method although kept public, and
         #fascilitated the transformation of the compliance matrix to another
         #coordinate system.
 
@@ -781,6 +804,44 @@ class MAT1(IsotropicMaterial):
         #rh = RotationHelper()
         #Sp = rh.transformCompl(self.Smat,th)
         #return Sp
+
+
+
+def mat1_E_G_nu(E, G, nu):
+    r"""\f[ G = \frac{E}{2 (1+\nu)} \f]"""
+    if G is None and E is None:  # no E,G
+        raise ValueError('G=%s E=%s cannot both be None' % (G, E))
+    elif E is not None and G is not None and nu is not None:
+        pass
+    elif E is not None and nu is not None:
+        G = E / 2. / (1 + nu)
+    elif G is not None and nu is not None:
+        E = 2 * (1 + nu) * G
+    elif G is not None and E is not None:
+        nu = E / (2 * G) - 1.
+    elif G is None and nu is None:
+        G = 0.0
+        nu = 0.0
+    elif E is None and nu is None:
+        E = 0.0
+        nu = 0.0
+    else:
+        msg = 'G=%s E=%s nu=%s' % (G, E, nu)
+        raise ValueError(msg)
+    return E, G, nu
+
+def get_G_default(e: Optional[float], g: float, nu: float) -> float:
+    if g == 0.0 or nu == 0.0:
+        G = g
+    else:
+        #G_default = self.e/2./(1+self.nu)
+        if e is None:
+            G = None
+        else:
+            G = e / 2. / (1 + nu)
+    #print("MAT1 - self.e=%s self.nu=%s self.g=%s Gdef=%s G=%s"
+    #      % (self.e, self.nu,self.g, G_default, G))
+    return G
 
 class MAT2(AnisotropicMaterial):
     """
@@ -824,13 +885,20 @@ class MAT2(AnisotropicMaterial):
     }
     _properties = ['_field_map', 'mp_name_map']
 
-    def __init__(self, mid, G11, G12, G13, G22, G23, G33,
-                 rho=0., a1=None, a2=None, a3=None, tref=0., ge=0.,
-                 St=None, Sc=None, Ss=None, mcsid=None, comment=''):
+    def __init__(self, mid: int,
+                 G11: float, G12: float, G13: float,
+                 G22: float, G23: float, G33: float,
+                 rho: float=0.,
+                 a1=None, a2=None, a3=None,
+                 tref: float=0., ge: float=0.,
+                 St=None, Sc=None, Ss=None, mcsid=None,
+                 ge_matrix=None, comment: str=''):
         AnisotropicMaterial.__init__(self)
         self.matt2_ref = None
         if comment:
             self.comment = comment
+        if ge_matrix is None:
+            ge_matrix = [0., 0., 0., 0., 0., 0.]
         self.mid = mid
         self.G11 = G11
         self.G12 = G12
@@ -848,9 +916,10 @@ class MAT2(AnisotropicMaterial):
         self.Sc = Sc
         self.Ss = Ss
         self.mcsid = mcsid
+        self.ge_matrix = ge_matrix
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, mids):
+    def export_to_hdf5(cls, h5_file, model: BDF, mids: np.ndarray):
         """exports the materials in a vectorized way"""
         #comments = []
         G = []
@@ -904,7 +973,7 @@ class MAT2(AnisotropicMaterial):
         h5_file.create_dataset('mcsid', data=mcsid)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT2 card from ``BDF.add_card(...)``
 
@@ -917,41 +986,106 @@ class MAT2(AnisotropicMaterial):
 
         """
         mid = integer(card, 1, 'mid')
-        G11 = double_or_blank(card, 2, 'G11', 0.0)
-        G12 = double_or_blank(card, 3, 'G12', 0.0)
-        G13 = double_or_blank(card, 4, 'G13', 0.0)
-        G22 = double_or_blank(card, 5, 'G22', 0.0)
-        G23 = double_or_blank(card, 6, 'G23', 0.0)
-        G33 = double_or_blank(card, 7, 'G33', 0.0)
+        G11 = double_or_blank(card, 2, 'G11', default=0.0)
+        G12 = double_or_blank(card, 3, 'G12', default=0.0)
+        G13 = double_or_blank(card, 4, 'G13', default=0.0)
+        G22 = double_or_blank(card, 5, 'G22', default=0.0)
+        G23 = double_or_blank(card, 6, 'G23', default=0.0)
+        G33 = double_or_blank(card, 7, 'G33', default=0.0)
 
-        rho = double_or_blank(card, 8, 'rho', 0.0)
+        rho = double_or_blank(card, 8, 'rho', default=0.0)
         a1 = double_or_blank(card, 9, 'a1') # blank?
         a2 = double_or_blank(card, 10, 'a2') # blank?
         a3 = double_or_blank(card, 11, 'a3') # blank?
-        tref = double_or_blank(card, 12, 'tref', 0.0)
-        ge = double_or_blank(card, 13, 'ge', 0.0)
+        tref = double_or_blank(card, 12, 'tref', default=0.0)
+        ge = double_or_blank(card, 13, 'ge', default=0.0)
         St = double_or_blank(card, 14, 'St') # or blank?
         Sc = double_or_blank(card, 15, 'Sc') # or blank?
         Ss = double_or_blank(card, 16, 'Ss') # or blank?
         mcsid = integer_or_blank(card, 17, 'mcsid')
-        assert len(card) <= 18, 'len(MAT2 card) = %i\ncard=%s' % (len(card), card)
+
+        ge_matrix = [0.0] * 6
+        if len(card) > 18:
+            ge_matrix = [
+                double_or_blank(card, 18, 'ge11', default=0.0),
+                double_or_blank(card, 19, 'ge12', default=0.0),
+                double_or_blank(card, 20, 'ge13', default=0.0),
+                double_or_blank(card, 21, 'ge22', default=0.0),
+                double_or_blank(card, 22, 'ge23', default=0.0),
+                double_or_blank(card, 23, 'ge33', default=0.0),
+            ]
+            assert len(card) <= 24, f'len(MAT2 card) = {len(card):d}\ncard={card}'
+        else:
+            assert len(card) <= 18, f'len(MAT2 card) = {len(card):d}\ncard={card}'
+
         return MAT2(mid, G11, G12, G13, G22, G23, G33,
                     rho, a1, a2, a3, tref, ge, St, Sc, Ss, mcsid,
-                    comment=comment)
+                    ge_matrix=ge_matrix, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT2 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        G11 = force_double_or_blank(card, 2, 'G11', default=0.0)
+        G12 = force_double_or_blank(card, 3, 'G12', default=0.0)
+        G13 = force_double_or_blank(card, 4, 'G13', default=0.0)
+        G22 = force_double_or_blank(card, 5, 'G22', default=0.0)
+        G23 = force_double_or_blank(card, 6, 'G23', default=0.0)
+        G33 = force_double_or_blank(card, 7, 'G33', default=0.0)
+
+        rho = force_double_or_blank(card, 8, 'rho', default=0.0)
+        a1 = force_double_or_blank(card, 9, 'a1') # blank?
+        a2 = force_double_or_blank(card, 10, 'a2') # blank?
+        a3 = force_double_or_blank(card, 11, 'a3') # blank?
+        tref = force_double_or_blank(card, 12, 'tref', default=0.0)
+        ge = force_double_or_blank(card, 13, 'ge', default=0.0)
+        St = force_double_or_blank(card, 14, 'St') # or blank?
+        Sc = force_double_or_blank(card, 15, 'Sc') # or blank?
+        Ss = force_double_or_blank(card, 16, 'Ss') # or blank?
+        mcsid = integer_or_blank(card, 17, 'mcsid')
+
+        ge_matrix = [0.0] * 6
+        if len(card) > 18:
+            ge_matrix = [
+                force_double_or_blank(card, 18, 'ge11', default=0.0),
+                force_double_or_blank(card, 19, 'ge12', default=0.0),
+                force_double_or_blank(card, 20, 'ge13', default=0.0),
+                force_double_or_blank(card, 21, 'ge22', default=0.0),
+                force_double_or_blank(card, 22, 'ge23', default=0.0),
+                force_double_or_blank(card, 23, 'ge33', default=0.0),
+            ]
+            assert len(card) <= 24, f'len(MAT2 card) = {len(card):d}\ncard={card}'
+        else:
+            assert len(card) <= 18, f'len(MAT2 card) = {len(card):d}\ncard={card}'
+
+        return MAT2(mid, G11, G12, G13, G22, G23, G33,
+                    rho, a1, a2, a3, tref, ge, St, Sc, Ss, mcsid,
+                    ge_matrix=ge_matrix, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT2 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
 
         """
+        ge_matrix = None
         mid = data[0]
         G11 = data[1]
         G12 = data[2]
@@ -970,8 +1104,14 @@ class MAT2(AnisotropicMaterial):
         Sc = data[14]
         Ss = data[15]
         mcsid = data[16]
+        if len(data) > 17:
+            assert len(data) == 23, f'data={data} ndata={len(data)}'
+            ge_matrix = data[17:]
+            assert len(ge_matrix) == 6, ge_matrix
+            #ge_list = (ge1, ge2, ge3, ge4, ge5, ge6)
         return MAT2(mid, G11, G12, G13, G22, G23, G33,
                     rho, a1, a2, a3, tref, ge, St, Sc, Ss, mcsid,
+                    ge_matrix=ge_matrix,
                     comment=comment)
 
     def get_density(self):
@@ -1012,7 +1152,7 @@ class MAT2(AnisotropicMaterial):
 
     def Dsolid(self):
         """Eq 9.4.7 in Finite Element Method using Matlab """
-        D = zeros((6, 6))
+        D = np.zeros((6, 6))
         E = self.E()
         nu12 = self.nu12
         nu = nu12
@@ -1040,7 +1180,7 @@ class MAT2(AnisotropicMaterial):
         nu = nu12
         #G12 = self.G()
 
-        D = zeros((3, 3))
+        D = np.zeros((3, 3))
         mu = 1. - nu12 * nu12  # *E11/E22    # not necessary b/c they're equal
         Emu = E / mu
         D[0, 0] = Emu
@@ -1058,6 +1198,7 @@ class MAT2(AnisotropicMaterial):
                        self.G23, self.G33, self.rho, self.a1, self.a2, self.a3,
                        self.tref, self.ge, self.St, self.Sc, self.Ss,
                        self.mcsid]
+        list_fields += list(self.ge_matrix)
         return list_fields
 
     def repr_fields(self):
@@ -1082,6 +1223,14 @@ class MAT2(AnisotropicMaterial):
         list_fields = ['MAT2', self.mid, G11, G12, G13, G22, G23, G33, rho,
                        self.a1, self.a2, self.a3, tref, ge,
                        self.St, self.Sc, self.Ss, self.mcsid]
+        if self.ge_matrix != [0., 0., 0., 0., 0., 0.]:
+            ge11 = set_blank_if_default(self.ge_matrix[0], 0.0)
+            ge12 = set_blank_if_default(self.ge_matrix[1], 0.0)
+            ge13 = set_blank_if_default(self.ge_matrix[2], 0.0)
+            ge22 = set_blank_if_default(self.ge_matrix[3], 0.0)
+            ge23 = set_blank_if_default(self.ge_matrix[4], 0.0)
+            ge33 = set_blank_if_default(self.ge_matrix[5], 0.0)
+            list_fields += [ge11, ge12, ge13, ge22, ge23, ge33]
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
@@ -1113,7 +1262,7 @@ class MAT3(OrthotropicMaterial):
     }
 
     def __init__(self, mid, ex, eth, ez, nuxth, nuthz, nuzx, rho=0.0, gzx=None,
-                 ax=0., ath=0., az=0., tref=0., ge=0., comment=''):
+                 ax=0., ath=0., az=0., tref=0., ge=0., comment: str=''):
         OrthotropicMaterial.__init__(self)
         if comment:
             self.comment = comment
@@ -1135,7 +1284,7 @@ class MAT3(OrthotropicMaterial):
         self.matt3_ref = None
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, mids):
+    def export_to_hdf5(cls, h5_file, model: BDF, mids: np.ndarray):
         """exports the elements in a vectorized way"""
         #comments = []
         ex = []
@@ -1179,7 +1328,7 @@ class MAT3(OrthotropicMaterial):
 
         h5_file.create_dataset('Ex', data=ex)
         h5_file.create_dataset('Eth', data=eth)
-        h5_file.create_dataset('Ez', data=az)
+        h5_file.create_dataset('Ez', data=ez)
 
         h5_file.create_dataset('Nuxth', data=nuxth)
         h5_file.create_dataset('Nuzx', data=nuzx)
@@ -1195,7 +1344,7 @@ class MAT3(OrthotropicMaterial):
         h5_file.create_dataset('ge', data=ge)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT3 card from ``BDF.add_card(...)``
 
@@ -1214,26 +1363,58 @@ class MAT3(OrthotropicMaterial):
         nuxth = double(card, 5, 'nuxth')
         nuthz = double(card, 6, 'nuthz')
         nuzx = double(card, 7, 'nuzx')
-        rho = double_or_blank(card, 8, 'rho', 0.0)
+        rho = double_or_blank(card, 8, 'rho', default=0.0)
 
         gzx = double_or_blank(card, 11, 'gzx')
-        ax = double_or_blank(card, 12, 'ax', 0.0)
-        ath = double_or_blank(card, 13, 'ath', 0.0)
-        az = double_or_blank(card, 14, 'az', 0.0)
-        tref = double_or_blank(card, 15, 'tref', 0.0)
-        ge = double_or_blank(card, 16, 'ge', 0.0)
-        assert len(card) <= 17, 'len(MAT3 card) = %i\ncard=%s' % (len(card), card)
+        ax = double_or_blank(card, 12, 'ax', default=0.0)
+        ath = double_or_blank(card, 13, 'ath', default=0.0)
+        az = double_or_blank(card, 14, 'az', default=0.0)
+        tref = double_or_blank(card, 15, 'tref', default=0.0)
+        ge = double_or_blank(card, 16, 'ge', default=0.0)
+        assert len(card) <= 17, f'len(MAT3 card) = {len(card):d}\ncard={card}'
         return MAT3(mid, ex, eth, ez, nuxth, nuthz, nuzx, rho=rho, gzx=gzx,
                     ax=ax, ath=ath, az=az, tref=tref, ge=ge, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT3 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        ex = force_double(card, 2, 'ex')
+        eth = force_double(card, 3, 'eth')
+        ez = force_double(card, 4, 'ez')
+        nuxth = force_double(card, 5, 'nuxth')
+        nuthz = force_double(card, 6, 'nuthz')
+        nuzx = force_double(card, 7, 'nuzx')
+        rho = force_double_or_blank(card, 8, 'rho', default=0.0)
+
+        gzx = force_double_or_blank(card, 11, 'gzx')
+        ax = force_double_or_blank(card, 12, 'ax', default=0.0)
+        ath = force_double_or_blank(card, 13, 'ath', default=0.0)
+        az = force_double_or_blank(card, 14, 'az', default=0.0)
+        tref = force_double_or_blank(card, 15, 'tref', default=0.0)
+        ge = force_double_or_blank(card, 16, 'ge', default=0.0)
+        assert len(card) <= 17, f'len(MAT3 card) = {len(card):d}\ncard={card}'
+        return MAT3(mid, ex, eth, ez, nuxth, nuthz, nuzx, rho=rho, gzx=gzx,
+                    ax=ax, ath=ath, az=az, tref=tref, ge=ge, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT3 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1361,8 +1542,11 @@ class MAT4(ThermalMaterial):
         return MAT4(mid, k, cp=0.0, rho=1.0, H=None, mu=None, hgen=1.0,
                     ref_enthalpy=None, tch=None, tdelta=None, qlat=None, comment='')
 
-    def __init__(self, mid, k, cp=0.0, rho=1.0, H=None, mu=None,
-                 hgen=1.0, ref_enthalpy=None, tch=None, tdelta=None, qlat=None, comment=''):
+    def __init__(self, mid: int, k: float,
+                 cp: float=0.0, rho: float=1.0,
+                 H=None, mu=None,
+                 hgen: float=1.0, ref_enthalpy=None,
+                 tch=None, tdelta=None, qlat=None, comment: str=''):
         ThermalMaterial.__init__(self)
         self.matt4 = None
         if comment:
@@ -1378,9 +1562,10 @@ class MAT4(ThermalMaterial):
         self.tch = tch
         self.tdelta = tdelta
         self.qlat = qlat
+        self.matt4_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT4 card from ``BDF.add_card(...)``
 
@@ -1394,28 +1579,57 @@ class MAT4(ThermalMaterial):
         """
         mid = integer(card, 1, 'mid')
         k = double_or_blank(card, 2, 'k')
-        cp = double_or_blank(card, 3, 'cp', 0.0)
-        rho = double_or_blank(card, 4, 'rho', 1.0)
+        cp = double_or_blank(card, 3, 'cp', default=0.0)
+        rho = double_or_blank(card, 4, 'rho', default=1.0)
         H = double_or_blank(card, 5, 'H')
         mu = double_or_blank(card, 6, 'mu')
-        hgen = double_or_blank(card, 7, 'hgen', 1.0)
+        hgen = double_or_blank(card, 7, 'hgen', default=1.0)
         ref_enthalpy = double_or_blank(card, 8, 'refEnthalpy')
         tch = double_or_blank(card, 9, 'tch')
         tdelta = double_or_blank(card, 10, 'tdelta')
         qlat = double_or_blank(card, 11, 'qlat')
-        assert len(card) <= 12, 'len(MAT4 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 12, f'len(MAT4 card) = {len(card):d}\ncard={card}'
         return MAT4(mid, k, cp=cp, rho=rho, H=H, mu=mu, hgen=hgen,
                     ref_enthalpy=ref_enthalpy, tch=tch, tdelta=tdelta,
                     qlat=qlat, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT4 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        k = force_double_or_blank(card, 2, 'k')
+        cp = force_double_or_blank(card, 3, 'cp', default=0.0)
+        rho = force_double_or_blank(card, 4, 'rho', default=1.0)
+        H = force_double_or_blank(card, 5, 'H')
+        mu = force_double_or_blank(card, 6, 'mu')
+        hgen = force_double_or_blank(card, 7, 'hgen', default=1.0)
+        ref_enthalpy = force_double_or_blank(card, 8, 'refEnthalpy')
+        tch = force_double_or_blank(card, 9, 'tch')
+        tdelta = force_double_or_blank(card, 10, 'tdelta')
+        qlat = force_double_or_blank(card, 11, 'qlat')
+        assert len(card) <= 12, f'len(MAT4 card) = {len(card):d}\ncard={card}'
+        return MAT4(mid, k, cp=cp, rho=rho, H=H, mu=mu, hgen=hgen,
+                    ref_enthalpy=ref_enthalpy, tch=tch, tdelta=tdelta,
+                    qlat=qlat, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT4 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1468,7 +1682,7 @@ class MAT4(ThermalMaterial):
 
         Returns
         -------
-        fields : List[varies]
+        fields : list[varies]
             the fields that define the card
 
         """
@@ -1508,10 +1722,12 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
     def _init_from_empty(cls):
         mid = 1
         return MAT5(mid, kxx=0., kxy=0., kxz=0., kyy=0., kyz=0., kzz=0.,
-                    cp=0., rho=1., hgen=1., comment='')
+                    cp=0., rho=1., hgen=1.)
 
-    def __init__(self, mid, kxx=0., kxy=0., kxz=0., kyy=0., kyz=0., kzz=0.,
-                 cp=0., rho=1., hgen=1., comment=''):
+    def __init__(self, mid: int,
+                 kxx: float=0., kxy: float=0., kxz: float=0.,
+                 kyy: float=0., kyz: float=0., kzz: float=0.,
+                 cp: float=0., rho: float=1., hgen: float=1., comment: str=''):
         """
         Creates a MAT5, which defines the thermal material properties for an
         anisotropic material
@@ -1561,7 +1777,7 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
         self.matt5_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT5 card from ``BDF.add_card(...)``
 
@@ -1574,28 +1790,56 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
 
         """
         mid = integer(card, 1, 'mid')
-        kxx = double_or_blank(card, 2, 'kxx', 0.0)
-        kxy = double_or_blank(card, 3, 'kxy', 0.0)
-        kxz = double_or_blank(card, 4, 'kxz', 0.0)
-        kyy = double_or_blank(card, 5, 'kyy', 0.0)
-        kyz = double_or_blank(card, 6, 'kyz', 0.0)
-        kzz = double_or_blank(card, 7, 'kzz', 0.0)
+        kxx = double_or_blank(card, 2, 'kxx', default=0.0)
+        kxy = double_or_blank(card, 3, 'kxy', default=0.0)
+        kxz = double_or_blank(card, 4, 'kxz', default=0.0)
+        kyy = double_or_blank(card, 5, 'kyy', default=0.0)
+        kyz = double_or_blank(card, 6, 'kyz', default=0.0)
+        kzz = double_or_blank(card, 7, 'kzz', default=0.0)
 
-        cp = double_or_blank(card, 8, 'cp', 0.0)
-        rho = double_or_blank(card, 9, 'rho', 1.0)
-        hgen = double_or_blank(card, 10, 'hgen', 1.0)
-        assert len(card) <= 11, 'len(MAT5 card) = %i\ncard=%s' % (len(card), card)
+        cp = double_or_blank(card, 8, 'cp', default=0.0)
+        rho = double_or_blank(card, 9, 'rho', default=1.0)
+        hgen = double_or_blank(card, 10, 'hgen', default=1.0)
+        assert len(card) <= 11, f'len(MAT5 card) = {len(card):d}\ncard={card}'
         return MAT5(mid, kxx, kxy, kxz, kyy, kyz, kzz,
                     cp, rho, hgen, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT5 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        kxx = force_double_or_blank(card, 2, 'kxx', default=0.0)
+        kxy = force_double_or_blank(card, 3, 'kxy', default=0.0)
+        kxz = force_double_or_blank(card, 4, 'kxz', default=0.0)
+        kyy = force_double_or_blank(card, 5, 'kyy', default=0.0)
+        kyz = force_double_or_blank(card, 6, 'kyz', default=0.0)
+        kzz = force_double_or_blank(card, 7, 'kzz', default=0.0)
+
+        cp = force_double_or_blank(card, 8, 'cp', default=0.0)
+        rho = force_double_or_blank(card, 9, 'rho', default=1.0)
+        hgen = force_double_or_blank(card, 10, 'hgen', default=1.0)
+        assert len(card) <= 11, f'len(MAT5 card) = {len(card):d}\ncard={card}'
+        return MAT5(mid, kxx, kxy, kxz, kyy, kyz, kzz,
+                    cp, rho, hgen, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT5 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1630,9 +1874,14 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
-        if self.mid in model.MATT5:
-            self.matt5 = self.Matt5()
+        self.matt5 = self.Matt5()
         self.matt5_ref = None
+
+    def Matt5(self) -> int:
+        # TODO: not sure...what's the priority?
+        if self.matt5_ref is not None:
+            return self.matt5_ref
+        return self.mid
 
     def Rho(self):
         return self.rho
@@ -1642,9 +1891,9 @@ class MAT5(ThermalMaterial):  # also AnisotropicMaterial
 
     def K(self):
         """thermal conductivity matrix"""
-        k = array([[self.kxx, self.kxy, self.kxz],
-                   [self.kxy, self.kyy, self.kyz],
-                   [self.kxz, self.kyz, self.kzz]])
+        k = np.array([[self.kxx, self.kxy, self.kxz],
+                      [self.kxy, self.kyy, self.kyz],
+                      [self.kxz, self.kyz, self.kzz]])
         return k
 
     def raw_fields(self):
@@ -1728,11 +1977,14 @@ class MAT8(OrthotropicMaterial):
     }
     _properties = ['_field_map', 'mp_name_map']
 
-    def __init__(self, mid, e11, e22, nu12, g12=0.0, g1z=1e8, g2z=1e8, rho=0.,
-                 a1=0., a2=0., tref=0.,
-                 Xt=0., Xc=None,
-                 Yt=0., Yc=None, S=0.,
-                 ge=0., F12=0., strn=0., comment=''):
+    def __init__(self, mid: int,
+                 e11: float, e22: float, nu12: float,
+                 g12: float=0.0, g1z: float=1e8, g2z: float=1e8,
+                 rho: float=0.0,
+                 a1: float=0.0, a2: float=0.0, tref: float=0.0,
+                 Xt: float=0.0, Xc=None,
+                 Yt: float=0.0, Yc=None, S=0.0,
+                 ge: float=0.0, F12: float=0.0, strn=0.0, comment: str=''):
         OrthotropicMaterial.__init__(self)
         if comment:
             self.comment = comment
@@ -1768,7 +2020,7 @@ class MAT8(OrthotropicMaterial):
         self.matt8_ref = None
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, mids):
+    def export_to_hdf5(cls, h5_file, model: BDF, mids: np.ndarray):
         """exports the materials in a vectorized way"""
         comments = []
         e11 = []
@@ -1841,7 +2093,7 @@ class MAT8(OrthotropicMaterial):
         h5_file.create_dataset('strn', data=strn)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT8 card from ``BDF.add_card(...)``
 
@@ -1857,35 +2109,73 @@ class MAT8(OrthotropicMaterial):
         e11 = double(card, 2, 'E11')    #: .. todo:: is this the correct default
         e22 = double(card, 3, 'E22')    #: .. todo:: is this the correct default
 
-        nu12 = double_or_blank(card, 4, 'nu12', 0.0)
+        nu12 = double_or_blank(card, 4, 'nu12', default=0.0)
 
-        g12 = double_or_blank(card, 5, 'g12', 0.0)
-        g1z = double_or_blank(card, 6, 'g1z', 1e8)
-        g2z = double_or_blank(card, 7, 'g2z', 1e8)
-        rho = double_or_blank(card, 8, 'rho', 0.0)
-        a1 = double_or_blank(card, 9, 'a1', 0.0)
-        a2 = double_or_blank(card, 10, 'a2', 0.0)
-        tref = double_or_blank(card, 11, 'tref', 0.0)
-        Xt = double_or_blank(card, 12, 'Xt', 0.0)
-        Xc = double_or_blank(card, 13, 'Xc', Xt)
-        Yt = double_or_blank(card, 14, 'Yt', 0.0)
-        Yc = double_or_blank(card, 15, 'Yc', Yt)
-        S = double_or_blank(card, 16, 'S', 0.0)
-        ge = double_or_blank(card, 17, 'ge', 0.0)
-        F12 = double_or_blank(card, 18, 'F12', 0.0)
-        strn = double_or_blank(card, 19, 'strn', 0.0)
-        assert len(card) <= 20, 'len(MAT8 card) = %i\ncard=%s' % (len(card), card)
+        g12 = double_or_blank(card, 5, 'g12', default=0.0)
+        g1z = double_or_blank(card, 6, 'g1z', default=1e8)
+        g2z = double_or_blank(card, 7, 'g2z', default=1e8)
+        rho = double_or_blank(card, 8, 'rho', default=0.0)
+        a1 = double_or_blank(card, 9, 'a1', default=0.0)
+        a2 = double_or_blank(card, 10, 'a2', default=0.0)
+        tref = double_or_blank(card, 11, 'tref', default=0.0)
+        Xt = double_or_blank(card, 12, 'Xt', default=0.0)
+        Xc = double_or_blank(card, 13, 'Xc', default=Xt)
+        Yt = double_or_blank(card, 14, 'Yt', default=0.0)
+        Yc = double_or_blank(card, 15, 'Yc', default=Yt)
+        S = double_or_blank(card, 16, 'S', default=0.0)
+        ge = double_or_blank(card, 17, 'ge', default=0.0)
+        F12 = double_or_blank(card, 18, 'F12', default=0.0)
+        strn = double_or_blank(card, 19, 'strn', default=0.0)
+        assert len(card) <= 20, f'len(MAT8 card) = {len(card):d}\ncard={card}'
         return MAT8(mid, e11, e22, nu12, g12, g1z, g2z, rho, a1, a2, tref,
                     Xt, Xc, Yt, Yc, S, ge, F12, strn, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT8 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        e11 = force_double(card, 2, 'E11')    #: .. todo:: is this the correct default
+        e22 = force_double(card, 3, 'E22')    #: .. todo:: is this the correct default
+
+        nu12 = force_double_or_blank(card, 4, 'nu12', default=0.0)
+
+        g12 = force_double_or_blank(card, 5, 'g12', default=0.0)
+        g1z = force_double_or_blank(card, 6, 'g1z', default=1e8)
+        g2z = force_double_or_blank(card, 7, 'g2z', default=1e8)
+        rho = force_double_or_blank(card, 8, 'rho', default=0.0)
+        a1 = force_double_or_blank(card, 9, 'a1', default=0.0)
+        a2 = force_double_or_blank(card, 10, 'a2', default=0.0)
+        tref = force_double_or_blank(card, 11, 'tref', default=0.0)
+        Xt = force_double_or_blank(card, 12, 'Xt', default=0.0)
+        Xc = force_double_or_blank(card, 13, 'Xc', default=Xt)
+        Yt = force_double_or_blank(card, 14, 'Yt', default=0.0)
+        Yc = force_double_or_blank(card, 15, 'Yc', default=Yt)
+        S = force_double_or_blank(card, 16, 'S', default=0.0)
+        ge = force_double_or_blank(card, 17, 'ge', default=0.0)
+        F12 = force_double_or_blank(card, 18, 'F12', default=0.0)
+        strn = force_double_or_blank(card, 19, 'strn', default=0.0)
+        assert len(card) <= 20, f'len(MAT8 card) = {len(card):d}\ncard={card}'
+        return MAT8(mid, e11, e22, nu12, g12, g1z, g2z, rho, a1, a2, tref,
+                    Xt, Xc, Yt, Yc, S, ge, F12, strn, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT8 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1978,7 +2268,7 @@ class MAT8(OrthotropicMaterial):
         nu12 = self.Nu12()
         G12 = self.G12()
 
-        D = zeros((3, 3), dtype='float32')
+        D = np.zeros((3, 3), dtype='float32')
         mu = 1. - nu12 * nu12 * E11 / E22    # not necessary b/c they're equal
         D[0, 0] = E11 / mu
         D[1, 1] = E22 / mu
@@ -2059,6 +2349,7 @@ class MAT9(AnisotropicMaterial):
     |      | A2  | A3  | A4  | A5  | A6  | TREF | GE  |     |
     +------+-----+-----+-----+-----+-----+------+-----+-----+
 
+    .. warning:: MSC 2020: gelist is not supported.
     """
     type = 'MAT9'
     _field_map = {
@@ -2105,13 +2396,16 @@ class MAT9(AnisotropicMaterial):
     }
     _properties = ['_field_map', 'mp_name_map']
 
-    def __init__(self, mid,
-                 G11=0., G12=0., G13=0., G14=0., G15=0., G16=0.,
-                 G22=0., G23=0., G24=0., G25=0., G26=0.,
-                 G33=0., G34=0., G35=0., G36=0.,
-                 G44=0., G45=0., G46=0.,
-                 G55=0., G56=0., G66=0.,
-                 rho=0., A=None, tref=0., ge=0., comment=''):
+    def __init__(self, mid: int,
+                 G11: float=0., G12: float=0., G13: float=0.,
+                 G14: float=0., G15: float=0., G16: float=0.,
+                 G22: float=0., G23: float=0., G24: float=0.,
+                 G25: float=0., G26: float=0.,
+                 G33: float=0., G34: float=0., G35: float=0., G36: float=0.,
+                 G44: float=0., G45: float=0., G46: float=0.,
+                 G55: float=0., G56: float=0., G66: float=0.,
+                 rho: float=0., A: Optional[list[float]]=None,
+                 tref: float=0., ge: float=0., comment: str=''):
         AnisotropicMaterial.__init__(self)
         self.matt9 = None
         if comment:
@@ -2148,7 +2442,7 @@ class MAT9(AnisotropicMaterial):
         assert len(self.A) == 6, A
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, mids):
+    def export_to_hdf5(cls, h5_file, model: BDF, mids: np.ndarray):
         """exports the elements in a vectorized way"""
         comments = []
         G = []
@@ -2173,7 +2467,7 @@ class MAT9(AnisotropicMaterial):
         h5_file.create_dataset('ge', data=ge)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT9 card from ``BDF.add_card(...)``
 
@@ -2186,50 +2480,100 @@ class MAT9(AnisotropicMaterial):
 
         """
         mid = integer(card, 1, 'mid')
-        G11 = double_or_blank(card, 2, 'G11', 0.0)
-        G12 = double_or_blank(card, 3, 'G12', 0.0)
-        G13 = double_or_blank(card, 4, 'G13', 0.0)
-        G14 = double_or_blank(card, 5, 'G14', 0.0)
-        G15 = double_or_blank(card, 6, 'G15', 0.0)
-        G16 = double_or_blank(card, 7, 'G16', 0.0)
-        G22 = double_or_blank(card, 8, 'G22', 0.0)
-        G23 = double_or_blank(card, 9, 'G23', 0.0)
-        G24 = double_or_blank(card, 10, 'G24', 0.0)
-        G25 = double_or_blank(card, 11, 'G25', 0.0)
-        G26 = double_or_blank(card, 12, 'G26', 0.0)
-        G33 = double_or_blank(card, 13, 'G33', 0.0)
-        G34 = double_or_blank(card, 14, 'G34', 0.0)
-        G35 = double_or_blank(card, 15, 'G35', 0.0)
-        G36 = double_or_blank(card, 16, 'G36', 0.0)
-        G44 = double_or_blank(card, 17, 'G44', 0.0)
-        G45 = double_or_blank(card, 18, 'G45', 0.0)
-        G46 = double_or_blank(card, 19, 'G46', 0.0)
-        G55 = double_or_blank(card, 20, 'G55', 0.0)
-        G56 = double_or_blank(card, 21, 'G56', 0.0)
-        G66 = double_or_blank(card, 22, 'G66', 0.0)
-        rho = double_or_blank(card, 23, 'rho', 0.0)
-        A = [double_or_blank(card, 24, 'A1', 0.0),
-             double_or_blank(card, 25, 'A2', 0.0),
-             double_or_blank(card, 26, 'A3', 0.0),
-             double_or_blank(card, 27, 'A4', 0.0),
-             double_or_blank(card, 28, 'A5', 0.0),
-             double_or_blank(card, 29, 'A6', 0.0)]
-        tref = double_or_blank(card, 30, 'tref', 0.0)
-        ge = double_or_blank(card, 31, 'ge', 0.0)
-        assert len(card) <= 32, 'len(MAT9 card) = %i\ncard=%s' % (len(card), card)
+        G11 = double_or_blank(card, 2, 'G11', default=0.0)
+        G12 = double_or_blank(card, 3, 'G12', default=0.0)
+        G13 = double_or_blank(card, 4, 'G13', default=0.0)
+        G14 = double_or_blank(card, 5, 'G14', default=0.0)
+        G15 = double_or_blank(card, 6, 'G15', default=0.0)
+        G16 = double_or_blank(card, 7, 'G16', default=0.0)
+        G22 = double_or_blank(card, 8, 'G22', default=0.0)
+        G23 = double_or_blank(card, 9, 'G23', default=0.0)
+        G24 = double_or_blank(card, 10, 'G24', default=0.0)
+        G25 = double_or_blank(card, 11, 'G25', default=0.0)
+        G26 = double_or_blank(card, 12, 'G26', default=0.0)
+        G33 = double_or_blank(card, 13, 'G33', default=0.0)
+        G34 = double_or_blank(card, 14, 'G34', default=0.0)
+        G35 = double_or_blank(card, 15, 'G35', default=0.0)
+        G36 = double_or_blank(card, 16, 'G36', default=0.0)
+        G44 = double_or_blank(card, 17, 'G44', default=0.0)
+        G45 = double_or_blank(card, 18, 'G45', default=0.0)
+        G46 = double_or_blank(card, 19, 'G46', default=0.0)
+        G55 = double_or_blank(card, 20, 'G55', default=0.0)
+        G56 = double_or_blank(card, 21, 'G56', default=0.0)
+        G66 = double_or_blank(card, 22, 'G66', default=0.0)
+        rho = double_or_blank(card, 23, 'rho', default=0.0)
+        A = [double_or_blank(card, 24, 'A1', default=0.0),
+             double_or_blank(card, 25, 'A2', default=0.0),
+             double_or_blank(card, 26, 'A3', default=0.0),
+             double_or_blank(card, 27, 'A4', default=0.0),
+             double_or_blank(card, 28, 'A5', default=0.0),
+             double_or_blank(card, 29, 'A6', default=0.0)]
+        tref = double_or_blank(card, 30, 'tref', default=0.0)
+        ge = double_or_blank(card, 31, 'ge', default=0.0)
+        assert len(card) <= 32, f'len(MAT9 card) = {len(card):d}\ncard={card}'
         return MAT9(mid, G11, G12, G13, G14, G15, G16, G22, G23, G24, G25,
                     G26, G33, G34, G35, G36, G44, G45, G46,
                     G55, G56, G66, rho, A, tref, ge,
                     comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT9 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        G11 = force_double_or_blank(card, 2, 'G11', default=0.0)
+        G12 = force_double_or_blank(card, 3, 'G12', default=0.0)
+        G13 = force_double_or_blank(card, 4, 'G13', default=0.0)
+        G14 = force_double_or_blank(card, 5, 'G14', default=0.0)
+        G15 = force_double_or_blank(card, 6, 'G15', default=0.0)
+        G16 = force_double_or_blank(card, 7, 'G16', default=0.0)
+        G22 = force_double_or_blank(card, 8, 'G22', default=0.0)
+        G23 = force_double_or_blank(card, 9, 'G23', default=0.0)
+        G24 = force_double_or_blank(card, 10, 'G24', default=0.0)
+        G25 = force_double_or_blank(card, 11, 'G25', default=0.0)
+        G26 = force_double_or_blank(card, 12, 'G26', default=0.0)
+        G33 = force_double_or_blank(card, 13, 'G33', default=0.0)
+        G34 = force_double_or_blank(card, 14, 'G34', default=0.0)
+        G35 = force_double_or_blank(card, 15, 'G35', default=0.0)
+        G36 = force_double_or_blank(card, 16, 'G36', default=0.0)
+        G44 = force_double_or_blank(card, 17, 'G44', default=0.0)
+        G45 = force_double_or_blank(card, 18, 'G45', default=0.0)
+        G46 = force_double_or_blank(card, 19, 'G46', default=0.0)
+        G55 = force_double_or_blank(card, 20, 'G55', default=0.0)
+        G56 = force_double_or_blank(card, 21, 'G56', default=0.0)
+        G66 = force_double_or_blank(card, 22, 'G66', default=0.0)
+        rho = force_double_or_blank(card, 23, 'rho', default=0.0)
+        A = [force_double_or_blank(card, 24, 'A1', default=0.0),
+             force_double_or_blank(card, 25, 'A2', default=0.0),
+             force_double_or_blank(card, 26, 'A3', default=0.0),
+             force_double_or_blank(card, 27, 'A4', default=0.0),
+             force_double_or_blank(card, 28, 'A5', default=0.0),
+             force_double_or_blank(card, 29, 'A6', default=0.0)]
+        tref = force_double_or_blank(card, 30, 'tref', default=0.0)
+        ge = force_double_or_blank(card, 31, 'ge', default=0.0)
+        assert len(card) <= 32, f'len(MAT9 card) = {len(card):d}\ncard={card}'
+        return MAT9(mid, G11, G12, G13, G14, G15, G16, G22, G23, G24, G25,
+                    G26, G33, G34, G35, G36, G44, G45, G46,
+                    G55, G56, G66, rho, A, tref, ge,
+                    comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT9 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -2304,8 +2648,8 @@ class MAT9(AnisotropicMaterial):
     def Rho(self):
         return self.rho
 
-    def D(self):
-        D = array(
+    def D(self) -> np.narray:
+        D = np.array(
             [[self.G11, self.G12, self.G13, self.G14, self.G15, self.G16],
              [self.G12, self.G22, self.G23, self.G24, self.G25, self.G26],
              [self.G13, self.G23, self.G33, self.G34, self.G35, self.G36],
@@ -2392,11 +2736,12 @@ class MAT10(Material):
         c = 20.
         return MAT10(mid, bulk=bulk, rho=None, c=c, ge=0.0, gamma=None,
                      table_bulk=None, table_rho=None, table_ge=None,
-                     table_gamma=None, comment='')
+                     table_gamma=None)
 
-    def __init__(self, mid, bulk=None, rho=None, c=None, ge=0.0, gamma=None,
+    def __init__(self, mid: int,
+                 bulk=None, rho=None, c=None, ge: float=0.0, gamma=None,
                  table_bulk=None, table_rho=None, table_ge=None, table_gamma=None,
-                 comment=''):
+                 comment: str=''):
         """
         Creates a MAT10 card
 
@@ -2457,7 +2802,7 @@ class MAT10(Material):
         assert self.c >= 0., self
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT10 card from ``BDF.add_card(...)``
 
@@ -2473,26 +2818,55 @@ class MAT10(Material):
         bulk = double_or_blank(card, 2, 'bulk')
         rho = double_or_blank(card, 3, 'rho')
         c = double_or_blank(card, 4, 'c')
-        ge = double_or_blank(card, 5, 'ge', 0.0)
+        ge = double_or_blank(card, 5, 'ge', default=0.0)
 
-        gamma = double_or_blank(card, 6, 'gamma', None)
+        gamma = double_or_blank(card, 6, 'gamma', default=None)
         tid_bulk = integer_or_blank(card, 10, 'tid_bulk')
         tid_rho = integer_or_blank(card, 11, 'tid_rho')
         tid_ge = integer_or_blank(card, 13, 'tid_ge')
         tid_gamma = integer_or_blank(card, 14, 'tid_gamma')
-        assert len(card) <= 15, 'len(MAT10 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 15, f'len(MAT10 card) = {len(card):d}\ncard={card}'
         return MAT10(mid, bulk, rho, c, ge, gamma,
                      tid_bulk, tid_rho, tid_ge, tid_gamma,
                      comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT10 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        bulk = force_double_or_blank(card, 2, 'bulk')
+        rho = force_double_or_blank(card, 3, 'rho')
+        c = force_double_or_blank(card, 4, 'c')
+        ge = force_double_or_blank(card, 5, 'ge', default=0.0)
+
+        gamma = force_double_or_blank(card, 6, 'gamma', default=None)
+        tid_bulk = integer_or_blank(card, 10, 'tid_bulk')
+        tid_rho = integer_or_blank(card, 11, 'tid_rho')
+        tid_ge = integer_or_blank(card, 13, 'tid_ge')
+        tid_gamma = integer_or_blank(card, 14, 'tid_gamma')
+        assert len(card) <= 15, f'len(MAT10 card) = {len(card):d}\ncard={card}'
+        return MAT10(mid, bulk, rho, c, ge, gamma,
+                     tid_bulk, tid_rho, tid_ge, tid_gamma,
+                     comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT10 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -2503,7 +2877,15 @@ class MAT10(Material):
         rho = data[2]
         c = data[3]
         ge = data[4]
-        return MAT10(mid, bulk, rho, c, ge, comment=comment)
+        gamma = None
+        if len(data) == 5:
+            pass
+        else:
+            assert len(data) == 6, data
+            gamma = data[-1]
+        mat10 = MAT10(mid, bulk=bulk, rho=rho, c=c, ge=ge, gamma=gamma,
+                      comment=comment)
+        return mat10
 
     def cross_reference(self, model: BDF) -> None:
         msg = ', which is required by MAT10 mid=%s' % self.mid
@@ -2523,14 +2905,14 @@ class MAT10(Material):
         if self.table_rho is not None:
             del self.table_rho_ref
         if self.table_ge is not None:
-            del self.table_gamma_ref
+            del self.table_ge_ref
         if self.table_gamma is not None:
             del self.table_gamma_ref
 
-    def Rho(self):
+    def Rho(self) -> float:
         return self.rho
 
-    def get_density(self):
+    def get_density(self) -> float:
         return self.rho
 
     def _verify(self, xref):
@@ -2586,7 +2968,7 @@ class MAT10(Material):
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
-def _mat10_get_bulk_rho_c(bulk, rho, c):
+def _mat10_get_bulk_rho_c(bulk, rho, c) -> tuple[float, float, float]:
     r""".. math:: bulk = c^2 \rho"""
     if c is not None:
         if rho is not None:
@@ -2604,16 +2986,18 @@ def _mat10_get_bulk_rho_c(bulk, rho, c):
                 msg = 'bulk=%s rho=%s c=sqrt(bulk/rho)=NA' % (bulk, rho)
                 raise ValueError(msg)
         else:
-            msg = 'c, bulk, and rho are all undefined on tbe MAT10'
+            msg = 'c, bulk, and rho are all undefined on the MAT10'
             raise RuntimeError(msg)
     else:
-        msg = 'c, bulk, and rho are all undefined on tbe MAT10'
+        msg = 'c, bulk, and rho are all undefined on the MAT10'
         raise RuntimeError(msg)
 
     return bulk, rho, c
 
 class MATG(Material):
     """
+    per MSC 2018.2
+
     +------+--------+--------+---------+--------+--------+---------+--------+--------+
     |   1  |   2    |   3    |    4    |   5    |   6    |    7    |    8   |   9    |
     +======+========+========+=========+========+========+=========+========+========+
@@ -2664,10 +3048,15 @@ class MATG(Material):
         yprs = 6.
         epl = 7.
         gpl = 8.
-        return MATG(mid, idmem, behav, tabld, tablu, yprs, epl, gpl, comment='')
+        return MATG(mid, idmem, behav, tabld, tablu, yprs, epl, gpl)
 
-    def __init__(self, mid, idmem, behav, tabld, tablu, yprs, epl, gpl,
-                 gap=0., tab_yprs=None, tab_epl=None, tab_gpl=None, tab_gap=None, comment=''):
+    def __init__(self, mid: int,
+                 idmem: int, behav: int, tabld: int, tablu: list[int],
+                 yprs: float, epl: float, gpl: float,
+                 gap: float=0.,
+                 tab_yprs: int=0, tab_epl: int=0,
+                 tab_gpl: int=0, tab_gap: int=0,
+                 comment: str=''):
         Material.__init__(self)
         if comment:
             self.comment = comment
@@ -2694,7 +3083,7 @@ class MATG(Material):
         assert isinstance(self.tablu, list) and len(self.tablu) == 4, self.tablu
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MATG card from ``BDF.add_card(...)``
 
@@ -2712,22 +3101,61 @@ class MATG(Material):
         tabld = integer(card, 4, 'tabld')
 
         tablu = [
-            integer(card, 5, 'tablu1'),
-            integer(card, 6, 'tablu2'),
-            integer_or_blank(card, 7, 'tablu3'),
-            integer_or_blank(card, 8, 'tablu4'),
+            integer_or_blank(card, 5, 'tablu1', default=0),
+            integer_or_blank(card, 6, 'tablu2', default=0),
+            integer_or_blank(card, 7, 'tablu3', default=0),
+            integer_or_blank(card, 8, 'tablu4', default=0),
         ]
         yprs = double(card, 9, 'yprs')
         epl = double(card, 10, 'epl')
         gpl = double(card, 11, 'gpl')
-        gap = double_or_blank(card, 12, 'gap', 0.0)
+        gap = double_or_blank(card, 12, 'gap', default=0.0)
 
-        tab_yprs = integer_or_blank(card, 13, 'tabyprs')
-        tab_epl = integer_or_blank(card, 14, 'tabepl')
-        tab_gpl = integer_or_blank(card, 15, 'tabgpl')
-        tab_gap = integer_or_blank(card, 16, 'tabgap')
+        tab_yprs = integer_or_blank(card, 13, 'tabyprs', default=0)
+        tab_epl = integer_or_blank(card, 14, 'tabepl', default=0)
+        tab_gpl = integer_or_blank(card, 15, 'tabgpl', default=0)
+        tab_gap = integer_or_blank(card, 16, 'tabgap', default=0)
 
-        assert len(card) <= 17, 'len(MATG card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 17, f'len(MATG card) = {len(card):d}\ncard={card}'
+        return MATG(mid, idmem, behav, tabld, tablu, yprs, epl, gpl, gap,
+                    tab_yprs, tab_epl, tab_gpl, tab_gap,
+                    comment=comment)
+
+    @classmethod
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MATG card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        idmem = integer(card, 2, 'idmem')
+        behav = integer(card, 3, 'behav')
+        tabld = integer(card, 4, 'tabld')
+
+        tablu = [
+            integer_or_blank(card, 5, 'tablu1', default=0),
+            integer_or_blank(card, 6, 'tablu2', default=0),
+            integer_or_blank(card, 7, 'tablu3', default=0),
+            integer_or_blank(card, 8, 'tablu4', default=0),
+        ]
+        yprs = force_double(card, 9, 'yprs')
+        epl = force_double(card, 10, 'epl')
+        gpl = force_double(card, 11, 'gpl')
+        gap = force_double_or_blank(card, 12, 'gap', default=0.0)
+
+        tab_yprs = integer_or_blank(card, 13, 'tabyprs', default=0)
+        tab_epl = integer_or_blank(card, 14, 'tabepl', default=0)
+        tab_gpl = integer_or_blank(card, 15, 'tabgpl', default=0)
+        tab_gap = integer_or_blank(card, 16, 'tabgap', default=0)
+
+        assert len(card) <= 17, f'len(MATG card) = {len(card):d}\ncard={card}'
         return MATG(mid, idmem, behav, tabld, tablu, yprs, epl, gpl, gap,
                     tab_yprs, tab_epl, tab_gpl, tab_gap,
                     comment=comment)
@@ -2760,6 +3188,7 @@ class MATG(Material):
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
 
 class MAT11(Material):
     """
@@ -2812,10 +3241,15 @@ class MAT11(Material):
         g13 = 20.
         g23 = 30.
         return MAT11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23,
-                     rho=0.0, a1=0.0, a2=0.0, a3=0.0, tref=0.0, ge=0.0, comment='')
+                     rho=0.0, a1=0.0, a2=0.0, a3=0.0, tref=0.0, ge=0.0)
 
-    def __init__(self, mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho=0.0,
-                 a1=0.0, a2=0.0, a3=0.0, tref=0.0, ge=0.0, comment=''):
+    def __init__(self, mid: float,
+                 e1: float, e2: float, e3: float,
+                 nu12: float, nu13: float, nu23: float,
+                 g12: float, g13: float, g23: float,
+                 rho: float=0.0,
+                 a1: float=0.0, a2: float=0.0, a3: float=0.0,
+                 tref: float=0.0, ge: float=0.0, comment: str=''):
         Material.__init__(self)
         if comment:
             self.comment = comment
@@ -2842,7 +3276,7 @@ class MAT11(Material):
         self._validate_input()
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT11 card from ``BDF.add_card(...)``
 
@@ -2867,25 +3301,61 @@ class MAT11(Material):
         g13 = double(card, 9, 'g13')
         g23 = double(card, 10, 'g23')
 
-        rho = double_or_blank(card, 11, 'rho', 0.0)
-        a1 = double_or_blank(card, 12, 'a1', 0.0)
-        a2 = double_or_blank(card, 13, 'a2', 0.0)
-        a3 = double_or_blank(card, 14, 'a3', 0.0)
+        rho = double_or_blank(card, 11, 'rho', default=0.0)
+        a1 = double_or_blank(card, 12, 'a1', default=0.0)
+        a2 = double_or_blank(card, 13, 'a2', default=0.0)
+        a3 = double_or_blank(card, 14, 'a3', default=0.0)
 
-        tref = double_or_blank(card, 15, 'tref', 0.0)
-        ge = double_or_blank(card, 16, 'ge', 0.0)
-        assert len(card) <= 17, 'len(MAT11 card) = %i\ncard=%s' % (len(card), card)
+        tref = double_or_blank(card, 15, 'tref', default=0.0)
+        ge = double_or_blank(card, 16, 'ge', default=0.0)
+        assert len(card) <= 17, f'len(MAT11 card) = {len(card):d}\ncard={card}'
         return MAT11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho=rho,
                      a1=a1, a2=a2, a3=a3, tref=tref, ge=ge, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a MAT11 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        mid = integer(card, 1, 'mid')
+        e1 = force_double(card, 2, 'E1')
+        e2 = force_double(card, 3, 'E2')
+        e3 = force_double(card, 4, 'E3')
+
+        nu12 = force_double(card, 5, 'nu12')
+        nu13 = force_double(card, 6, 'nu13')
+        nu23 = force_double(card, 7, 'nu23')
+
+        g12 = force_double(card, 8, 'g12')
+        g13 = force_double(card, 9, 'g13')
+        g23 = force_double(card, 10, 'g23')
+
+        rho = force_double_or_blank(card, 11, 'rho', default=0.0)
+        a1 = force_double_or_blank(card, 12, 'a1', default=0.0)
+        a2 = force_double_or_blank(card, 13, 'a2', default=0.0)
+        a3 = force_double_or_blank(card, 14, 'a3', default=0.0)
+
+        tref = force_double_or_blank(card, 15, 'tref', default=0.0)
+        ge = force_double_or_blank(card, 16, 'ge', default=0.0)
+        assert len(card) <= 17, f'len(MAT11 card) = {len(card):d}\ncard={card}'
+        return MAT11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho=rho,
+                     a1=a1, a2=a2, a3=a3, tref=tref, ge=ge, comment=comment)
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MAT11 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -2909,6 +3379,9 @@ class MAT11(Material):
         ge = data[15]
         return MAT11(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho,
                      a1, a2, a3, tref, ge, comment=comment)
+
+    def get_density(self) -> float:
+        return self.rho
 
     def _verify(self, xref):
         """
@@ -3025,7 +3498,7 @@ class MAT3D(Material):
         self._validate_input()
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MAT3D card from ``BDF.add_card(...)``
 
@@ -3048,7 +3521,7 @@ class MAT3D(Material):
         g13 = double(card, 9, 'g13')
         g23 = double(card, 10, 'g23')
         rho = double_or_blank(card, 11, 'rho', 0.0)
-        assert len(card) <= 17, 'len(MAT3D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 17, f'len(MAT3D card) = {len(card):d}\ncard={card}'
         return MAT3D(mid, e1, e2, e3, nu12, nu13, nu23, g12, g13, g23, rho, comment=comment)
 
     def uncross_reference(self) -> None:
@@ -3255,9 +3728,12 @@ class MATHE(HyperelasticMaterial):
                      mooney, sussbat, aboyce, gent,
                      rho=0., texp=0., tref=0., ge=0., comment='')
 
-    def __init__(self, mid, model, bulk, mus, alphas, betas,
-                 mooney, sussbat, aboyce, gent,
-                 rho=0., texp=0., tref=0., ge=0., comment=''):
+    def __init__(self, mid: int, model: str, bulk: float,
+                 mus: list[float], alphas: list[float], betas: list[float],
+                 mooney: list[float], sussbat: list[float],
+                 aboyce: list[float], gent: list[float],
+                 rho: float=0., texp: float=0.,
+                 tref: float=0., ge: float=0., comment: str=''):
         HyperelasticMaterial.__init__(self)
         if comment:
             self.comment = comment
@@ -3289,7 +3765,7 @@ class MATHE(HyperelasticMaterial):
     def validate(self):
         #assert model in ['OGDEN', 'FOAM', 'MOONEY', 'SUSSBAT', 'ABOYCE', 'GENT'], f'model={model!r}'
         if self.model not in ['MOONEY', 'OGDEN', 'FOAM', 'ABOYCE', 'SUSSBAT', 'ABOYCE', 'GENT']:
-            msg = "model=%r not in [MOONEY, OGDEN, FOAM, ABOYCE, SUSSBAT, ABOYCE, GENT]" % self.model
+            msg = f'model={self.model!r} not in [MOONEY, OGDEN, FOAM, ABOYCE, SUSSBAT, ABOYCE, GENT]'
             raise ValueError(msg)
         if self.model == 'MOONEY':
             #mooney = [ # floats
@@ -3300,7 +3776,7 @@ class MATHE(HyperelasticMaterial):
             assert len(self.mooney) == 9, self.mooney
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MATHE card from ``BDF.add_card(...)``
 
@@ -3361,19 +3837,19 @@ class MATHE(HyperelasticMaterial):
                 c20, c11, c02,
                 c30, c21, c12, c03,
             ]
-            assert len(card) <= 29, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
+            assert len(card) <= 29, f'len(MATHE card) = {len(card):d}\ncard={card}'
         elif model == 'SUSSBAT':
             tab1 = integer(card, 9, 'tab1')
             sstype = string_or_blank(card, 10, 'sstype', 'ENG')
             relerr = double_or_blank(card, 11, 'relerr', 0.01)
-            assert len(card) <= 12, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
+            assert len(card) <= 12, f'len(MATHE card) = {len(card):d}\ncard={card}'
             sussbat = [tab1, sstype, relerr]
         elif model in ['ABOYCE']:
             # NX version
             # MSC version not supported (same as GENT)
             nkt = double_or_blank(card, 9, 'NKT', 1.0)
             n = double_or_blank(card, 10, 'N', 1.0)
-            assert len(card) <= 11, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
+            assert len(card) <= 11, f'len(MATHE card) = {len(card):d}\ncard={card}'
             aboyce = [nkt, n]
         elif model in ['GENT']:
             # no NX version
@@ -3399,11 +3875,11 @@ class MATHE(HyperelasticMaterial):
             d5 = double_or_blank(card, 21, 'd5')
 
             # TODO: should this be 21?
-            assert len(card) <= 22, 'len(MATHE card) = %i\ncard=%s' % (len(card), card)
+            assert len(card) <= 22, f'len(MATHE card) = {len(card):d}\ncard={card}'
 
             gent = [nkt, n, im, d1, d2, d3, d4, d5]
         else:  # pragma: no cover
-            raise NotImplementedError('model=%r' % (model))
+            raise NotImplementedError(f'model={model!r}')
 
         return MATHE(mid, model, bulk, mus, alphas, betas,
                      mooney, sussbat, aboyce, gent,
@@ -3530,12 +4006,14 @@ class MATHP(HyperelasticMaterial):
                      a32=0., a23=0., a14=0., a05=0., d5=0.,
                      tab1=None, tab2=None, tab3=None, tab4=None, tabd=None, comment='')
 
-    def __init__(self, mid, a10=0., a01=0., d1=None, rho=0., av=0., tref=0., ge=0., na=1, nd=1,
+    def __init__(self, mid: int,
+                 a10=0., a01=0., d1=None, rho=0., av=0., tref=0., ge=0., na=1, nd=1,
                  a20=0., a11=0., a02=0., d2=0.,
                  a30=0., a21=0., a12=0., a03=0., d3=0.,
                  a40=0., a31=0., a22=0., a13=0., a04=0., d4=0.,
                  a50=0., a41=0., a32=0., a23=0., a14=0., a05=0., d5=0.,
-                 tab1=None, tab2=None, tab3=None, tab4=None, tabd=None, comment=''):
+                 tab1: int=0, tab2: int=0, tab3: int=0,
+                 tab4: int=0, tabd: int=0, comment: str=''):
         HyperelasticMaterial.__init__(self)
         if comment:
             self.comment = comment
@@ -3587,7 +4065,7 @@ class MATHP(HyperelasticMaterial):
         self.tabd = tabd
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a MATHP card from ``BDF.add_card(...)``
 
@@ -3637,12 +4115,12 @@ class MATHP(HyperelasticMaterial):
         a05 = double_or_blank(card, 46, 'a05', 0.)
         d5 = double_or_blank(card, 47, 'd5', 0.)
 
-        tab1 = integer_or_blank(card, 49, 'tab1')
-        tab2 = integer_or_blank(card, 50, 'tab2')
-        tab3 = integer_or_blank(card, 51, 'tab3')
-        tab4 = integer_or_blank(card, 52, 'tab4')
-        tabd = integer_or_blank(card, 56, 'tabd')
-        assert len(card) <= 57, 'len(MATHP card) = %i\ncard=%s' % (len(card), card)
+        tab1 = integer_or_blank(card, 49, 'tab1', default=0)
+        tab2 = integer_or_blank(card, 50, 'tab2', default=0)
+        tab3 = integer_or_blank(card, 51, 'tab3', default=0)
+        tab4 = integer_or_blank(card, 52, 'tab4', default=0)
+        tabd = integer_or_blank(card, 56, 'tabd', default=0)
+        assert len(card) <= 57, f'len(MATHP card) = {len(card):d}\ncard={card}'
         return MATHP(mid, a10, a01, d1, rho, av, tref, ge, na, nd, a20, a11,
                      a02, d2, a30, a21, a12, a03, d3, a40,
                      a31, a22, a13, a04, d4, a50, a41,
@@ -3650,13 +4128,13 @@ class MATHP(HyperelasticMaterial):
                      tab3, tab4, tabd, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a MATHP card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -3674,19 +4152,20 @@ class MATHP(HyperelasticMaterial):
         if continue_flag:
             (tab1, tab2, tab3, tab4, x1, x2, x3, tabd) = data[1]
         else:
-            tab1 = None
-            tab2 = None
-            tab3 = None
-            tab4 = None
-            tabd = None
+            tab1 = 0
+            tab2 = 0
+            tab3 = 0
+            tab4 = 0
+            tabd = 0
 
         return MATHP(mid, a10, a01, d1, rho, av, tref, ge, na, nd, a20, a11,
                      a02, d2, a30, a21, a12, a03, d3, a40,
                      a31, a22, a13, a04, d4, a50, a41,
-                     a32, a23, a14, a05, d5, tab1, tab2,
-                     tab3, tab4, tabd, comment=comment)
+                     a32, a23, a14, a05, d5,
+                     tab1, tab2, tab3, tab4, tabd,
+                     comment=comment)
 
-    def Rho(self):
+    def Rho(self) -> float:
         return self.rho
 
     def raw_fields(self):
@@ -3750,14 +4229,20 @@ class MATHP(HyperelasticMaterial):
 
         tref = set_blank_if_default(self.tref, 0.0)
         ge = set_blank_if_default(self.ge, 0.0)
+
+        tab1 = set_blank_if_default(self.tab1, 0)
+        tab2 = set_blank_if_default(self.tab2, 0)
+        tab3 = set_blank_if_default(self.tab3, 0)
+        tab4 = set_blank_if_default(self.tab4, 0)
+        tabd = set_blank_if_default(self.tabd, 0)
         list_fields = ['MATHP', self.mid, a10, a01, d1, self.rho, av, tref, ge,
                        None, na, nd, None, None, None, None, None,
                        a20, a11, a02, d2, None, None, None, None,
                        a30, a21, a12, a03, d3, None, None, None,
                        a40, a31, a22, a13, a04, d4, None, None,
                        a50, a41, a32, a23, a14, a05, d5, None,
-                       self.tab1, self.tab2, self.tab3, self.tab4,
-                       None, None, None, self.tabd]
+                       tab1, tab2, tab3, tab4,
+                       None, None, None, tabd]
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
@@ -3766,6 +4251,268 @@ class MATHP(HyperelasticMaterial):
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
+
+class MATEV(ViscoelasticMaterial):
+    """
+    Defines the material properties for linear isotropic materials.
+
+    +-------+-------+-------+-------+------+-------+------+------+-----+
+    |   1   |   2   |   3   |   4   |   5  |   6   |  7   |  8   |  9  |
+    +=======+=======+=======+=======+======+=======+======+======+=====+
+    | MATVE |  MID  | GFUNC | KFUNC |  RHO | ALPHA |      |      |     |
+    +-------+-------+-------+-------+------+-------+------+------+-----+
+    |       | SHIFT |   C1  |   C2  |  T0  |       |      |      |     |
+    +-------+-------+-------+-------+------+-------+------+------+-----+
+
+    """
+    type = 'MATEV'
+    _field_map = {
+        #1: 'mid', 2:'e', 3:'g', 4:'nu', 5: 'rho', 6:'a', 7:'tref', 8:'ge',
+        #9: 'St', 10:'Sc', 11:'Ss', 12:'mcsid',
+    }
+    mp_name_map = {
+        #'E' : 'e', #3 : 'e',
+    }
+    _properties = ['_field_map', 'mp_name_map']
+
+    def __init__(self, mid: int, gfunc: int, kfunc: int,
+                 rho: float=0.0, alpha: float=0.0,
+                 shift: int=1, c1: float=0.0, c2: float=0.0, tref=0.0, comment=''):
+        """
+        Creates a MAT1 card
+
+        Parameters
+        ----------
+        mid : int
+            material id
+        gfunc : int
+            Table identification number of a TABVE entry that contains a
+            series of shear modulii and decay coefficients to represent
+            the shear modulus relaxation function of the material.
+        kfunc : int
+            Table identification number of a TABVE entry that contains a
+            series of bulk modulii and decay coefficients to represent
+            the bulk modulus relaxation function of the material.
+        rho : float; default=0.0
+            Mass density.
+        alpha : float; default=0.0
+            Coefficient of thermal expansion.
+        shift : int; default=1
+            Time-temperature superposition shift law.
+            1: Use WLF (Williams-Landel-Ferry) shift function
+            2: Use Arrhenius shift function
+        c1, c2 : float; default=0.0
+            Material constants used by the WLF or Arrhenius shift function.
+        tref : float; default=0.
+            Reference temperature used by the WLF or Arrhenius shift function.
+        comment : str; default=''
+            a comment for the card
+
+        """
+        IsotropicMaterial.__init__(self)
+        if comment:
+            self.comment = comment
+        self.mid = mid
+        self.gfunc = gfunc
+        self.kfunc = kfunc
+        self.rho = rho
+        self.alpha = alpha
+        self.shift = shift
+        self.c1 = c1
+        self.c2 = c2
+        self.tref = tref
+
+    #@classmethod
+    #def export_to_hdf5(cls, h5_file, model, mids):
+        #"""exports the materials in a vectorized way"""
+        ##comments = []
+        #e = []
+        #g = []
+        #nu = []
+        #rho = []
+        #a = []
+        #tref = []
+        #ge = []
+        #St = []
+        #Sc = []
+        #Ss = []
+        #mcsid = []
+        #for mid in mids:
+            #material = model.materials[mid]
+            ##comments.append(element.comment)
+
+            #if material.e is None:
+                #e.append(np.nan)
+            #else:
+                #e.append(material.e)
+
+            #if material.g is None:
+                #e.append(np.nan)
+            #else:
+                #g.append(material.g)
+
+            #if material.nu is None:
+                #nu.append(np.nan)
+            #else:
+                #nu.append(material.nu)
+
+            #rho.append(material.rho)
+            #a.append(material.a)
+            #tref.append(material.tref)
+            #ge.append(material.ge)
+            #St.append(material.St)
+            #Sc.append(material.Sc)
+            #Ss.append(material.Ss)
+            #mcsid.append(material.mcsid)
+        ##h5_file.create_dataset('_comment', data=comments)
+        #h5_file.create_dataset('mid', data=mids)
+        #h5_file.create_dataset('E', data=e)
+        #h5_file.create_dataset('G', data=g)
+        #h5_file.create_dataset('nu', data=nu)
+        #h5_file.create_dataset('A', data=a)
+        #h5_file.create_dataset('rho', data=rho)
+        #h5_file.create_dataset('tref', data=tref)
+        #h5_file.create_dataset('ge', data=ge)
+        #h5_file.create_dataset('St', data=St)
+        #h5_file.create_dataset('Sc', data=Sc)
+        #h5_file.create_dataset('Ss', data=Ss)
+        #h5_file.create_dataset('mcsid', data=mcsid)
+
+    @classmethod
+    def add_card(cls, card, comment=''):
+        """
+        Adds a MATEV card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        # |   1   |   2   |   3   |   4   |   5  |   6   |  7   |  8   |  9  |
+        # +=======+=======+=======+=======+======+=======+======+======+=====+
+        # | MATVE |  MID  | GFUNC | KFUNC |  RHO | ALPHA |      |      |     |
+        # +-------+-------+-------+-------+------+-------+------+------+-----+
+        # |       | SHIFT |   C1  |   C2  |  T0  |       |      |      |     |
+
+        mid = integer(card, 1, 'mid')
+        gfunc = integer_or_blank(card, 2, 'gfunc')
+        kfunc = integer_or_blank(card, 3, 'G')
+        rho = double_or_blank(card, 4, 'rho', 0.)
+        alpha = double_or_blank(card, 5, 'alpha', 0.0)
+
+        shift = integer_or_blank(card, 9, 'shift', 1)
+        c1 = double_or_blank(card, 10, 'c1', 0.0)
+        c2 = double_or_blank(card, 11, 'c2', 0.0)
+        tref = double_or_blank(card, 12, 'tref', 0.0)
+        assert len(card) <= 12, f'len(MATEV card) = {len(card):d}\ncard={card}'
+        return MATEV(mid, gfunc, kfunc, rho=rho, alpha=alpha,
+                     shift=shift, c1=c1, c2=c2, tref=tref, comment=comment)
+
+    #@classmethod
+    #def add_op2_data(cls, data, comment: str=''):
+        #"""
+        #Adds a MAT1 card from the OP2
+
+        #Parameters
+        #----------
+        #data : list[varies]
+            #a list of fields defined in OP2 format
+        #comment : str; default=''
+            #a comment for the card
+
+        #"""
+        #mid = data[0]
+        #return MAT1(mid, e, g, nu, rho, a, tref, ge,
+                    #St, Sc, Ss, mcsid, comment=comment)
+
+    def _verify(self, xref):
+        """
+        Verifies all methods for this object work
+
+        Parameters
+        ----------
+        xref : bool
+            has this model been cross referenced
+
+        """
+        mid = self.Mid()
+        assert isinstance(mid, integer_types), 'mid=%r' % mid
+        #if xref:
+            #if [self.matt1_ref, self.mats1_ref] == [None, None]:
+                #assert isinstance(nu, float), 'nu=%r' % nu
+
+    def Rho(self):
+        return self.rho
+
+    def get_density(self):
+        return self.rho
+
+    def cross_reference(self, model: BDF) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        pass
+        #msg = ', which is required by MAT1 mid=%s' % self.mid
+        #self.mcsid = model.Coord(self.mcsid, msg=msg)  # used only for PARAM,CURVPLOT
+        #if self.mid in model.MATS1:
+            #self.mats1_ref = model.MATS1[self.mid]  # not using a method...
+        #if self.mid in model.MATT1:
+            #self.matt1_ref = model.MATT1[self.mid]  # not using a method...
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        #self.mats1_ref = None
+        pass
+
+    def raw_fields(self):
+        list_fields = ['MATEV', self.mid, self.gfunc, self.kfunc, self.rho, self.alpha, None, None, None,
+                       self.shift, self.c1, self.c2, self.tref]
+        return list_fields
+
+    def repr_fields(self):
+        """
+        Gets the fields in their simplified form
+
+        Returns
+        -------
+        fields : [varies, ...]
+            the fields that define the card
+
+        """
+        #Gdefault = self.getG_default()
+        #G = set_blank_if_default(self.g, Gdefault)
+
+        #rho = set_blank_if_default(self.rho, 0.)
+        #a = set_blank_if_default(self.a, 0.)
+        #tref = set_blank_if_default(self.tref, 0.)
+        #ge = set_blank_if_default(self.ge, 0.)
+
+        #if [self.St, self.Sc, self.Ss, self.mcsid] == [0., 0., 0., 0]:
+            #list_fields = ['MAT1', self.mid, self.e, G, self.nu, rho, a, tref, ge]
+        #else:
+            #St = set_blank_if_default(self.St, 0.)
+            #Sc = set_blank_if_default(self.Sc, 0.)
+            #Ss = set_blank_if_default(self.Ss, 0.)
+            #mcsid = set_blank_if_default(self.mcsid, 0)
+            #list_fields = ['MAT1', self.mid, self.e, G, self.nu, rho, a, tref, ge,
+                           #St, Sc, Ss, mcsid]
+        #return list_fields
+        raise NotImplementedError('MATEV repr_fields')
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        card = self.repr_fields()
+        if size == 8:
+            return self.comment + print_card_8(card)
+        return self.comment + print_card_16(card)
 
 class EQUIV(Material):
     type = 'EQUIV'
@@ -3815,7 +4562,7 @@ class EQUIV(Material):
                        self.field4, self.field5, self.field6, self.field7]
         return list_fields
 
-def get_mat_props_S(mid_ref):
+def get_mat_props_S(mid_ref: MAT1 | MAT8) -> tuple[np.ndarray, np.ndarray]:
     """
     Gets the material matrix [S] or [C] for plane strain
 
@@ -3920,6 +4667,6 @@ def get_mat_props_S(mid_ref):
             #[0., 0., g12 * denom],
         #]) / denom
 
-    else:
+    else:  # pragma: no cover
         raise NotImplementedError(mid_ref.get_stats())
     return ei2, ei3

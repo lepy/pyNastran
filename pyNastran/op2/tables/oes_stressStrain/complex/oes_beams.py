@@ -1,13 +1,15 @@
-from typing import List
+import inspect
+from struct import Struct, pack
 
 import numpy as np
-from numpy import zeros
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_imag_floats_13e
+from pyNastran.op2.writer.utils import op2_stringify
 
 
 class ComplexBeamArray(OES_Object):
@@ -28,23 +30,204 @@ class ComplexBeamArray(OES_Object):
         #else:
             #raise NotImplementedError('SORT2')
 
-    def _reset_indices(self):
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        h5_table_dict = {
+            'EID': Int64Col(pos=0),
+            # 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 26
+            'GRID': Int64Col(shape=(11), pos=1),
+            'SD': Float64Col(shape=(11), pos=2),
+            'XCR': Float64Col(shape=(11), pos=3),
+            'XDR': Float64Col(shape=(11), pos=4),
+            'XER': Float64Col(shape=(11), pos=5),
+            'XFR': Float64Col(shape=(11), pos=6),
+
+            'XCI': Float64Col(shape=(11), pos=7),
+            'XDI': Float64Col(shape=(11), pos=8),
+            'XEI': Float64Col(shape=(11), pos=9),
+            'XFI': Float64Col(shape=(11), pos=10),
+
+            'DOMAIN_ID': Int64Col(pos=11),
+        }
+        return h5_table_dict
+
+    def get_neid(self) -> int:
+    #    #print(self.element)
+        eids, nodes, data_full = self.data_full(0)
+        neid = len(nodes) // 11
+        #neid = len(eids)
+
+        #print(self.element_node)
+        #neid = len(self.element_node) // 11
+        assert neid > 0, neid
+        return neid
+        
+    def add_to_h5_array(self, arr,
+                        ntime_neid0: int, ntime_neid1: int,
+                        itime: int):
+        neid = self.get_neid()
+        
+        eids, nodes, data_full = self.data_full(itime)
+        #print('eids', eids)
+        #print('nodes', nodes)
+        neid_nnode, nresult = data_full.shape
+        #data = self.data.reshape(neid, 11, nresult)
+        
+        eids2 = eids.reshape(neid, 11)
+        nodes2 = nodes.reshape(neid, 11)
+        # self.element_node
+
+        data = data_full.reshape(neid, 11, nresult)
+        #xxb = self.sd.reshape(neid, 11)
+        #self.sd = np.zeros(ntotal, 'float32')
+        #sxc = self.data[itime, :, 0]
+        #sxd = self.data[itime, :, 1]
+        #sxe = self.data[itime, :, 2]
+        #sxf = self.data[itime, :, 3]
+        ##[sxc, sxd, sxe, sxf]
+        #
+
+        arr["EID"][ntime_neid0:ntime_neid1] = eids2[:, 0]
+        arr["GRID"][ntime_neid0:ntime_neid1] = nodes2
+        arr["SD"][ntime_neid0:ntime_neid1] = data[:, :, 0].real
+        arr["XCR"][ntime_neid0:ntime_neid1] = data[:, :, 1].real
+        arr["XDR"][ntime_neid0:ntime_neid1] = data[:, :, 2].real
+        arr["XER"][ntime_neid0:ntime_neid1] = data[:, :, 3].real
+        arr["XFR"][ntime_neid0:ntime_neid1] = data[:, :, 4].real
+
+        arr["XCI"][ntime_neid0:ntime_neid1] = data[:, :, 5].imag
+        arr["XDI"][ntime_neid0:ntime_neid1] = data[:, :, 6].imag
+        arr["XEI"][ntime_neid0:ntime_neid1] = data[:, :, 7].imag
+        arr["XFI"][ntime_neid0:ntime_neid1] = data[:, :, 8].imag
+
+    def data_full(self, itime: int):
+        eids = self.element_node[:, 0]
+        nids = self.element_node[:, 1]
+        ueids = np.unique(eids)
+        neids = len(eids)
+
+        #print('eids', eids)
+        #print('nids', nids)
+        #print('sd', self.sd)
+        # C:\MSC.Software\msc_nastran_runs\cc145.op2
+        #inid  0        2  3    4
+        #eids [201 201 201 202 202]
+        #nids [60000     0 60001 60001 60002]
+        #sd [0.  0.5 1.  0.  1. ]
+        i_sd_zero = np.searchsorted(eids, ueids, side='left')  # first location of x/xb=0.0 (sd)
+        i_sd_one = np.searchsorted(eids, ueids, side='right')  # location of x/xb=1.0 (sd)
+
+        #print('i_sd_zero', i_sd_zero)
+        #print('i_sd_one', i_sd_one)
+        #i_sd_zero [0 3]
+        #i_sd_one [3 5]
+
+        # we want to make the union [0, 3] between i_sd_zero and i_sd_one
+        # but that [5] index is bad (it's the length of the array); so let's get rid of it
+
+        i_sd_one -= 1
+        #print('i_sd_one', i_sd_one)
+        inid = np.union1d(i_sd_zero, i_sd_one)  # the indices of nid 1/2
+
+        #print('inid', inid)
+        #inid [0 2 3]
+
+        is_nid = np.zeros(neids, dtype='bool')
+        i_sd_zero_all = np.zeros(neids, dtype='bool')
+        is_nid[inid] = 1
+        i_sd_zero_all[i_sd_zero] = 1
+        #---------------------------------
+
+        sxc = self.data[itime, :, 0]
+        sxd = self.data[itime, :, 1]
+        sxe = self.data[itime, :, 2]
+        sxf = self.data[itime, :, 3]
+        #[sxc, sxd, sxe, sxf]
+
+        nwide = 0
+        icount = 0
+        ielement = 0
+
+        data_list = []
+        eid_list = []
+        nid_list = []
+
+        eids_device = eids * 10 + self.device_code
+        for eid, nid, i_sd_zeroi, is_nidi, sd, sxc, sxd, sxe, sxf in zip(eids, nids, i_sd_zero_all, is_nid, self.sd, sxc, sxd, sxe, sxf):
+            if icount == 0:
+                # write eid and node 1
+                # xxb = 0.0
+                eid = eids[ielement]
+                nid = nids[ielement]
+                data = [sd.real,
+                        sxc.real, sxd.real, sxe.real, sxf.real,
+                        sxc.imag, sxd.imag, sxe.imag, sxf.imag,] # 10
+                #print(data)
+                eid_list.append(eid)
+                nid_list.append(nid)
+                data_list.append(data)
+                ielement += 1
+                icount = 1
+            elif nid > 0 and icount > 0:
+                # final line (sd=1.0)
+                #
+                # 11 total nodes, with 1, 11 getting an nid; the other 9 being
+                # xxb sections
+                data = [0.,
+                        0., 0., 0., 0.,
+                        0., 0., 0., 0.,]
+                #print('***adding %s\n' % (10-icount))
+                for unused_i in range(10 - icount):
+                    eid_list.append(0)
+                    nid_list.append(0)
+                    data_list.append(data)
+                    nwide += len(data)
+
+                eid = eids[ielement]
+                nid = nids[ielement]
+                data = [sd.real,
+                        sxc.real, sxd.real, sxe.real, sxf.real,
+                        sxc.imag, sxd.imag, sxe.imag, sxf.imag,] # 10
+                eid_list.append(0)
+                nid_list.append(nid)
+                data_list.append(data)
+                ielement += 1
+                icount = 0
+            else:
+                # intermediate stations
+                data = [sd.real,
+                        sxc.real, sxd.real, sxe.real, sxf.real,
+                        sxc.imag, sxd.imag, sxe.imag, sxf.imag,]  # 10
+                eid_list.append(0)
+                nid_list.append(nid)
+                data_list.append(data)
+                #raise RuntimeError(f'CBEAM OES op2 writer; nid={nid} icount={icount}')
+                #op2_file.write(struct2.pack(*data))
+                ielement += 1
+                icount += 1
+        
+        eids_out = np.array(eid_list)
+        nids_out = np.array(nid_list)
+        data_full = np.array(data_list)
+        return eids_out, nids_out, data_full
+
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
 
     def build(self):
         """sizes the vectorized attributes of the ComplexCBeamArray"""
         #print('ntimes=%s nelements=%s ntotal=%s subtitle=%s' % (
             #self.ntimes, self.nelements, self.ntotal, self.subtitle))
-        nnodes = 1
+        #nnodes = 1
 
         #self.names = []
         #self.nelements //= nnodes
@@ -53,16 +236,24 @@ class ComplexBeamArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
         #print('ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
-        self._times = zeros(self.ntimes, dtype)
+        idtype, cfdtype = get_complex_times_dtype(self.size)
         #self.element = array(self.nelements, dtype='|S8')
 
         #self.ntotal = self.nelements * nnodes
-        self.element_node = zeros((self.ntotal, 2), idtype)
-        self.sd = zeros(self.ntotal, 'float32')
+        if self.is_sort1 == 1:
+            ntimes = self.ntimes
+            ntotal = self.ntotal
+        else:
+            ntimes = self.ntotal
+            ntotal = self.ntimes
+            #print(f'complex beam: ntimes={ntimes} ntotal={ntotal}')
+
+        # ntotal is nelements
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        self.element_node = np.zeros((ntotal, 2), idtype)
+        self.sd = np.zeros(ntotal, 'float32')
 
         # the number is messed up because of the offset for the element's properties
         #if self.nelements * nnodes != self.ntotal:
@@ -73,7 +264,7 @@ class ComplexBeamArray(OES_Object):
             #raise RuntimeError(msg)
 
         #[sxc, sxd, sxe, sxf]
-        self.data = zeros((self.ntimes, self.ntotal, 4), cfdtype)
+        self.data = np.zeros((ntimes, ntotal, 4), cfdtype)
 
     def finalize(self):
         #enode_sum = self.element_node.sum(axis=1)
@@ -98,7 +289,8 @@ class ComplexBeamArray(OES_Object):
         """creates a pandas dataframe"""
         import pandas as pd
         headers = self.get_headers()
-        column_names, column_values = self._build_dataframe_transient_header()
+        column_names, column_values = build_dataframe_transient_header(self)
+        raise RuntimeError('replace pd.Panel')
         self.data_frame = pd.Panel(self.data, items=column_values,
                                    major_axis=self.element, minor_axis=headers).to_frame()
         self.data_frame.columns.names = column_names
@@ -143,8 +335,25 @@ class ComplexBeamArray(OES_Object):
 
     def add_sort1(self, dt, eid, grid, sd,
                   exc, exd, exe, exf):
-        """adss the non-vectorized data"""
-        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        """adds the non-vectorized data
+
+        201 60000 0.0 (2.1205626410392142e-07-7.067835650076404e-09j)
+        201 0 0.5 (6.486846615416653e-08-2.162066081723424e-09j)
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 0 0.0 0j
+        201 60001 1.0 (-8.231933179558837e-08+2.7437032645849513e-09j)
+        202 60001 0.0 (-1.8220836750515446e-07+6.073004765738688e-09j)
+        """
+        assert self.sort_method == 1, self
+        assert isinstance(eid, integer_types) and eid > 0, f'dt={dt} eid={eid} grid={grid}'
+        assert isinstance(eid, integer_types) and grid >= 0, f'dt={dt} eid={eid} grid={grid}'
+        #print(eid, grid, sd, exc)
         self.element_node[self.itotal] = [eid, grid]
         self.sd[self.itotal] = sd
         self.data[self.itime, self.itotal, :] = [exc, exd, exe, exf]
@@ -152,19 +361,35 @@ class ComplexBeamArray(OES_Object):
         self._times[self.itime] = dt
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_sort2(self, dt, eid, grid, sd,
+                  exc, exd, exe, exf):
+        """adds the non-vectorized data"""
+        assert self.is_sort2, self
+        assert isinstance(eid, integer_types) and eid > 0, f'dt={dt} eid={eid} grid={grid}'
+        assert isinstance(eid, integer_types) and grid >= 0, f'dt={dt} eid={eid} grid={grid}'
+        itotal = self.itime
+        itime = self.itotal
+        #print(f'dt={dt} eid={eid} itime={itime} itotal={itotal}')
+        self.element_node[itotal] = [eid, grid]
+        self.sd[itotal] = sd
+        self.data[itime, itotal, :] = [exc, exd, exe, exf]
+
+        self._times[itime] = dt
+        self.itotal += 1
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
         ntimes = self.ntimes
         #ntotal = self.ntotal
         nelements2 = self.element_node.shape[0]
-        assert nelements, nelements2
+        assert nelements == nelements2, f'nelements={nelements} nelements2={nelements2}'
         msg = []
 
         if self.nonlinear_factor not in (None, np.nan):  # transient
@@ -300,17 +525,15 @@ class ComplexBeamArray(OES_Object):
             page_num += 1
         return page_num
 
-    def write_op2(self, op2, op2_ascii, itable, new_result,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result,
                   date, is_mag_phase=False, endian='>'):
         """writes an OP2"""
-        import inspect
-        from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         eids = self.element_node[:, 0]
@@ -321,7 +544,7 @@ class ComplexBeamArray(OES_Object):
 
         eids_device = eids * 10 + self.device_code
         ueids = np.unique(eids)
-        ieid = np.searchsorted(eids, ueids)
+        #ieid = np.searchsorted(eids, ueids)
         # table 4 info
         #ntimes = self.data.shape[0]
         #nnodes = self.data.shape[1]
@@ -333,7 +556,7 @@ class ComplexBeamArray(OES_Object):
         ntotali = self.num_wide
         ntotal = ntotali * nelements
 
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         if self.is_sort1:
             struct1 = Struct(endian + b'2i 9f')
@@ -341,9 +564,46 @@ class ComplexBeamArray(OES_Object):
         else:
             raise NotImplementedError('SORT2')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        op2_ascii.write(f'nelements={nelements:d}\n')
+
+        eids = self.element_node[:, 0]
+        nids = self.element_node[:, 1]
+        ueids = np.unique(eids)
+        neids = len(eids)
+
+        #print('eids', eids)
+        #print('nids', nids)
+        #print('sd', self.sd)
+        # C:\MSC.Software\msc_nastran_runs\cc145.op2
+        #inid  0        2  3    4
+        #eids [201 201 201 202 202]
+        #nids [60000     0 60001 60001 60002]
+        #sd [0.  0.5 1.  0.  1. ]
+        i_sd_zero = np.searchsorted(eids, ueids, side='left')  # first location of x/xb=0.0 (sd)
+        i_sd_one = np.searchsorted(eids, ueids, side='right')  # location of x/xb=1.0 (sd)
+
+        #print('i_sd_zero', i_sd_zero)
+        #print('i_sd_one', i_sd_one)
+        #i_sd_zero [0 3]
+        #i_sd_one [3 5]
+
+        # we want to make the union [0, 3] between i_sd_zero and i_sd_one
+        # but that [5] index is bad (it's the length of the array); so let's get rid of it
+
+        i_sd_one -= 1
+        #print('i_sd_one', i_sd_one)
+        inid = np.union1d(i_sd_zero, i_sd_one)  # the indices of nid 1/2
+
+        #print('inid', inid)
+        #inid [0 2 3]
+
+        is_nid = np.zeros(neids, dtype='bool')
+        i_sd_zero_all = np.zeros(neids, dtype='bool')
+        is_nid[inid] = 1
+        i_sd_zero_all[i_sd_zero] = 1
+
         for itime in range(self.ntimes):
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             itable -= 1
@@ -352,10 +612,10 @@ class ComplexBeamArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
             sxc = self.data[itime, :, 0]
             sxd = self.data[itime, :, 1]
@@ -363,43 +623,34 @@ class ComplexBeamArray(OES_Object):
             sxf = self.data[itime, :, 3]
             #[sxc, sxd, sxe, sxf]
 
-            eids = self.element_node[:, 0]
-            nids = self.element_node[:, 1]
-            ueids = np.unique(eids)
-            i_sd_zero = np.searchsorted(eids, ueids, side='left')
-            i_sd_one = np.searchsorted(eids, ueids, side='right')
-            i_wrong_index = np.where(i_sd_one == len(eids))
-            i_sd_one[i_wrong_index] = i_sd_one[i_wrong_index] - 1
-            i_sd_one -= 1
-            inid = np.union1d(i_sd_zero, i_sd_one)
-
-            nid_type = np.zeros(len(eids), dtype='bool')
-            i_sd_zero_all = np.zeros(len(eids), dtype='bool')
-            nid_type[inid] = 1
-            i_sd_zero_all[i_sd_zero] = 1
-
             nwide = 0
             icount = 0
             ielement = 0
-            for eid, nid, i_sd_zeroi, nid_typei, sd, sxc, sxd, sxe, sxf in zip(eids, nids, i_sd_zero_all, nid_type, self.sd, sxc, sxd, sxe, sxf):
+            #print('eids_device =', eids_device)
+            for eid, nid, i_sd_zeroi, is_nidi, sd, sxc, sxd, sxe, sxf in zip(eids, nids, i_sd_zero_all, is_nid, self.sd, sxc, sxd, sxe, sxf):
                 if icount == 0:
+                    # write eid and node 1
+                    # xxb = 0.0
                     eid_device = eids_device[ielement]
                     nid = nids[ielement]
                     data = [eid_device, nid, sd.real,
                             sxc.real, sxd.real, sxe.real, sxf.real,
                             sxc.imag, sxd.imag, sxe.imag, sxf.imag,] # 10
-                    op2.write(struct1.pack(*data))
+                    #print(data)
+                    op2_file.write(struct1.pack(*data))
                     ielement += 1
                     icount = 1
                 elif nid > 0 and icount > 0:
+                    # final line (sd=1.0)
+                    #
                     # 11 total nodes, with 1, 11 getting an nid; the other 9 being
                     # xxb sections
                     data = [0, 0.,
                             0., 0., 0., 0.,
                             0., 0., 0., 0.,]
                     #print('***adding %s\n' % (10-icount))
-                    for i in range(10 - icount):
-                        op2.write(struct2.pack(*data))
+                    for unused_i in range(10 - icount):
+                        op2_file.write(struct2.pack(*data))
                         nwide += len(data)
 
                     eid_device2 = eids_device[ielement]
@@ -408,23 +659,30 @@ class ComplexBeamArray(OES_Object):
                     data = [nid, sd.real,
                             sxc.real, sxd.real, sxe.real, sxf.real,
                             sxc.imag, sxd.imag, sxe.imag, sxf.imag,] # 10
-                    op2.write(struct2.pack(*data))
+                    #print(data)
+                    op2_file.write(struct2.pack(*data))
                     ielement += 1
                     icount = 0
                 else:
-                    raise RuntimeError('CBEAM OES op2 writer')
-                    #data = [0, xxb, sxc, sxd, sxe, sxf, smax, smin, smt, smc]  # 10
-                    #op2.write(struct2.pack(*data))
-                    #icount += 1
+                    # intermediate stations
+                    data = [0, sd.real,
+                            sxc.real, sxd.real, sxe.real, sxf.real,
+                            sxc.imag, sxd.imag, sxe.imag, sxf.imag,]  # 10
+                    #print(data)
+                    op2_file.write(struct2.pack(*data))
+                    #raise RuntimeError(f'CBEAM OES op2 writer; nid={nid} icount={icount}')
+                    #op2_file.write(struct2.pack(*data))
+                    ielement += 1
+                    icount += 1
 
-                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, str(data)))
+                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, op2_stringify(data)))
                 nwide += len(data)
 
             assert ntotal == nwide, 'ntotal=%s nwide=%s' % (ntotal, nwide)
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -434,8 +692,9 @@ class ComplexBeamStressArray(ComplexBeamArray, StressObject):
         ComplexBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
-        headers = ['sxc', 'sxd', 'sxe', 'sxf', ]
+    @property
+    def headers(self) -> list[str]:
+        headers = ['sxc', 'sxd', 'sxe', 'sxf']
         return headers
 
 class ComplexBeamStrainArray(ComplexBeamArray, StrainObject):
@@ -443,6 +702,7 @@ class ComplexBeamStrainArray(ComplexBeamArray, StrainObject):
         ComplexBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
-        headers = ['exc', 'exd', 'exe', 'exf', ]
+    @property
+    def headers(self) -> list[str]:
+        headers = ['exc', 'exd', 'exe', 'exf']
         return headers

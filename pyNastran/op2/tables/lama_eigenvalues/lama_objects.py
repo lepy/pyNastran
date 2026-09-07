@@ -1,24 +1,31 @@
+from __future__ import annotations
 from math import sqrt
-from struct import pack
-from typing import List
+from struct import Struct, pack
+from typing import TextIO, TYPE_CHECKING
 
 import numpy as np
 
 from pyNastran.op2.result_objects.op2_objects import BaseScalarObject
 from pyNastran.op2.op2_interface.write_utils import write_table_header # set_table3_field,
 from pyNastran.f06.f06_formatting import write_floats_13e
+from pyNastran.op2.writer.utils import fix_table3_types
+if TYPE_CHECKING:
+    from pyNastran.op2.tables.oug.oug_eigenvectors import RealEigenvectorArray
 
 
 class RealEigenvalues(BaseScalarObject):
     """
     cycle = sqrt(abs(eigenvalue)) / (2. * pi)
     radians = sqrt(abs(eigenvalue))
+
     """
     def __init__(self, title, table_name: str, nmodes=0):
         #self.modeNumber = []
         BaseScalarObject.__init__(self)
         self.title = title
         self.table_name = table_name
+        if nmodes is None:
+            raise NotImplementedError(nmodes)
         self.mode = np.zeros(nmodes, dtype='int32')
         self.extraction_order = np.zeros(nmodes, dtype='int32')
         self.eigenvalues = np.zeros(nmodes, dtype='float32')
@@ -28,10 +35,58 @@ class RealEigenvalues(BaseScalarObject):
         self.generalized_stiffness = np.zeros(nmodes, dtype='float32')
         self.data_frame = None
 
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col, StringCol
+        h5_table_dict = {
+            'MODE': Int64Col(pos=0),
+            'ORDER': Int64Col(pos=1),
+            'EIGEN': Float64Col(pos=2),
+            'OMEGA': Float64Col(pos=3),
+            'FREQ': Float64Col(pos=4),
+            'MASS': Float64Col(pos=5),
+            'STIFF': Float64Col(pos=6),
+            'RESFLG': Float64Col(pos=7),
+            'FLDFLG': Float64Col(pos=8),
+            'DOMAIN_ID': Int64Col(pos=9),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr):
+        arr["MODE"] = self.mode
+        arr["ORDER"] = self.extraction_order
+        arr["EIGEN"] = self.eigenvalues
+        arr["OMEGA"] = self.radians
+        arr["FREQ"] = self.cycles
+        arr["MASS"] = self.generalized_mass
+        arr["STIFF"] = self.generalized_stiffness
+        arr["RESFLG"] = self.cycles
+        arr["FLDFLG"] = self.cycles
+
     def __eq__(self, table):  # pragma: no cover
         return True
 
-    def get_stats(self, short=False) -> List[str]:
+    @classmethod
+    def from_eigenvectors(cls, eigenvectors: RealEigenvectorArray,
+                          title: str='', table_name: str='LAMA',):
+        eigns = np.asarray(eigenvectors.eigns)
+        # assert isinstance(eigns, np.ndarray), eigns
+        omega = np.sqrt(np.abs(eigns))
+        freq = omega / (2 * np.pi)
+        nmodes = len(eigns)
+        mode = np.arange(1, nmodes+1)
+
+        eigenvalue_obj = RealEigenvalues(title=title, table_name=table_name, nmodes=nmodes)
+        isort = np.argsort(eigns)
+        eigenvalue_obj.eigenvalues = eigns[isort]
+        eigenvalue_obj.radians = omega[isort]
+        eigenvalue_obj.cycles = freq[isort]
+        eigenvalue_obj.mode = mode[isort]
+        eigenvalue_obj.extraction_order = mode[isort]
+        eigenvalue_obj.generalized_mass = np.ones(nmodes, dtype='float32')
+        eigenvalue_obj.generalized_stiffness = eigns[isort]
+        return eigenvalue_obj
+
+    def get_stats(self, short: bool=False) -> list[str]:
         msg = []
         neigenvalues = len(self.extraction_order)
         msg.append('  type=%s neigenvalues=%s\n' % (self.__class__.__name__,
@@ -41,11 +96,15 @@ class RealEigenvalues(BaseScalarObject):
         return msg
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
+        return False
+
+    @property
+    def is_buckling(self) -> bool:
         return False
 
     def add_f06_line(self, data, imode):
@@ -55,13 +114,14 @@ class RealEigenvalues(BaseScalarObject):
         self.eigenvalues[imode] = eigenvalue
         self.radians[imode] = radian
         #cyclei = sqrt(abs(eigenvalue)) / (2. * pi)
-        #if not allclose(cycle, cyclei):
+        #if not np.allclose(cycle, cyclei):
             #print('cycle=%s cyclei=%s' % (cycle, cyclei))
         self.cycles[imode] = cycle
         self.generalized_mass[imode] = gen_mass
         self.generalized_stiffness[imode] = gen_stiffness
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['eigenvalue', 'radians', 'cycle', 'generalized_mass', 'generalized_stiffness']
         return headers
 
@@ -70,25 +130,28 @@ class RealEigenvalues(BaseScalarObject):
         import pandas as pd
         headers = self.get_headers()
         #cycle = sqrt(abs(eigenvalue)) / (2. * pi)
-        data = np.vstack([self.eigenvalues, self.radians, self.cycles,
-                          self.generalized_mass, self.generalized_stiffness]).T
-        modes_extraction_order = np.vstack([self.mode, self.extraction_order]).T
-
-        df1 = pd.DataFrame(modes_extraction_order)
-        df1.columns = ['Mode', 'ExtractionOrder']
-        df2 = pd.DataFrame(data)
-        df2.columns = headers
-        self.data_frame = df1.join(df2)
+        data = {
+            'Mode': self.mode,
+            'ExtractionOrder': self.extraction_order,
+            headers[0]: self.eigenvalues,
+            headers[1]: self.radians,
+            headers[2]:self.cycles,
+            headers[3]:self.generalized_mass,
+            headers[4]: self.generalized_stiffness,
+        }
+        assert len(headers) == 5, headers
+        self.data_frame = pd.DataFrame(data)
 
     def add_f06_data(self, data):
         for i, line in enumerate(data):
             self.add_f06_line(line, i)
 
-    def write_f06(self, f06_file, header, page_stamp, page_num=1):
+    def write_f06(self, f06_file: TextIO, header: list[str], page_stamp: str,
+                  page_num: int=1) -> int:
         title = ''
         if self.title is not None:
             title = '%s' % str(self.title).center(124).rstrip() + '\n'
-        msg = header + ['                                              R E A L   E I G E N V A L U E S\n', title,
+        msg = header + ['                                              R E A L   E I G E N V A L U E S\n', #title,
                         '   MODE    EXTRACTION      EIGENVALUE            RADIANS             CYCLES            GENERALIZED         GENERALIZED\n',
                         '    NO.       ORDER                                                                       MASS              STIFFNESS\n']
         for (imode, mode_num) in enumerate(self.mode):
@@ -108,17 +171,16 @@ class RealEigenvalues(BaseScalarObject):
         f06_file.write(''.join(msg))
         return page_num
 
-    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
                   is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
-        from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            _write_table_header(self.table_name, op2, op2_ascii, date)
+            _write_table_header(self.table_name, op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -149,7 +211,7 @@ class RealEigenvalues(BaseScalarObject):
 
         structi = Struct(endian + b'ii5f')
 
-        self._write_table_3(op2, op2_ascii, new_result, itable, 0)
+        self._write_table_3(op2_file, op2_ascii, new_result, itable, 0)
 
         # record 4
         #print('stress itable = %s' % itable)
@@ -160,10 +222,10 @@ class RealEigenvalues(BaseScalarObject):
                   4, 0, 4,
                   4, ntotal, 4,
                   4 * ntotal]
-        op2.write(pack('%ii' % len(header), *header))
+        op2_file.write(pack('%ii' % len(header), *header))
         op2_ascii.write('r4 [4, 0, 4]\n')
-        op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-        op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+        op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+        op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
         for (imode, mode_num) in enumerate(self.mode):
             extract_order = self.extraction_order[imode]
@@ -182,17 +244,16 @@ class RealEigenvalues(BaseScalarObject):
             op2_ascii.write(' %8s  %8s       %-13s       %-13s       %-13s       %-13s       %s\n' % (
                 mode_num, extract_order, eigen, omega, freq, gen_mass, gen_stiffness))
 
-            op2.write(structi.pack(*data))
+            op2_file.write(structi.pack(*data))
 
         itable -= 1
         header = [4 * ntotal,]
-        op2.write(pack('i', *header))
+        op2_file.write(pack('i', *header))
         op2_ascii.write('footer = %s\n' % header)
         return itable
 
-    def _write_table_3(self, op2, op2_ascii, new_result, itable, itime): #itable=-3, itime=0):
+    def _write_table_3(self, op2_file, op2_ascii, new_result, itable, itime): #itable=-3, itime=0):
         import inspect
-        from struct import pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
         op2_ascii.write('%s.write_table_3: %s\n' % (self.__class__.__name__, call_frame[1][3]))
@@ -209,7 +270,7 @@ class RealEigenvalues(BaseScalarObject):
                 4, 0, 4,
                 4, 146, 4,
             ]
-        op2.write(pack(b'%ii' % len(header), *header))
+        op2_file.write(pack(b'%ii' % len(header), *header))
         op2_ascii.write('table_3_header = %s\n' % header)
 
         #approach_code = self.approach_code
@@ -273,26 +334,16 @@ class RealEigenvalues(BaseScalarObject):
         assert table3[12-1] == fluid_flag, fluid_flag
         assert table3[11-1] == residual_flag, residual_flag
 
-        n = 0
-        for i, v in enumerate(table3):
-            if isinstance(v, (int, float)):
-                n += 4
-            elif isinstance(v, str):
-                #print(len(v), v)
-                n += len(v)
-            else:
-                print('write_table_3', i, v)
-                n += len(v)
-        assert n == 584, n
+        table3 = fix_table3_types(table3, size=4)
         data = [584] + table3 + [584]
         fmt = b'i' + ftable3 + b'i'
         #print(fmt)
         #print(data)
         #f.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
         op2_ascii.write('%s header 3c = %s\n' % (self.table_name, data))
-        op2.write(pack(fmt, *data))
+        op2_file.write(pack(fmt, *data))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.data_frame is not None:
             return str(self.data_frame)
 
@@ -311,6 +362,14 @@ class RealEigenvalues(BaseScalarObject):
                 mode_num, extract_order, eigenvalue, radian, cycle, gen_m, gen_k)
         return msg
 
+    def Mhh_Khh(self, diag: bool=False) -> tuple[np.ndarray, np.ndarray]:
+        isort = np.argsort(self.eigenvalues)
+        Mhh = self.generalized_mass[isort]
+        Khh = self.eigenvalues[isort]
+        if diag:
+            Mhh = np.diag(Mhh)
+            Khh = np.diag(Khh)
+        return Mhh, Khh
 
 def _write_table_header(table_name: str, op2_file, fascii, date):
     table_name = '%-8s' % table_name # 'BOUGV1  '
@@ -319,7 +378,6 @@ def _write_table_header(table_name: str, op2_file, fascii, date):
     #marker = [4, 2, 4]
     #table_header = [8, 'BOUGV1  ', 8]
     write_table_header(op2_file, fascii, table_name)
-
 
     #read_markers -> [4, -1, 4]
     #get_nmarkers- [4, 0, 4]
@@ -378,37 +436,64 @@ class ComplexEigenvalues(BaseScalarObject):
     radians = eigi
     damping = atan2(eigi, eigr) * 2
     """
-    def __init__(self, title, table_name, nmodes):
+    def __init__(self, title: str, table_name: str, nmodes: int):
         BaseScalarObject.__init__(self)
         self.title = title
         self.table_name = table_name
+        self.nmodes = nmodes
 
         self.mode = np.zeros(nmodes, dtype='int32')
         self.extraction_order = np.zeros(nmodes, dtype='int32')
         self.eigenvalues = np.zeros(nmodes, dtype='complex64')
         self.cycles = np.zeros(nmodes, dtype='float32')
         self.damping = np.zeros(nmodes, dtype='float32')
-
         self.data_frame = None
+
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col, StringCol
+        h5_table_dict = {
+            'MODE': Int64Col(pos=0),
+            'ORDER': Int64Col(pos=1),
+            'REIGEN': Float64Col(pos=2),
+            'IEIGEN': Float64Col(pos=3),
+            'FREQ': Float64Col(pos=4),
+            'DAMP': Float64Col(pos=5),
+            'SPIN_SPEED': Float64Col(pos=6),
+            'DOMAIN_ID': Int64Col(pos=7),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr):
+        arr["MODE"] = self.mode
+        arr["ORDER"] = self.extraction_order
+        arr["REIGEN"] = self.eigenvalues.real
+        arr["IEIGEN"] = self.eigenvalues.imag
+        arr["FREQ"] = self.cycles
+        arr["DAMP"] = self.damping
+        arr["SPIN_SPEED"] = 1.0
 
     def __eq__(self, table):  # pragma: no cover
         return True
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         neigenvalues = len(self.extraction_order)
-        msg = []
-        msg.append('  type=%s neigenvalues=%s\n' % (self.__class__.__name__, neigenvalues))
-        msg.append('  isubcase, extraction_order, eigenvalues, '
-                   'cycles, damping\n')
+        msg = [
+            '  type=%s neigenvalues=%s\n' % (self.__class__.__name__, neigenvalues),
+            '  isubcase, extraction_order, eigenvalues, cycles, damping\n'
+        ]
         return msg
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
+
+    @property
+    def is_buckling(self) -> bool:
+        return False
 
     def add_op2_line(self, data, i):
         (root_num, extract_order, eigr, eigi, cycle, damping) = data
@@ -422,7 +507,8 @@ class ComplexEigenvalues(BaseScalarObject):
         for imode, line in enumerate(data):
             self.add_op2_line(line, imode)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['eigenvalue', 'frequency', 'damping']
         return headers
 
@@ -431,17 +517,15 @@ class ComplexEigenvalues(BaseScalarObject):
         import pandas as pd
         headers = self.get_headers()
 
-        cdata = self.eigenvalues
-        fdata = np.vstack([self.cycles, self.damping]).T
-        modes_extraction_order = np.vstack([self.mode, self.extraction_order]).T
-
-        df1 = pd.DataFrame(modes_extraction_order)
-        df1.columns = ['Mode', 'ExtractionOrder']
-        df2 = pd.DataFrame(cdata)
-        df2.columns = [headers[0]]
-        df3 = pd.DataFrame(fdata)
-        df3.columns = headers[1:]
-        self.data_frame = df1.join([df2, df3])
+        data = {
+            'Mode': self.mode,
+            'ExtractionOrder': self.extraction_order,
+            headers[0]: self.eigenvalues,
+            headers[1]: self.cycles,
+            headers[2]: self.damping,
+        }
+        assert len(headers) == 3, headers
+        self.data_frame = pd.DataFrame(data)
         #print(self.data_frame)
 
     def write_f06(self, f06_file, header, page_stamp, page_num=1):  # not proper msg start
@@ -468,17 +552,17 @@ class ComplexEigenvalues(BaseScalarObject):
         f06_file.write(''.join(msg))
         return page_num
 
-    def write_op2(self, op2, op2_ascii, itable, new_result, date,
-                  is_mag_phase=False, endian='>'):
+    def write_op2(self, op2_file, op2_ascii, itable: int,
+                  new_result, date,
+                  is_mag_phase: bool=False, endian: str='>'):
         """writes an OP2"""
         import inspect
-        from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            _write_table_header(self.table_name, op2, op2_ascii, date)
+            _write_table_header(self.table_name, op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -509,7 +593,7 @@ class ComplexEigenvalues(BaseScalarObject):
 
         structi = Struct(endian + b'ii4f')
 
-        self._write_table_3(op2, op2_ascii, new_result, itable, 0)
+        self._write_table_3(op2_file, op2_ascii, new_result, itable, 0)
 
         # record 4
         #print('stress itable = %s' % itable)
@@ -520,10 +604,10 @@ class ComplexEigenvalues(BaseScalarObject):
                   4, 0, 4,
                   4, ntotal, 4,
                   4 * ntotal]
-        op2.write(pack('%ii' % len(header), *header))
+        op2_file.write(pack('%ii' % len(header), *header))
         op2_ascii.write('r4 [4, 0, 4]\n')
-        op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-        op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+        op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+        op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
         for (imode, mode_num) in enumerate(self.mode):
             extract_order = self.extraction_order[imode]
@@ -534,21 +618,20 @@ class ComplexEigenvalues(BaseScalarObject):
             damping = self.damping[imode]
             data = [mode_num, extract_order, eigr, eigi, freq, damping]
 
-
             [eigr, eigi, freq, damping] = write_floats_13e([eigr, eigi, freq, damping])
             #            imode order      eigr     eigi          freq        damping
             op2_ascii.write(' %22s  %10s         %-15s  %-13s         %-13s         %s\n' % (
                 mode_num, extract_order, eigr, eigi, freq, damping))
 
-            op2.write(structi.pack(*data))
+            op2_file.write(structi.pack(*data))
 
         itable -= 1
         header = [4 * ntotal,]
-        op2.write(pack('i', *header))
+        op2_file.write(pack('i', *header))
         op2_ascii.write('footer = %s\n' % header)
         return itable
 
-    def _write_table_3(self, op2, op2_ascii, new_result, itable, itime): #itable=-3, itime=0):
+    def _write_table_3(self, op2_file, op2_ascii, new_result, itable, itime): #itable=-3, itime=0):
         import inspect
         from struct import pack
         frame = inspect.currentframe()
@@ -567,7 +650,7 @@ class ComplexEigenvalues(BaseScalarObject):
                 4, 0, 4,
                 4, 146, 4,
             ]
-        op2.write(pack(b'%ii' % len(header), *header))
+        op2_file.write(pack(b'%ii' % len(header), *header))
         op2_ascii.write('table_3_header = %s\n' % header)
 
         #approach_code = self.approach_code
@@ -631,28 +714,20 @@ class ComplexEigenvalues(BaseScalarObject):
         assert table3[12-1] == fluid_flag, fluid_flag
         assert table3[11-1] == residual_flag, residual_flag
 
-        n = 0
-        for i, v in enumerate(table3):
-            if isinstance(v, (int, float)):
-                n += 4
-            elif isinstance(v, str):
-                #print(len(v), v)
-                n += len(v)
-            else:
-                print('write_table_3', i, v)
-                n += len(v)
-        assert n == 584, n
+        table3 = fix_table3_types(table3, size=4)
         data = [584] + table3 + [584]
         fmt = b'i' + ftable3 + b'i'
         #print(fmt)
         #print(data)
         #f.write(pack(fascii, '%s header 3c' % self.table_name, fmt, data))
         op2_ascii.write('%s header 3c = %s\n' % (self.table_name, data))
-        op2.write(pack(fmt, *data))
+        op2_file.write(pack(fmt, *data))
 
     def __repr__(self):
-        msg = '%-7s %15s %15s %10s %10s %10s\n' % (
-            'RootNum', 'ExtractionOrder', 'Eigenvalue', '', 'Cycles', 'Damping')
+        table_name_str = self.table_name.decode('ascii')
+        msg = (f'ComplexEigenvalues[{self.title}]; {table_name_str}\n'
+               '%-7s %15s %15s %10s %10s %10s\n' % (
+            'RootNum', 'ExtractionOrder', 'Eigenvalue', '', 'Cycles', 'Damping'))
         msg += '%-7s %15s %15s %10s\n' % ('', '', 'Real', 'Imaginary')
         for imode, unused_mode in enumerate(self.mode):
             extract_order = self.extraction_order[imode]
@@ -679,29 +754,77 @@ class BucklingEigenvalues(BaseScalarObject):
         self.generalized_stiffness = np.zeros(nmodes, dtype='float32')
         self.data_frame = None
 
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col, StringCol
+        h5_table_dict = {
+            'MODE': Int64Col(pos=0),
+            'ORDER': Int64Col(pos=1),
+            'EIGEN': Float64Col(pos=2),
+            'OMEGA': Float64Col(pos=3),
+            'FREQ': Float64Col(pos=4),
+            'MASS': Float64Col(pos=5),
+            'STIFF': Float64Col(pos=6),
+            'RESFLAG': Int64Col(pos=7),
+            'FLDFLAG': Int64Col(pos=8),
+            'DOMAIN_ID': Int64Col(pos=9),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr):
+        arr["MODE"] = self.mode
+        arr["ORDER"] = self.extraction_order
+        arr["EIGEN"] = self.eigenvalues
+        arr["OMEGA"] = self.omegas
+        arr["FREQ"] = self.freqs
+        arr["MASS"] = self.generalized_mass
+        arr["STIFF"] = self.generalized_stiffness
+        arr["RESFLAG"] = 0
+        arr["FLDFLAG"] = 0
+
+    @classmethod
+    def add_from_solution(cls,
+                          mode: np.ndarray,
+                          extraction_order: np.ndarray,
+                          eigenvalue: np.ndarray,
+                          freq: np.ndarray,
+                          omega: np.ndarray,
+                          generalized_mass: np.ndarray,
+                          generalized_stiffness: np.ndarray,
+                          title: str, table_name: str):
+        obj = BucklingEigenvalues(title, table_name, 0)
+        obj.mode = mode
+        obj.extraction_order = extraction_order
+        obj.eigenvalues = eigenvalue
+        obj.freqs = freq
+        obj.omegas = omega
+        obj.generalized_mass = generalized_mass
+        obj.generalized_stiffness = generalized_stiffness
+        return obj
+
     def __eq__(self, table):  # pragma: no cover
         return True
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         neigenvalues = len(self.extraction_order)
-        msg = []
-        msg.append('  type=%s neigenvalues=%s\n' % (self.__class__.__name__, neigenvalues))
-        msg.append('  imode, extraction_order, eigenvalues, '
-                   'radians, cycles, generalized_mass, generalized_stiffness\n')
+        msg = [
+            '  type=%s neigenvalues=%s\n' % (self.__class__.__name__, neigenvalues),
+            '  imode, extraction_order, eigenvalues, radians, cycles, generalized_mass, generalized_stiffness\n'
+        ]
         return msg
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
-    def is_buckling(self):
+    @property
+    def is_buckling(self) -> bool:
         return True
 
-    def add_op2_line(self, data, imode):
+    def add_op2_line(self, data, imode: int) -> None:
         (root_num, extract_order, eigr, omega, freq, mass, stiff) = data
         self.mode[imode] = root_num
         self.extraction_order[imode] = extract_order
@@ -718,32 +841,21 @@ class BucklingEigenvalues(BaseScalarObject):
     def build_dataframe(self):
         """creates a pandas dataframe"""
         import pandas as pd
-        headers = self.get_headers()
-        nmodes = len(self.eigenvalues)
-
-        modes_extraction_order = np.zeros((nmodes, 2), dtype='float32')
-        fdata = np.zeros((nmodes, 5), dtype='float32')
-
-        imodei = 0
-        for (imode, unused_mode) in enumerate(self.mode):
-            eigi = self.eigenvalues[imode]
-            extraction_order = self.extraction_order[imode]
-            freq = self.freqs[imode]
-            omega = self.omegas[imode]
-            gen_m = self.generalized_mass[imode]
-            gen_k = self.generalized_stiffness[imode]
-
-            fdata[imodei, :] = [eigi, freq, omega, gen_m, gen_k]
-            modes_extraction_order[imodei, :] = [imode, extraction_order]
-            imodei += 1
-        df1 = pd.DataFrame(modes_extraction_order)
-        df1.columns = ['Mode', 'ExtractionOrder']
-        df2 = pd.DataFrame(fdata)
-        df2.columns = headers
-        self.data_frame = df1.join([df2])
+        # headers = self.get_headers()
+        data = {
+            'Mode': self.mode,
+            'ExtractionOrder': self.extraction_order,
+            'eigenvalue': self.eigenvalues,
+            'radians': self.freqs,
+            'cycles': self.omegas,
+            'generalized_mass': self.generalized_mass,
+            'generalized_stiffness': self.generalized_stiffness,
+        }
+        self.data_frame = pd.DataFrame(data)
         #print(self.data_frame)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['eigenvalue', 'radians', 'cycles', 'generalized_mass', 'generalized_stiffness']
         return headers
 

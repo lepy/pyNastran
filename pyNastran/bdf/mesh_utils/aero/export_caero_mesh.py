@@ -1,0 +1,866 @@
+"""
+defines:
+ - export_caero_mesh(model, caero_bdf_filename='caero.bdf', is_aerobox_model=True)
+
+"""
+import os
+import math
+import warnings
+from typing import TextIO
+import numpy as np
+
+from pyNastran.utils import PathLike
+from pyNastran.bdf.mesh_utils.internal_utils import get_bdf_model
+from pyNastran.bdf.bdf import read_bdf, BDF, Coord, AELIST
+from pyNastran.bdf.cards.aero.aero import CAERO1, CAERO2
+from pyNastran.bdf.field_writer_8 import print_card_8
+
+
+def export_caero_mesh(bdf_filename: PathLike | BDF,
+                      caero_bdf_filename: PathLike='caero.bdf',
+                      is_aerobox_model: bool=True,
+                      pid_method: str='aesurf',
+                      rotate_panel_angle_deg: float=0.0,
+                      write_panel_xyz: bool=True,
+                      xref: bool=True,
+                      skip_zero_check: bool=False,
+                      write_header: bool=True,
+                      write_end_data: bool=True) -> None:
+    """
+    Write the CAERO cards as CQUAD4s that can be visualized
+
+    Parameters
+    ----------
+    model : str | Path | BDF
+        a valid geometry
+    caero_bdf_filename : str
+        the file to write
+    is_aerobox_model : bool; default=True
+        True : write the aeroboxes as CQUAD4s
+        False : write the macro elements as CQUAD4s
+    pid_method : str; default='aesurf'
+        'aesurf' : write the referenced AESURF as the property ID
+                   main structure will be pid=1
+        'caero' : write the CAERO1 as the property id
+        'paero' : write the PAERO1 as the property id
+    rotate_panel_angle_deg : float; default=0.0
+        panel angle to rotate (e.g., rotate all surfaces by 30 degrees)
+    write_panel_xyz : bool; default=True
+        write the following table...
+        $$  CAEROID      EID       XLE       YLE       ZLE     CHORD      SPAN   XLE+C/4
+        $$        1        1    0.0000    0.2500    0.0000    0.0988    0.5000    0.0247
+        $$        1        2    0.0988    0.2500    0.0000    0.0988    0.5000    0.1234
+    skip_zero_check : bool; default=False
+        if True, verifies that W2GJ, WKK, etc. are not empty
+        an empty WKK will result in no aero load
+        an empty W2GJ is also likely a bug
+    write_header : bool; default=True
+        add a CEND and BEGIN BULK at the top
+    write_end_data : bool; default=True
+        add an ENDDATA at the end
+    """
+    rotate_panel_angle = np.radians(rotate_panel_angle_deg)
+
+    cards_to_include = [
+        'CAERO1', 'CAERO2', 'CAERO3', 'CAERO4', 'CAERO5',
+        'PAERO1', 'PAERO2', 'PAERO3', 'PAERO4', 'PAERO5',
+        'SET1', 'SET2', 'SET3',
+        'SPLINE1', 'SPLINE2', 'SPLINE3', 'SPLINE4', 'SPLINE5',
+        'AELIST', 'AESURF', 'AEFACT',
+        # for aero ooord
+        'AEROS', 'AERO',
+        'CORD1R', 'CORD1S', 'CORD1C',
+        'CORD2R', 'CORD2S', 'CORD2C',
+        'GRID',
+    ]
+    model = get_bdf_model(
+        bdf_filename, xref=xref,
+        cards_to_include=cards_to_include,
+        log=None, debug=False)
+    # if isinstance(model, PathLike):
+    #     model = read_bdf(model)
+    log = model.log
+    if pid_method not in {'aesurf', 'caero', 'paero'}:
+        raise RuntimeError(f'pid_method={pid_method!r} is not [aesurf, caero, paero]')
+
+    inid = 1
+    mid = 1
+    log.info(f'export_caero_mesh -> {caero_bdf_filename}')
+
+    #all_points = []
+    aero_eid_map = {}
+    #if is_aerobox_model:
+    iaerobox_ieid = 0
+    model.xref_obj.safe_cross_reference_aero()
+    for caero_eid, caero in sorted(model.caeros.items()):
+        if caero.type == 'CAERO2':
+            log.warning('CAERO2 will probably cause issues...put it at the max id')
+            continue
+        if caero.type == 'BODY7':
+            log.warning(f'skipping BODY7={caero.eid}')
+            continue
+        points, elements = caero.panel_points_elements()
+        for iaerobox_eid in range(len(elements)):
+            aero_eid_map[iaerobox_ieid] = caero_eid + iaerobox_eid
+            iaerobox_ieid += 1
+    log.debug(f'  naeroboxes = {len(aero_eid_map)}')
+    _write_aero_csvs(model)
+    subcases, loads = _write_subcases_loads(
+        model, aero_eid_map, is_aerobox_model, skip_zero_check)
+    coords_to_write_dict = _get_coords_to_write_dict(model)
+
+    eids_to_rotate_dict = {}
+    aesurf_aerobox_eid_list = []
+    for aesurf_id, aesurf in model.aesurf.items():
+        if aesurf.type == 'AESURF':
+            cid1_ref: Coord = aesurf.cid1_ref
+            aelist1_ref: AELIST = aesurf.aelist_id1_ref
+            panel1_eids = aelist1_ref.elements
+            eids_to_rotate_dict[(aesurf.label, 1)] = (cid1_ref, panel1_eids)
+            aesurf_aerobox_eid_list.extend(panel1_eids)
+            if aesurf.aelist_id2_ref is not None:
+                cid2_ref: Coord = aesurf.cid2_ref
+                aelist2_ref: AELIST = aesurf.aelist_id2_ref
+                panel2_eids = aelist2_ref.elements
+                eids_to_rotate_dict[(aesurf.label, 2)] = (cid2_ref, panel2_eids)
+                aesurf_aerobox_eid_list.extend(panel2_eids)
+        elif aesurf.type == 'AESURFZ':
+            pass
+        else:
+            raise RuntimeError(f'aesurf_type={aesurf.type} is not supported')
+    aesurf_aerobox_eids = np.array(aesurf_aerobox_eid_list, dtype='int32')
+
+    with open(caero_bdf_filename, 'w') as bdf_file:
+        #bdf_file.write('$ pyNastran: punch=True\n')
+        if write_header:
+            bdf_file.write('SOL 101\n')
+            bdf_file.write('CEND\n')
+            bdf_file.write(subcases)
+            bdf_file.write('BEGIN BULK\n')
+
+        for cid, coord in sorted(model.coords.items()):
+            bdf_file.write(str(coord))
+        bdf_file.write(loads)
+        _write_properties(model, bdf_file, pid_method=pid_method)
+
+        for caero_eid, caero in sorted(model.caeros.items()):
+            #assert caero_eid != 1, 'CAERO eid=1 is reserved for non-flaps'
+            scaero = str(caero).rstrip().split('\n')
+            if is_aerobox_model:
+                if caero.type == 'CAERO2':
+                    _write_caero2_aerobox(bdf_file, caero)
+                    continue
+                if caero.type == 'BODY7':
+                    log.warning(f'skipping BODY7={caero.eid}')
+                    continue
+
+                bdf_file.write('$ ' + '\n$ '.join(scaero) + '\n')
+                if hasattr(caero, 'lspan'):
+                    assert caero.type in {'CAERO1', 'CAERO4', 'CAERO5', 'CAERO7'}, caero
+                    if caero.lspan_ref:
+                        aefact_chord = str(caero.lspan_ref).rstrip().split('\n')
+                        bdf_file.write('$ ' + '\n$ '.join(aefact_chord) + '\n')
+                if hasattr(caero, 'lchord'):
+                    assert caero.type in {'CAERO1', }, caero
+                    if caero.lchord_ref:
+                        aefact_span = str(caero.lchord_ref).rstrip().split('\n')
+                        bdf_file.write('$ ' + '\n$ '.join(aefact_span) + '\n')
+
+                #bdf_file.write("$   CAEROID       ID       XLE      YLE      ZLE     CHORD      SPAN\n")
+                points, elements = caero.panel_points_elements()
+                if write_panel_xyz:
+                    _write_aerobox_strips(bdf_file, model, caero, caero_eid, points, elements)
+
+                box_ids = caero.box_ids.flatten()
+                eids_aesurf = np.union1d(box_ids, aesurf_aerobox_eids)
+
+                # verify eids_aesurf is sorted
+                assert np.allclose(eids_aesurf, np.unique(eids_aesurf))
+                if len(eids_aesurf) and rotate_panel_angle != 0.0:
+                    nid_all = np.unique(elements.ravel())
+                    # get the aesurf and fixed ids
+                    # eids_aesurf = np.intersect1d(box_ids, aesurf_aerobox_eids)
+                    eids_fixed = np.setdiff1d(box_ids, aesurf_aerobox_eids)
+
+                    # get the index for each element
+                    assert isinstance(box_ids, np.ndarray), box_ids
+                    assert box_ids.ndim == 1, box_ids.shape
+                    assert eids_fixed.ndim == 1, eids_fixed.shape
+                    ieid_fixed = np.searchsorted(box_ids, eids_fixed)
+                    # ieid_aesurf = np.searchsorted(box_ids, eids_aesurf)
+
+                    # get the node ids associated with each element
+                    nid_fixed = np.unique(elements[ieid_fixed, :])
+                    # nid_aesurf = np.unique(elements[ieid_aesurf, :])
+
+                    # get their index (so we can write the nodes in a rotated frame)
+                    inid_fixed = np.searchsorted(nid_all, nid_fixed)
+
+                    # get the base points and the points we're going to rotate
+                    # note that they might overlap or be used by multiple flaps
+                    #
+                    # we'll write points_fixed later
+                    points_fixed = points[inid_fixed, :]
+                    elements_fixed = elements[ieid_fixed, :]
+
+                    # now get do the same thing for each flap
+                    for (label, idi), (cid_ref, eid_surface) in eids_to_rotate_dict.items():
+                        eids_aesurf = np.intersect1d(box_ids, eid_surface)
+                        if len(eids_aesurf) == 0:
+                            continue
+
+                        # print(f'box_ids     = {box_ids}; n={len(box_ids)}')
+                        # print(f'eids_aesurf = {eids_aesurf}; n={len(eids_aesurf)}')
+                        ieid_aesurf = np.searchsorted(box_ids, eids_aesurf)
+                        # print(f'ieid_aesurf = {ieid_aesurf}')
+                        # print('elements:\n', elements)
+                        nid_aesurf = np.unique(elements[ieid_aesurf, :])
+
+                        inid_aesurf = np.searchsorted(nid_all, nid_aesurf)
+                        points_to_rotate = points[inid_aesurf, :]
+                        elements_to_rotate = elements[ieid_aesurf, :]
+                        xyz_rotated = rodriguez_rotate(
+                            points_to_rotate, rotate_panel_angle,
+                            cid_ref, iaxis=1)  # y-axis
+
+                        # TODO: still need to renumber the points
+                        #       and figure out what the offset is
+                    raise NotImplementedError(f'rotate_panel_angle_deg={rotate_panel_angle_deg:g}; '
+                                              f'rotate_panel_angle={rotate_panel_angle:g}')
+                else:
+                    npoints = points.shape[0]
+                    #nelements = elements.shape[0]
+                    for ipoint, point in enumerate(points):
+                        x, y, z = point
+                        bdf_file.write(print_card_8(['GRID', inid+ipoint, None, x, y, z]))
+
+                #pid = caero_eid
+                #mid = caero_eid
+                jeid = 0
+                for elem in elements + inid:
+                    p1, p4, p3, p2 = elem
+                    eid2 = jeid + caero_eid
+                    pidi = _get_aerobox_property(
+                        model, caero_eid, eid2, pid_method=pid_method)
+                    fields = ['CQUAD4', eid2, pidi, p1, p2, p3, p4]
+                    bdf_file.write(print_card_8(fields))
+                    jeid += 1
+            else:
+                # macro model
+                if caero.type == 'CAERO2':
+                    continue
+                bdf_file.write('$ ' + '\n$ '.join(scaero) + '\n')
+                points = caero.get_points()
+                npoints = 4
+                for ipoint, point in enumerate(points):
+                    x, y, z = point
+                    bdf_file.write(print_card_8(['GRID', inid+ipoint, None, x, y, z]))
+
+                pid = _get_aerobox_property(
+                    model, caero_eid, caero_eid, pid_method=pid_method)
+                p1 = inid
+                p2 = inid + 1
+                p3 = inid + 2
+                p4 = inid + 3
+                bdf_file.write(print_card_8(['CQUAD4', caero_eid, pid, p1, p2, p3, p4]))
+            inid += npoints
+
+        for cid, coord in sorted(coords_to_write_dict.items()):
+            bdf_file.write(str(coord))
+
+        # aluminum
+        E = 350e9  # 350 GPa
+        #G = None
+        nu = 0.3
+        rho = 2700.  # 2700 kg/m^3
+        bdf_file.write(f'MAT1,{mid},{E},,{nu},{rho}\n')
+        if write_end_data:
+            bdf_file.write('ENDDATA\n')
+    log.debug(f'  ---finished export_caero_mesh of {caero_bdf_filename}---')
+    return
+
+
+def _write_aero_csvs(model: BDF):
+    matrix_filenames = ['WKK', 'W2GJ', 'FA2J']
+    bdf_filename = model.bdf_filename
+    base = os.path.splitext(bdf_filename)[0]
+    for obj_dict in (model.dmi, model.dmij, model.dmik, model.dmiji):
+        for name, obj in obj_dict.items():
+            if name in matrix_filenames:
+                csv_filename = base + f'.{name}.csv'
+                obj.write_csv(csv_filename)
+
+def rodriguez_rotate(xyz: np.ndarray,
+                     theta: float,
+                     coord: Coord,
+                     iaxis: int=0) -> np.ndarray:
+    """Rotate points about the axis of a coordinate system using Rodrigues' formula.
+
+    The rotation axis passes through coord.origin in the direction of
+    coord.i/j/k (selected by iaxis). Points are translated to the origin,
+    rotated, and translated back.
+
+    v_rotated = v * cos(θ) + (k x v) * sin(θ) + k * (k · v) * (1 - cos(θ))
+    Where:
+      v is the vector to be rotated.
+      k is the unit vector representing the axis of rotation.
+      θ is the angle of rotation.
+      x denotes the cross product.
+      · denotes the dot product.
+
+    :return:
+    """
+    if iaxis == 0:
+        k = coord.i
+    elif iaxis == 1:
+        k = coord.j
+    elif iaxis == 2:
+        k = coord.k
+    else:
+        raise RuntimeError(f'iaxis={iaxis!r} and must be [0, 1, 2] for [x, y, z]')
+    assert xyz.ndim == 2, f'xyz.shape={str(xyz.shape)} and must be 2d'
+
+    origin = coord.origin
+    v = xyz - origin
+
+    nxyz = len(v)
+    kmat = np.vstack([k] * nxyz, dtype='float64')
+    kxv = np.cross(kmat, v, axis=1)
+    assert kxv.shape == (nxyz, 3), (kxv.shape, nxyz)
+    kov = np.einsum('ij,ij->i', kmat, v).reshape(nxyz, 1)
+    v_rotated = (
+        v * np.cos(theta) +
+        kxv * np.sin(theta) +
+        kmat * kov * (1 - np.cos(theta))
+    )
+    return v_rotated + origin
+
+
+def _get_coords_to_write_dict(model: BDF) -> dict[int, Coord]:
+    coords_to_write_dict = {}
+    if model.aeros:
+        rcsid_ref = model.aeros.rcsid_ref
+        coords_to_write_dict[rcsid_ref.cid] = rcsid_ref
+    for aesurf_id, aesurf in model.aesurf.items():
+        if aesurf.type == 'AESURF':
+            #print(aesurf)
+            if aesurf.cid1_ref is not None:
+                #print(aesurf.cid1_ref)
+                coords_to_write_dict[aesurf.cid1_ref.cid] = aesurf.cid1_ref
+            if aesurf.cid2_ref is not None:
+                coords_to_write_dict[aesurf.cid2_ref.cid] = aesurf.cid2_ref
+        elif aesurf.type == 'AESURFZ':
+            pass
+        else:
+            raise NotImplementedError(f'aesurf type {aesurf.type!r} is not supported')
+    _add_traced_coords(model, coords_to_write_dict)
+    return coords_to_write_dict
+
+
+def _add_traced_coords(model: BDF,
+                       coords_to_write_dict: dict[int, Coord]) -> None:
+    nrids = 1
+    while nrids > 0:
+        cids = set(list(coords_to_write_dict))
+        coords_to_add = set([])
+        for cid in cids:
+            coord = model.coords[cid]
+            coords_to_add.add(coord.rid)
+            coords_to_add.update(coord.rid_trace)  # seems to be busted
+        coords_to_add_filtered = coords_to_add - cids
+        coords_to_add_next = set([])
+        for cid in coords_to_add_filtered:
+            if cid == 0:
+                continue
+            coords_to_add_next.add(cid)
+            coords_to_write_dict[cid] = model.coords[cid]
+        nrids = len(coords_to_add_next)
+
+
+def _write_caero2_aerobox(bdf_file: TextIO, caero: CAERO2) -> None:
+    scaero = str(caero).rstrip().split('\n')
+    bdf_file.write('$ ' + '\n$ '.join(scaero) + '\n')
+    if caero.lsb_ref:
+        aefact_lsb = str(caero.lsb_ref).rstrip().split('\n')
+        bdf_file.write('$ ' + '\n$ '.join(aefact_lsb) + '\n')
+    if caero.lint_ref:
+        aefact_lint = str(caero.lint_ref).rstrip().split('\n')
+        bdf_file.write('$ ' + '\n$ '.join(aefact_lint) + '\n')
+    #points, elements = caero.panel_points_elements()
+    #raise NotImplementedError('caero2')
+    return
+
+
+def _write_subcases_loads(model: BDF,
+                          aero_eid_map: dict[int, int],
+                          is_aerobox_model: bool,
+                          skip_zero_check: bool) -> tuple[str, str]:
+    """writes the DMI, DMIJ, DMIK cards to a series of load cases"""
+    # naeroboxes = len(aero_eid_map)
+    if len(model.dmi) == 0 and len(model.dmij) == 0 and len(model.dmik) == 0 and len(model.dmiji) == 0:
+        loads = ''
+        subcases = ''
+        return subcases, loads
+
+    log = model.log
+    isubcase, loads, subcases = _write_dmi(
+        model, aero_eid_map, skip_zero_check)
+
+    for name, dmij in model.dmij.items():
+        data, rows, cols = dmij.get_matrix(is_sparse=False, apply_symmetry=True)
+        if np.abs(data).max() == 0:
+            msg = f'abs max of DMIJ={name} is 0.0 and must be greater than 0.0'
+            if skip_zero_check or name in {'W2GJ'}:
+                warnings.warn(msg)
+            else:
+                raise RuntimeError(msg)
+        log.info(f'  {name}: shape={data.shape}')
+        msg = f'{name}:\n'
+        msg += str(data)
+
+        if name in {'W2GJ', 'FA2J'}:
+            assert len(rows) == len(data)
+            assert data.shape[1] == 1, f'name={name}; shape={data.shape}'
+            if name == 'W2GJ':
+                data *= 180 / np.pi
+                subtitle = f'DMIJ {name} (degrees)'
+            else:
+                subtitle = f'DMIJ {name}'
+            subcases += (
+                f'SUBCASE {isubcase}\n'
+                f'  SUBTITLE = {subtitle}\n'
+                f'  LOAD = {isubcase}\n')
+            loads += f'$ {subtitle}\n'
+            loads += '$ PLOAD2 SID P EID1\n'
+            # aero_eid_map[iaerobox_ieid] = caero_eid + iaerobox_eid
+            # raise NotImplementedError(msg)
+            print(f'rows = {rows}; n={len(rows)}')
+            print(f'data = {data}; n={len(data)}')
+            for irow, value in zip(rows, data):
+                row = rows[irow]   # row = (1000,3)
+                idi = row[0]
+                eid = aero_eid_map[idi]
+                loads += f'PLOAD2,{isubcase},{value[0]},{eid}\n'
+            isubcase += 1
+        else:  # pragma: no cover
+            raise NotImplementedError(msg)
+
+    for name, dmiji in model.dmiji.items():
+        data, rows, cols = dmiji.get_matrix(is_sparse=False, apply_symmetry=True)
+        if np.abs(data).max() == 0:
+            msg = f'abs max of DMIJI={name} is 0.0 and must be greater than 0.0'
+            if skip_zero_check:
+                warnings.warn(msg)
+            else:
+                raise RuntimeError(msg)
+        log.info(f'  {name}: shape={data.shape}')
+        msg = f'{name}:\n'
+        msg += str(data)
+        raise NotImplementedError(msg)
+
+    for name, dmik in model.dmik.items():
+        data, rows, cols = dmik.get_matrix(is_sparse=False, apply_symmetry=True)
+        if np.abs(data).max() == 0:
+            msg = f'abs max of DMIK={name} is 0.0 and must be greater than 0.0'
+            if skip_zero_check:
+                warnings.warn(msg)
+            else:
+                raise RuntimeError(msg)
+        log.info(f'  {name}: shape={data.shape}')
+        msg = f'{name}:\n'
+        msg += str(data)
+        if name == 'WKK':
+            # column matrix of (neids*2,1)
+            #assert data.shape[1] == 1, f'name={name}; shape={data.shape}'  # (112,1)
+            if data.shape[1] != 1 and 0:
+                # naeroboxes = 40
+                # WKK = (80,80)
+                log.warning(f'WKK is the wrong shape; shape={data.shape}')
+                continue
+
+            isubcase5 = isubcase + 1
+            is_dof3 = False
+            is_dof5 = False
+            loads += f'$ {name} - FORCE/MOMENT\n'
+            loads += '$ PLOAD2 SID P EID1\n'
+            for irow, eid_dof1 in rows.items():
+                eid1, dof1 = eid_dof1
+                for icol, eid_dof2 in cols.items():
+                    eid2, dof2 = eid_dof2
+                    if eid1 == eid2 and dof1 == dof2:
+                        value = data[irow, icol]
+                        if dof1 == 3:
+                            is_dof3 = True
+                            loads += f'PLOAD2,{isubcase},{value},{eid1}\n'
+                        else:
+                            is_dof5 = True
+                            assert dof1 == 5, dof1
+                            loads += f'PLOAD2,{isubcase5},{value},{eid1}\n'
+            #nrows = data.shape[0] // 2
+            #data = data.reshape(nrows, 2)
+            #subcases += (
+                #f'SUBCASE {isubcase}\n'
+                #f'  SUBTITLE = DMI {name} - FORCE\n'
+                #f'  LOAD = {isubcase}\n')
+            if is_dof3:
+                subcases += (
+                    f'SUBCASE {isubcase}\n'
+                    f'  SUBTITLE = DMIK {name} - FORCE\n'
+                    f'  LOAD = {isubcase}\n'
+                )
+            if is_dof5:
+                subcases += (
+                    f'SUBCASE {isubcase5}\n'
+                    f'  SUBTITLE = DMIK {name} - MOMENT\n'
+                    f'  LOAD = {isubcase5}\n'
+                )
+            isubcase += 2
+
+            # TODO: assume first column is forces & second column is moments...verify
+            # loads += f'$ {name} - FORCE\n'
+            # loads += '$ PLOAD2 SID P EID1\n'
+            # for ieid, value in enumerate(data[:, 0].ravel()):
+            #     eid = aero_eid_map[ieid]
+            #     loads += f'PLOAD2,{isubcase},{value},{eid}\n'
+            # isubcase += 1
+            #
+            # subcases += (
+            #     f'SUBCASE {isubcase}\n'
+            #     f'  SUBTITLE = DMI {name} - MOMENT\n'
+            #     f'  LOAD = {isubcase}\n')
+            # loads += f'$ {name} - MOMENT\n'
+            # loads += '$ PLOAD2 SID P EID1\n'
+            # for irow, value in enumerate(data[:, 1].ravel()):
+            #     row = rows[irow]
+            #     eid = row[0]
+            #     loads += f'PLOAD2,{isubcase},{value},{eid}\n'
+        else:
+            raise NotImplementedError(msg)
+
+    if not is_aerobox_model:
+        # we put this here to test
+        model.log.warning('cannot export "loads" because not an aerobox model')
+        subcases = ''
+        loads = ''
+    return subcases, loads
+
+
+def _write_dmi(model: BDF,
+               aero_eid_map: dict[int, int],
+               skip_zero_check: bool) -> tuple[int, str, str]:
+    """writes the DMI cards to a series of load cases"""
+    naeroboxes = len(aero_eid_map)
+    isubcase = 1
+    loads = ''
+    subcases = ''
+    log = model.log
+    for name, dmi in model.dmi.items():
+        form_str = dmi.matrix_form_str
+        data, rows, cols = dmi.get_matrix(is_sparse=False, apply_symmetry=True)
+        if np.abs(data).max() == 0:
+            msg = f'abs max of DMI={name} is 0.0 and must be greater than 0.0'
+            if skip_zero_check or name in {'W2GJ'}:
+                warnings.warn(msg)
+            else:
+                raise RuntimeError(msg)
+        log.debug(f'  {name}: shape={data.shape}; form_str={form_str}')
+
+        if name == 'WTFACT':
+            # square matrix of (neids,neids) that has values on only? the diagonal
+            subcases += (
+                f'SUBCASE {isubcase}\n'
+                f'  SUBTITLE = DMI {name} - FORCE\n'
+                f'  LOAD = {isubcase}\n')
+
+            # diagonal matrix
+            diag = data.diagonal()
+            data = data.copy()
+            np.fill_diagonal(data, 0.)
+            # if skip_zero_check:
+            #     warnings.warn(msg)
+            # else:
+            #     raise RuntimeError(msg)
+            assert np.abs(data).max() == 0.0, 'WTFACT has cross terms'
+
+            loads += f'$ {name} - FORCE\n'
+            loads += '$ PLOAD2 SID P EID1\n'
+            for ieid, value in enumerate(diag[::2]):
+                eid = aero_eid_map[ieid]
+                loads += f'PLOAD2,{isubcase},{value},{eid}\n'
+            isubcase += 1
+
+            subcases += (
+                f'SUBCASE {isubcase}\n'
+                f'  SUBTITLE = DMI {name} - MOMENT\n'
+                f'  LOAD = {isubcase}\n')
+            loads += f'$ {name} - MOMENT\n'
+            loads += '$ PLOAD2 SID P EID1\n'
+            for ieid, value in enumerate(diag[1::2]):
+                eid = aero_eid_map[ieid]
+                loads += f'PLOAD2,{isubcase},{value},{eid}\n'
+
+        elif name in {'W2GJ', 'FA2J'}:
+            # column matrix of (neids,1)
+            # boxid and not dof in the k-set
+            assert data.shape[1] == 1, f'name={name}; shape={data.shape}'  # (56,1)
+            subcases += (
+                f'SUBCASE {isubcase}\n'
+                f'  SUBTITLE = DMI {name}\n'
+                f'  LOAD = {isubcase}\n')
+
+            # (56,1)
+            if name == 'W2GJ':
+                data *= 180 / np.pi
+                loads += f'$ {name} (degrees)\n'
+            else:
+                loads += f'$ {name}\n'
+            loads += '$ PLOAD2 SID P EID1\n'
+            for ieid, value in enumerate(data.ravel()):
+                eid = aero_eid_map[ieid]
+                loads += f'PLOAD2,{isubcase},{value},{eid}\n'
+        elif name == 'WKK':
+            # column matrix of (neids*2,1)
+
+            # 1: 'square',
+            # 2: 'rectangular',  # 9 ???
+            # 3: 'diagonal',
+            # 6: 'symmetric',
+            # 9: 'identity',
+            matrix_form_str = dmi.matrix_form_str
+            if matrix_form_str == 'diagonal':
+                pass
+            elif matrix_form_str in {'square', 'rectangular'}:
+                assert data.shape[0] == data.shape[1], f'name={name}; shape={data.shape} matrix_form={dmi.matrix_form}={matrix_form_str}'  # (100,100)
+                assert data.shape == (2*naeroboxes, 2*naeroboxes), f'name={name}; shape={data.shape} expected=({2*naeroboxes},{2*naeroboxes}); matrix_form={dmi.matrix_form}={matrix_form_str}'
+                matrix_form_str = 'square'
+            else:
+                matrix_form_str = 'column'
+                assert data.shape[1] == 1, f'name={name}; shape={data.shape} matrix_form={dmi.matrix_form}={matrix_form_str}'  # (112,1)
+
+            if matrix_form_str in {'diagonal', 'column'}:
+                assert data.shape[1] == 1, f'name={name}; shape={data.shape}'  # (112,1)
+                assert data.shape == (2*naeroboxes, 1), f'name={name}; shape={data.shape}  expected=({2*naeroboxes},{2*naeroboxes}); matrix_form={dmi.matrix_form}={matrix_form_str}'
+                nrows = data.shape[0] // 2
+                data = data.reshape(nrows, 2)
+                force_correction = data[:, 0]
+                moment_correction = data[:, 1]
+                corrections = [
+                    ('FORCE', force_correction),
+                    ('MOMENT', moment_correction),
+                ]
+            elif matrix_form_str == 'square':
+                assert data.shape[0] == data.shape[1]
+                force = data[::2, ::2]
+                moment = data[1::2, 1::2]
+                force_correction_row = force.sum(axis=0)
+                force_correction_col = force.sum(axis=1)
+                moment_correction_row = moment.sum(axis=0)
+                moment_correction_col = moment.sum(axis=1)
+
+                corrections = [
+                    ('FORCE_ROW', force_correction_row),
+                    ('FORCE_COL', force_correction_col),
+                    ('MOMENT_ROW', moment_correction_row),
+                    ('MOMENT_COL', moment_correction_col),
+                ]
+            else:  # pragma: no cover
+                raise NotImplementedError(matrix_form_str)
+
+            for result_name, correction_column in corrections:
+                #print(result_name, isubcase)
+                subcases += (
+                    f'SUBCASE {isubcase}\n'
+                    f'  SUBTITLE = DMI {name} - {result_name}\n'
+                    f'  LOAD = {isubcase}\n')
+
+                loads += f'$ {name} - {result_name}\n'
+                loads += '$ PLOAD2 SID P EID1\n'
+                for ieid, value in enumerate(correction_column.ravel()):
+                    eid = aero_eid_map[ieid]
+                    loads += f'PLOAD2,{isubcase},{value},{eid}\n'
+                isubcase += 1
+        else:  # pragma: no cover
+            matrix_form_str = dmi.matrix_form_str
+            msg = f'skipping DMI={name} matrix_form_str={matrix_form_str}:\n'
+            msg += str(data)
+            log.warning(msg)
+            #continue
+            # raise NotImplementedError(msg)
+        isubcase += 1
+    return isubcase, loads, subcases
+
+
+def _write_aerobox_strips(bdf_file: TextIO, model: BDF,
+                          caero: CAERO1, caero_eid: int,
+                          points: np.ndarray, elements: np.ndarray) -> None:
+    """writes the strips for the aeroboxes"""
+    #bdf_file.write("$   CAEROID       ID       XLE      YLE      ZLE     CHORD      SPAN\n")
+    bdf_file.write('$$\n$$ XYZ_LE is taken at the center of the leading edge; (p1+p4)/2\n$$\n')
+    bdf_file.write('$$ %8s %8s %9s %9s %9s %9s %9s %9s %9s %9s\n' % (
+        'CAEROID', 'EID', 'XLE', 'YLE', 'ZLE', 'CHORD', 'SPAN', 'XLE+C/4', 'XLE+C/2', 'AREA'))
+
+    for i in range(elements.shape[0]):
+        # The point numbers here are consistent with the CAERO1
+        p1 = points[elements[i, 0], :]
+        p4 = points[elements[i, 1], :]
+        p3 = points[elements[i, 2], :]
+        p2 = points[elements[i, 3], :]
+        le: list[float] = (p1 + p4) * 0.5
+        te: list[float] = (p2 + p3) * 0.5
+        dy = (p4 - p1)[1]
+        dz = (p4 - p1)[2]
+        span = math.sqrt(dy**2 + dz**2)
+        chord: float = te[0] - le[0]
+        xqc: float = le[0] + chord / 4.
+        xmid: float = le[0] + chord / 2.
+
+        axb = np.cross(p3 - p1, p4 - p2)
+        areai = 0.5 * np.linalg.norm(axb)
+        bdf_file.write("$$ %8d %8d %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f\n" % (
+            caero_eid, caero_eid+i, le[0], le[1], le[2], chord, span, xqc, xmid, areai))
+
+
+def get_skj(model: BDF, percent_location: int=25) -> np.ndarray:
+    area_arm_dict = get_area_arm_dict_panel(
+        model, percent_location=percent_location)
+
+    naeroboxes = len(area_arm_dict)
+    nj = naeroboxes
+    nk = naeroboxes * 2
+    skj = np.zeros((nk, nj), dtype='float64')
+    #print(f'skj.shape = ({nk}, {nj})')
+    j = 0
+    for jeid, (area, arm) in area_arm_dict.items():
+        # jeid is the box id, j is the box index
+        k1 = 2 * j
+        k2 = k1 + 1
+        #print(f'{j}, {area:.1f}, {area*arm:.1f}, {arm:.1f}')
+        skj[k1, j] = area
+        skj[k2, j] = area * arm
+        j += 1
+    return skj
+
+
+def get_area_arm_dict_panel(model: BDF,
+                            percent_location: int=25) -> dict[int, int]:
+    """get the aerobox (area, area*moment_arm dict)"""
+    area_arm_dict = {}
+    for caero_eid, caero in sorted(model.caeros.items()):
+            # scaero = str(caero).rstrip().split('\n')
+            if caero.type == 'CAERO2':
+                raise RuntimeError(caero)
+                # _write_caero2_aerobox(bdf_file, caero)
+                # continue
+
+            points, elements = caero.panel_points_elements()
+            _area_arm_dict_panel(
+                area_arm_dict,
+                model, caero, points, elements,
+                percent_location=percent_location,
+            )
+    return area_arm_dict
+
+
+def _area_arm_dict_panel(area_arm_dict: dict[int, tuple[float, float]],
+                         model: BDF,
+                         caero: CAERO1,
+                         points: np.ndarray, elements: np.ndarray,
+                         percent_location: int=25) -> None:
+    """writes the strips for the aeroboxes at some % chord"""
+    # caero_eid = caero.eid
+    percent = percent_location / 100.
+    # area = caero.area()
+    # total_area = 0.
+    for i in range(elements.shape[0]):
+        # The point numbers here are consistent with the CAERO1
+        elem = elements[i, :]
+        p1 = points[elements[i, 0], :]
+        p4 = points[elements[i, 1], :]
+        p3 = points[elements[i, 2], :]
+        p2 = points[elements[i, 3], :]
+        # centroid = (p1 + p2 + p3 + p4) / 4.
+        axb = np.cross(p3 - p1, p4 - p2)
+        areai = 0.5 * np.linalg.norm(axb)
+        # total_area += areai
+
+        if areai == 0.0:
+            raise RuntimeError(f'area={areai}; caero:\n{str(caero)}\nelem={elem}\n'
+                               f'p1 = {p1}\n'
+                               f'p2 = {p2}\n'
+                               f'p3 = {p3}\n'
+                               f'p4 = {p4}')
+        le: list[float] = (p1 + p4) * 0.5
+        te: list[float] = (p2 + p3) * 0.5
+        # dy = (p4 - p1)[1]
+        # dz = (p4 - p1)[2]
+        chord: float = te[0] - le[0]
+        r_arm = chord * percent
+        area_arm_dict[caero.eid+i] = (areai, r_arm)
+    #print(f'area={area:.1f} total_area={total_area:.1f}')
+
+
+def _get_aerobox_property(model: BDF, caero_id: int, eid: int,
+                          pid_method: str='aesurf') -> int:
+    """gets the property id for the aerobox"""
+    pid = None
+    if pid_method == 'aesurf':
+        for aesurf_id, aesurf in model.aesurf.items():
+            aelist_id = aesurf.Aelist_id1()
+            aelist = model.aelists[aelist_id]
+            if eid in aelist.elements:
+                pid = aesurf_id
+                break
+    elif pid_method == 'caero':
+        pid = caero_id
+    elif pid_method == 'paero':
+        caero = model.caeros[caero_id]
+        pid = caero.pid
+    else:  # pragma: no cover
+        raise RuntimeError(f'pid_method={pid_method!r} is not [aesurf, caero, paero]')
+
+    if pid is None:
+        pid = 1
+    return pid
+
+
+def _write_properties(model: BDF, bdf_file: TextIO,
+                      pid_method: str='aesurf') -> None:
+    """writes the PSHELL with a different comment depending on the pid_method flag"""
+    if pid_method == 'aesurf':
+        _write_aesurf_properties(model, bdf_file)
+    elif pid_method == 'paero':
+        for paero_id, paero in sorted(model.paeros.items()):
+            spaero = str(paero).rstrip().split('\n')
+            bdf_file.write('$ ' + '\n$ '.join(spaero) + '\n')
+            bdf_file.write('PSHELL,%s,%s,0.1\n' % (paero_id, 1))
+    elif pid_method == 'caero':
+        for caero_eid, caero in sorted(model.caeros.items()):
+            scaero = str(caero).rstrip().split('\n')
+            bdf_file.write('$ ' + '\n$ '.join(scaero) + '\n')
+            bdf_file.write('PSHELL,%s,%s,0.1\n' % (caero_eid, 1))
+    else:  # pragma: no cover
+        raise RuntimeError(f'pid_method={repr(pid_method)} is not [aesurf, caero, paero]')
+
+
+def _write_aesurf_properties(model: BDF, bdf_file: TextIO) -> None:
+    """the AESURF ID will be the PSHELL ID"""
+    aesurf_mid = 1
+    for aesurf_id, aesurf in model.aesurf.items():
+        #cid = aesurf.cid1
+
+        #aesurf_mid = aesurf_id
+        saesurf = str(aesurf).rstrip().split('\n')
+        bdf_file.write('$ ' + '\n$ '.join(saesurf) + '\n')
+        bdf_file.write('PSHELL,%s,%s,0.1\n' % (aesurf_id, aesurf_mid))
+        #print(cid)
+        #ax, ay, az = cid.i
+        #bx, by, bz = cid.j
+        #cx, cy, cz = cid.k
+        #bdf_file.write('CORD2R,%s,,%s,%s,%s,%s,%s,%s\n' % (
+            #cid, ax, ay, az, bx, by, bz))
+        #bdf_file.write(',%s,%s,%s\n' % (cx, cy, cz))
+        #print(cid)
+        #aesurf.elements
+    # dummy property
+    bdf_file.write('PSHELL,%s,%s,0.1\n' % (1, 1))
+    return

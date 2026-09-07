@@ -1,73 +1,108 @@
 #pylint: disable=C0326,C0301
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from struct import Struct
 import numpy as np
 
-from pyNastran.op2.tables.oee_energy.oee_objects import RealStrainEnergyArray, ComplexStrainEnergyArray
-from pyNastran.op2.op2_interface.op2_common import OP2Common
+from pyNastran.op2.tables.utils import get_is_slot_saved, get_eid_dt_from_eid_device
+from pyNastran.op2.tables.oee_energy.oee_objects import (
+    RealStrainEnergyArray, ComplexStrainEnergyArray,
+    RealKineticEnergyArray,)
+
 from pyNastran.op2.op2_interface.op2_reader import mapfmt, reshape_bytes_block
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.op2.op2 import OP2
 
 RESULT_NAME_MAP = {
-    'BAR' : 'cbar_strain_energy',
-    'BEAM' : 'cbeam_strain_energy',
-    'BEND' : 'cbend_strain_energy',
+    'BAR': 'cbar',
+    'BEAM': 'cbeam',
+    'BEND': 'cbend',
+    'BEAM3': 'cbeam3',
 
-    'ROD' : 'crod_strain_energy',
-    'TUBE' : 'ctube_strain_energy',
-    'CONROD' : 'conrod_strain_energy',
+    'ROD': 'crod',
+    'TUBE': 'ctube',
+    'CONROD': 'conrod',
 
-    'TRIA3' : 'ctria3_strain_energy',
-    'TRIAFD' : 'ctria3_strain_energy',
-    'TRIA3FD' : 'ctria3_strain_energy',
-    'TRIA6' : 'ctria6_strain_energy',
-    'TRIAX6' : 'ctriax6_strain_energy',
-    'TRIAR' : 'ctriar_strain_energy',
-    'TRIAX3FD' : 'ctriax_strain_energy',
-    'TRIAXFD' : 'ctriax_strain_energy',
+    'TRIA3': 'ctria3',
+    'TRIAFD': 'ctria3',
+    'TRIA3FD': 'ctria3',
+    'TRIA6': 'ctria6',
+    'TRIAX6': 'ctriax6',
+    'CTRIA6N': 'ctria6',  # per JG
+    'TRIAR': 'ctriar',
+    'TRIAX3FD': 'ctriax',
+    'TRIAXFD': 'ctriax',
 
-    'QUAD4' : 'cquad4_strain_energy',
-    'QUADFD' : 'cquad4_strain_energy',
-    'QUAD4FD' : 'cquad4_strain_energy',
-    'QUAD8' : 'cquad8_strain_energy',
+    'QUAD4': 'cquad4',
+    'QUADFD': 'cquad4',
+    'QUAD4FD': 'cquad4',
+    'QUAD8': 'cquad8',
+    'CQUAD8N': 'cquad8',  # guessed per JG
+    # TODO: this will probably be a problem someday...cquad8_nonlinear_strain_energy
+    'QUAD8N': 'cquad8',
 
-    'QUADR' : 'cquadr_strain_energy',
-    'QUADXFD' : 'cquadx_strain_energy',
-    'QUADX4FD' : 'cquadx_strain_energy',
-    'SHEAR' : 'cshear_strain_energy',
+    'QUADR': 'cquadr',
+    'QUADXFD': 'cquadx',
+    'QUADX4FD': 'cquadx',
+    'SHEAR': 'cshear',
 
-    'TETRA' : 'ctetra_strain_energy',
-    'TETRAFD' : 'ctetra_strain_energy',
-    'TETRA4FD' : 'ctetra_strain_energy',
-    'PENTA' : 'cpenta_strain_energy',
-    'PENTAFD' : 'cpenta_strain_energy',
-    'PENTA6FD' : 'cpenta_strain_energy',
-    'HEXA' : 'chexa_strain_energy',
-    'HEXAFD' : 'chexa_strain_energy',
-    'HEXA8FD' : 'chexa_strain_energy',
-    'PYRAM' : 'cpyram_strain_energy',
+    'TETRA': 'ctetra',
+    'TETRAFD': 'ctetra',
+    'TETRA4FD': 'ctetra',
+    'PENTA': 'cpenta',
+    'PENTAFD': 'cpenta',
+    'PENTA6FD': 'cpenta',
+    'HEXA': 'chexa',
+    'HEXAFD': 'chexa',
+    'HEXA8FD': 'chexa',
+    'PYRAM': 'cpyram',
+    'PYRA': 'cpyram',
 
-    'GAP' : 'cgap_strain_energy',
-    'BUSH' : 'cbush_strain_energy',
-    'ELAS1' : 'celas1_strain_energy',
-    'ELAS2' : 'celas2_strain_energy',
-    'ELAS3' : 'celas3_strain_energy',
-    'ELAS4' : 'celas4_strain_energy',
+    'GAP': 'cgap',
+    'BUSH': 'cbush',
+    'BUSH1D': 'cbush1d',
+    'BUSH2D': 'cbush2d',
+    'ELAS1': 'celas1',
+    'ELAS2': 'celas2',
+    'ELAS3': 'celas3',
+    'ELAS4': 'celas4',
 
-    'DUM8' : 'cdum8_strain_energy',
-    'DMIG' : 'dmig_strain_energy',
-    'GENEL' : 'genel_strain_energy',
-    'CONM2' : 'conm2_strain_energy',
-    'RBE1' : 'rbe1_strain_energy',
-    'RBE3' : 'rbe3_strain_energy',
-    'WELDC' : 'weldc_strain_energy',
+    'MASS1': 'cmass1',
+    'MASS2': 'cmass2',
+    'MASS3': 'cmass3',
+    'MASS4': 'cmass4',
+
+    'DUM8': 'cdum8',
+    'DMIG': 'dmig',
+    'GENEL': 'genel',
+    'CONM2': 'conm2',
+    'RBE1': 'rbe1',
+    'RBE3': 'rbe3',
+    'WELDP': 'cweld',
+    'WELDC': 'cweld',
+    'WELD': 'cweld',
+    'FASTP': 'cfast',
+    'SEAMP': 'cseam',
+
+    'CPLSTN3': 'cplstn3',
+    'CPLSTN4': 'cplstn4',
+    'CPLSTN6': 'cplstn6',
+    'CPLSTN8': 'cplstn8',
+
+    'CPLSTS3': 'cplsts3',
+    'CPLSTS4': 'cplsts4',
+    'CPLSTS6': 'cplsts6',
+    'CPLSTS8': 'cplsts8',
 }
 
-class ONR(OP2Common):
-    def __init__(self):
-        OP2Common.__init__(self)
-        self.words = None
-        self.num_wide = None
 
-    def get_onr_prefix_postfix(self):
+class ONR:
+    def __init__(self, op2: OP2):
+        self.op2 = op2
+        #op2.words = None
+        #op2.num_wide = None
+
+    def get_onr_prefix_postfix(self) -> tuple[str, str]:
         """
         Creates the prefix/postfix that splits off ATO, CRM, PSD, nonlinear,
         etc. results.  We also fix some of the sort bits as typing:
@@ -94,34 +129,38 @@ class ONR(OP2Common):
         STRESS/STRAIN    DOES1/DOSTR1  Scaled Response Spectra
         MODCON           OSTRMC        Modal contributions
         """
-        prefix = ''
+        op2 = self.op2
+        #prefix = ''
         postfix = ''
-        if self.table_name in [b'ONRGY1', b'ONRGY2', b'ONRGY']:
+        if op2.table_name in [b'ONRGY1', b'ONRGY2', b'ONRGY']:
             prefix = 'strain_energy.'
-        elif self.table_name in [b'RANEATC']: #, b'OSTRMS1C']:
-            self.format_code = 1
-            self.sort_bits[0] = 0 # real
+        elif op2.table_name in [b'OEKE1']:
+            prefix = 'kinetic_energy.'
+        elif op2.table_name in [b'RANEATC']:  #, b'OSTRMS1C']:
+            op2.format_code = 1
+            op2.sort_bits[0] = 0 # real
             prefix = 'RANEATC.'
-        elif self.table_name in [b'RANCONS']: #, b'OSTRMS1C']:
-            self.format_code = 1
-            self.sort_bits[0] = 0 # real
+        elif op2.table_name in [b'RANCONS']:  #, b'OSTRMS1C']:
+            op2.format_code = 1
+            op2.sort_bits[0] = 0 # real
             prefix = 'RANCONS.'
-        else:
-            raise NotImplementedError(self.table_name)
-        self.data_code['sort_bits'] = self.sort_bits
-        self.data_code['nonlinear_factor'] = self.nonlinear_factor
+        else:  # pragma: no cover
+            raise NotImplementedError(op2.table_name)
+        op2.data_code['sort_bits'] = op2.sort_bits
+        op2.data_code['nonlinear_factor'] = op2.nonlinear_factor
         return prefix, postfix
 
-    def _read_onr1_3(self, data, ndata):
+    def _read_onr1_3(self, data: bytes, ndata: int):
         """
         reads ONRGY1 subtable 3
         """
-        self._analysis_code_fmt = b'i'
-        self.words = [
-            'aCode',       'tCode',    'eTotal',       'isubcase',
+        op2 = self.op2
+        op2._analysis_code_fmt = b'i'
+        op2.words = [
+            'aCode',       'tCode',    'etotal',       'isubcase',
             '???',         '???',      'element_name', 'load_set',
-            'format_code', 'num_wide', 'cvalres',      'setID',
-            'setID',       'eigenReal', 'eigenImag',   'rmssf',
+            'format_code', 'num_wide', 'cvalres',      'set_id',
+            'eign',        'eigr',     'eigi',         'rmssf',
             'etotpos',     'etotneg',  'thresh',       '???',
             '???',         '???',      '???',      '???',
             '???', 'Title', 'subtitle', 'label']
@@ -129,122 +168,121 @@ class ONR(OP2Common):
         #aCode = self.get_block_int_entry(data, 1)
 
         ## total energy of all elements in isubcase/mode
-        self.etotal = self.parse_approach_code(data)
-        if self.is_debug_file:
-            self.binary_debug.flush()
+        self.etotal = op2.parse_approach_code(data)
+        if op2.is_debug_file:
+            op2.binary_debug.flush()
 
         self._onr_element_name(data)
 
         #: Load set or zero
-        self.load_set = self.add_data_parameter(data, 'load_set', b'i', 8, False)
+        op2.load_set = op2.add_data_parameter(data, 'load_set', b'i', 8, False)
 
         #: format code
-        self.format_code = self.add_data_parameter(data, 'format_code', b'i', 9, False)
+        op2.format_code = op2.add_data_parameter(data, 'format_code', b'i', 9, False)
 
         #: number of words per entry in record
         #: .. note:: is this needed for this table ???
-        self.num_wide = self.add_data_parameter(data, 'num_wide', b'i', 10, False)
+        op2.num_wide = op2.add_data_parameter(data, 'num_wide', b'i', 10, False)
         ## C
-        self.cvalres = self.add_data_parameter(data, 'cvalres', b'i', 11, False)
+        op2.cvalres = op2.add_data_parameter(data, 'cvalres', b'i', 11, False)
 
         #: Set identification number Number
-        self.set_id = self.add_data_parameter(data, 'set_id', b'i', 13, False)
+        op2.set_id = op2.add_data_parameter(data, 'set_id', b'i', 13, False)
 
         #: Natural eigenvalue - real part
-        self.eigen_real = self.add_data_parameter(data, 'eigen_real', b'i', 14, False)
+        #op2.eigen_real = op2.add_data_parameter(data, 'eigen_real', b'f', 14, False)
 
         #: Natural eigenvalue - imaginary part
-        self.eigen_imag = self.add_data_parameter(data, 'eigen_imag', b'i', 15, False)
+        #op2.eigen_imag = op2.add_data_parameter(data, 'eigen_imag', b'f', 15, False)
 
         #: Natural frequency
-        self.freq = self.add_data_parameter(data, 'freq', b'f', 16, False)
+        #op2.freq = op2.add_data_parameter(data, 'freq', b'f', 16, False)
 
         #: RMS and CRMS scale factor - NX
-        self.rmssf = self.add_data_parameter(data, 'rmssf', b'f', 17)
+        op2.rmssf = op2.add_data_parameter(data, 'rmssf', b'f', 17)
 
         #: Total positive energy
-        self.etotpos = self.add_data_parameter(data, 'etotpos', b'f', 18)
+        op2.etotpos = op2.add_data_parameter(data, 'etotpos', b'f', 18)
 
         #: Total negative energy
-        self.etotneg = self.add_data_parameter(data, 'etotneg', b'f', 19, False)
+        op2.etotneg = op2.add_data_parameter(data, 'etotneg', b'f', 19, False)
 
         #: Energy Threshold - NX
-        self.thresh = self.add_data_parameter(data, 'thresh', b'f', 17)
+        op2.thresh = op2.add_data_parameter(data, 'thresh', b'f', 17)
 
-        if not self.is_sort1:
+        if not op2.is_sort1:
             raise NotImplementedError('sort2...')
 
-        if self.analysis_code == 1:   # statics / displacement / heat flux
-            #del self.data_code['nonlinear_factor']
-            self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
-            self.data_names = self.apply_data_code_value('data_names', ['lsdvmn'])
-            self.setNullNonlinearFactor()
-        elif self.analysis_code == 2:  # real eigenvalues
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)  ## mode number
-            #self.mode_cycle1 = self.add_data_parameter(data, 'mode', b'i', 7)
-            #self.mode_cycle2 = self.add_data_parameter(data, 'mode', b'f', 7)
-            #print('mode = ', self.mode)
-            #print('mode_cycle1 = ', self.mode_cycle1)
-            #print('mode_cycle2 = ', self.mode_cycle2)
+        if op2.analysis_code == 1:   # statics / displacement / heat flux
+            #del op2.data_code['nonlinear_factor']
+            op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['lsdvmn'])
+            op2.setNullNonlinearFactor()
+        elif op2.analysis_code == 2:  # real eigenvalues
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)  ## mode number
+            op2.eign = op2.add_data_parameter(data, 'eign', b'f', 6, False)
+            op2.mode_cycle = op2.add_data_parameter(data, 'mode_cycle', b'f', 7, False) # radians
             #self.show_data(data)
-            #self.cycle = 0.
-            #self.update_mode_cycle('cycle')
-            self.data_names = self.apply_data_code_value('data_names', ['mode', 'freq'])
+            #print(f'mode={op2.mode} eign={op2.eign} mode_cycle={op2.mode_cycle}')
+            op2._op2_readers.reader_oug.update_mode_cycle('mode_cycle')
+            #print(f'{op2.isubcase}: mode={op2.mode} eign={op2.eign:g} mode_cycle={op2.mode_cycle:g}')
+            op2.data_names = op2.apply_data_code_value('data_names', ['mode', 'eign', 'mode_cycle'])
             #print("mode(5)=%s eign(6)=%s mode_cycle(7)=%s" % (
-                #self.mode, self.eign, self.mode_cycle))
-        #elif self.analysis_code == 3: # differential stiffness
-            #self.lsdvmn = self.get_values(data,'i',5) ## load set number
-            #self.data_code['lsdvmn'] = self.lsdvmn
-        #elif self.analysis_code == 4: # differential stiffness
-            #self.lsdvmn = self.get_values(data,'i',5) ## load set number
-        elif self.analysis_code == 5:   # frequency
-            self.freq2 = self.add_data_parameter(data, 'freq2', b'f', 5)  ## frequency
-            self.data_names = self.apply_data_code_value('data_names', ['freq2'])
-        elif self.analysis_code == 6:  # transient
-            self.time = self.add_data_parameter(data, 'time', b'f', 5)  ## time step
-            self.data_names = self.apply_data_code_value('data_names', ['time'])
-        #elif self.analysis_code == 7: # pre-buckling
-            #self.data_names = self.apply_data_code_value('data_names',['lsdvmn'])
-        elif self.analysis_code == 8:  # post-buckling
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)  ## mode number
-            self.data_names = self.apply_data_code_value('data_names', ['mode'])
-        elif self.analysis_code == 9:  # complex eigenvalues
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)  ## mode number
-            self.eigr = self.eigen_real
-            self.eigi = self.eigen_imag
-            self.data_names = self.apply_data_code_value('data_names', ['mode', 'eigr', 'eign'])
-        elif self.analysis_code == 10:  # nonlinear statics
-            self.loadFactor = self.add_data_parameter(data, 'loadFactor', b'f', 5)  ## load factor
-            self.data_names = self.apply_data_code_value('data_names', ['loadFactor'])
-        #elif self.analysis_code == 11: # old geometric nonlinear statics
-            #self.data_names = self.apply_data_code_value('data_names',['lsdvmn'])
-        elif self.analysis_code == 12:  # contran ? (may appear as aCode=6)  --> straight from DMAP...grrr...
-            self.time = self.add_data_parameter(data, 'time', b'f', 5)  ## time step
-            self.data_names = self.apply_data_code_value('data_names', ['time'])
-        else:
+                #op2.mode, self.eign, op2.mode_cycle))
+        #elif op2.analysis_code == 3: # differential stiffness
+            #op2.lsdvmn = self.get_values(data,'i',5) ## load set number
+            #op2.data_code['lsdvmn'] = op2.lsdvmn
+        #elif op2.analysis_code == 4: # differential stiffness
+            #op2.lsdvmn = self.get_values(data,'i',5) ## load set number
+        elif op2.analysis_code == 5:   # frequency
+            op2.freq = op2.add_data_parameter(data, 'freq', b'f', 5)  ## frequency
+            op2.data_names = op2.apply_data_code_value('data_names', ['freq'])
+        elif op2.analysis_code == 6:  # transient
+            op2.time = op2.add_data_parameter(data, 'time', b'f', 5)  ## time step
+            op2.data_names = op2.apply_data_code_value('data_names', ['time'])
+        #elif op2.analysis_code == 7: # pre-buckling
+            #op2.data_names = op2.apply_data_code_value('data_names',['lsdvmn'])
+        elif op2.analysis_code == 8:  # post-buckling
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)  ## mode number
+            op2.data_names = op2.apply_data_code_value('data_names', ['mode'])
+        elif op2.analysis_code == 9:  # complex eigenvalues
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)  ## mode number
+            op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 14, False)
+            op2.eigi = op2.add_data_parameter(data, 'eigi', b'f', 15, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['mode', 'eigr', 'eigi'])
+        elif op2.analysis_code == 10:  # nonlinear statics
+            self.load_factor = op2.add_data_parameter(data, 'load_factor', b'f', 5)  ## load factor
+            op2.data_names = op2.apply_data_code_value('data_names', ['load_factor'])
+        #elif op2.analysis_code == 11: # old geometric nonlinear statics
+            #op2.data_names = op2.apply_data_code_value('data_names',['lsdvmn'])
+        elif op2.analysis_code == 12:  # contran ? (may appear as aCode=6)  --> straight from DMAP...grrr...
+            op2.time = op2.add_data_parameter(data, 'time', b'f', 5)  ## time step
+            op2.data_names = op2.apply_data_code_value('data_names', ['time'])
+        else:  # pragma: no cover
             raise RuntimeError('invalid analysis_code...analysis_code=%s' %
-                               self.analysis_code)
+                               op2.analysis_code)
 
-        self.fix_format_code()
-        if self.is_debug_file:
-            self.binary_debug.write('  approach_code  = %r\n' % self.approach_code)
-            self.binary_debug.write('  tCode          = %r\n' % self.tCode)
-            self.binary_debug.write('  isubcase       = %r\n' % self.isubcase)
-        self._read_title(data)
-        self._write_debug_bits()
+        op2.fix_format_code()
+        if op2.is_debug_file:
+            op2.binary_debug.write('  approach_code  = %r\n' % op2.approach_code)
+            op2.binary_debug.write('  tCode          = %r\n' % op2.tCode)
+            op2.binary_debug.write('  isubcase       = %r\n' % op2.isubcase)
+        op2._read_title(data)
+        op2._write_debug_bits()
 
-    def _onr_element_name(self, data):
+    def _onr_element_name(self, data: bytes) -> None:
+        op2 = self.op2
         #field_num = 6
         #datai = data[4 * (field_num - 1) : 4 * (field_num + 1)]
         #assert len(datai) == 8, len(datai)
         #print(4 * (field_num - 1), 4 * (field_num + 1))
-        #element_name, = self.struct_8s.unpack(data[24:32])  # changed on 11/30/2015; was this for a long time...
+        #element_name, = op2.struct_8s.unpack(data[24:32])  # changed on 11/30/2015; was this for a long time...
 
         #self.show_data(data[:28])
-        if self.size == 4:
-            element_name, = self.struct_8s.unpack(data[20:28])
+        if op2.size == 4:
+            element_name, = op2.struct_8s.unpack(data[20:28])
         else:
-            element_name, = self.struct_16s.unpack(data[40:56])
+            element_name, = op2.struct_16s.unpack(data[40:56])
             element_name = reshape_bytes_block(element_name)
 
         #print("element_name = %s" % (element_name))
@@ -252,27 +290,28 @@ class ONR(OP2Common):
             element_name = element_name.decode('utf-8').strip()  # element name
         except UnicodeDecodeError:
             #self.log.warning("element_name = %s" % str(element_name))
-            self.log.warning("element_name - UnicodeDecodeError")
+            op2.log.warning("element_name - UnicodeDecodeError")
             #self.show_data(data)
             raise
         if element_name.isalnum():
-            self.data_code['element_name'] = element_name
+            op2.data_code['element_name'] = element_name
         else:
             #print("element_name = %r" % (element_name))
-            self.data_code['element_name'] = 'UnicodeDecodeError???'
-            self.log.warning('data[20:28]=%r instead of data[24:32]' % data[20:28])
+            op2.data_code['element_name'] = 'UnicodeDecodeError???'
+            op2.log.warning('data[20:28]=%r instead of data[24:32]' % data[20:28])
 
-    def _read_onr2_3(self, data, ndata):
+    def _read_onr2_3(self, data: bytes, ndata: int):
         """reads the SORT2 version of table 4 (the data table)"""
-        self.nonlinear_factor = np.nan
-        self.is_table_1 = False
-        self.is_table_2 = True
-        unused_three = self.parse_approach_code(data)
-        self.words = [
-            'aCode',       'tCode',    'eTotal',       'isubcase',
+        op2 = self.op2
+        op2.nonlinear_factor = np.nan
+        op2.is_table_1 = False
+        op2.is_table_2 = True
+        op2.parse_approach_code(data)
+        op2.words = [
+            'aCode',       'tCode',    'etotal',       'isubcase',
             '???',         '???',      'element_name', 'load_set',
-            'format_code', 'num_wide', 'cvalres',      'setID',
-            'setID',       'eigenReal', 'eigenImag',   'rmssf',
+            'format_code', 'num_wide', 'cvalres',      'set_id',
+            'eign',        'eigr',     'eigi',         'rmssf',
             'etotpos',     'etotneg',  'thresh',       '???',
             '???',         '???',      '???',      '???',
             '???', 'Title', 'subtitle', 'label']
@@ -280,194 +319,214 @@ class ONR(OP2Common):
         self._onr_element_name(data)
 
         #: Load set or zero
-        self.load_set = self.add_data_parameter(data, 'load_set', b'i', 8, False)
+        op2.load_set = op2.add_data_parameter(data, 'load_set', b'i', 8, False)
 
         #: format code
-        self.format_code = self.add_data_parameter(data, 'format_code', b'i', 9, False)
+        op2.format_code = op2.add_data_parameter(data, 'format_code', b'i', 9, False)
 
         #: number of words per entry in record
         #: .. note:: is this needed for this table ???
-        self.num_wide = self.add_data_parameter(data, 'num_wide', b'i', 10, False)
+        op2.num_wide = op2.add_data_parameter(data, 'num_wide', b'i', 10, False)
         ## C
-        self.cvalres = self.add_data_parameter(data, 'cvalres', b'i', 11, False)
+        op2.cvalres = op2.add_data_parameter(data, 'cvalres', b'i', 11, False)
 
         #: Set identification number Number
-        self.set_id = self.add_data_parameter(data, 'set_id', b'i', 13, False)
+        op2.set_id = op2.add_data_parameter(data, 'set_id', b'i', 13, False)
 
         #: Natural eigenvalue - real part
-        self.eigen_real = self.add_data_parameter(data, 'eigen_real', b'i', 14, False)
+        #op2.eigen_real = op2.add_data_parameter(data, 'eigen_real', b'f', 14, False)
 
         #: Natural eigenvalue - imaginary part
-        self.eigen_imag = self.add_data_parameter(data, 'eigen_imag', b'i', 15, False)
+        #op2.eigen_imag = op2.add_data_parameter(data, 'eigen_imag', b'f', 15, False)
 
         #: Natural frequency
-        self.freq = self.add_data_parameter(data, 'freq', b'f', 16, False)
+        op2.freq = op2.add_data_parameter(data, 'freq', b'f', 16, False)
 
         #: RMS and CRMS scale factor - NX
-        self.rmssf = self.add_data_parameter(data, 'rmssf', b'f', 17)
+        op2.rmssf = op2.add_data_parameter(data, 'rmssf', b'f', 17)
 
         #: Total positive energy
-        self.etotpos = self.add_data_parameter(data, 'etotpos', b'f', 18)
+        op2.etotpos = op2.add_data_parameter(data, 'etotpos', b'f', 18)
 
         #: Total negative energy
-        self.etotneg = self.add_data_parameter(data, 'etotneg', b'f', 19, False)
+        op2.etotneg = op2.add_data_parameter(data, 'etotneg', b'f', 19, False)
 
         #: Energy Threshold - NX
-        self.thresh = self.add_data_parameter(data, 'thresh', b'f', 17)
+        op2.thresh = op2.add_data_parameter(data, 'thresh', b'f', 17)
 
-        self.element_id = self.add_data_parameter(data, 'node_id', b'i', 5, fix_device_code=True)
-        #if self.analysis_code == 1:  # statics / displacement / heat flux
+        op2.element_id = op2.add_data_parameter(data, 'node_id', b'i', 5, fix_device_code=True)
+        #if op2.analysis_code == 1:  # statics / displacement / heat flux
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
-            #self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            #self.setNullNonlinearFactor()
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5, False)
+            #op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            #op2.setNullNonlinearFactor()
 
-        if self.analysis_code == 1:  # static...because reasons.
-            self._analysis_code_fmt = b'i'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'N/A')
-        elif self.analysis_code == 2:  # real eigenvalues
+        if op2.analysis_code == 1:  # static...because reasons.
+            op2._analysis_code_fmt = b'i'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'N/A')
+        elif op2.analysis_code == 2:  # real eigenvalues
             ## mode number
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
-            self._analysis_code_fmt = b'i'
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)
+            op2._analysis_code_fmt = b'i'
             ## real eigenvalue
-            self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
-            ## mode or cycle .. todo:: confused on the type - F1???
-            self.mode_cycle = self.add_data_parameter(data, 'mode_cycle', b'f', 7, False)
-            self.data_names = self.apply_data_code_value('data_names',
-                                                         ['node_id', 'eigr', 'mode_cycle'])
-            self.apply_data_code_value('analysis_method', 'mode')
-        #elif self.analysis_code == 3: # differential stiffness
-            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
-            #self.data_names = self.data_code['lsdvmn'] = self.lsdvmn
-        #elif self.analysis_code == 4: # differential stiffness
-            #self.lsdvmn = self.get_values(data, b'i', 5) ## load set number
-        elif self.analysis_code == 5:   # frequency
+            op2.eigr = op2.add_data_parameter(data, 'eign', b'f', 6, False)
+            op2.mode_cycle = op2.add_data_parameter(data, 'mode_cycle', b'f', 7, False)
+            op2.data_names = op2.apply_data_code_value('data_names',
+                                                       ['node_id', 'eign', 'mode_cycle'])
+            op2.apply_data_code_value('analysis_method', 'mode')
+        #elif op2.analysis_code == 3: # differential stiffness
+            #op2.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+            #op2.data_names = op2.data_code['lsdvmn'] = op2.lsdvmn
+        #elif op2.analysis_code == 4: # differential stiffness
+            #op2.lsdvmn = self.get_values(data, b'i', 5) ## load set number
+        elif op2.analysis_code == 5:   # frequency
             ## frequency
-            #self.freq = self.add_data_parameter(data, 'freq', b'f', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'freq')
-        elif self.analysis_code == 6:  # transient
+            #op2.freq = op2.add_data_parameter(data, 'freq', b'f', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'freq')
+        elif op2.analysis_code == 6:  # transient
             ## time step
-            #self.dt = self.add_data_parameter(data, 'dt', b'f', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'dt')
-        elif self.analysis_code == 7:  # pre-buckling
+            #op2.dt = op2.add_data_parameter(data, 'dt', b'f', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'dt')
+        elif op2.analysis_code == 7:  # pre-buckling
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'i'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'lsdvmn')
-        elif self.analysis_code == 8:  # post-buckling
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'i'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'lsdvmn')
+        elif op2.analysis_code == 8:  # post-buckling
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'i'
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'i'
             ## real eigenvalue
-            self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
-            self.data_names = self.apply_data_code_value('data_names', ['node_id', 'eigr'])
-            self.apply_data_code_value('analysis_method', 'eigr')
-        elif self.analysis_code == 9:  # complex eigenvalues
+            op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 6, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id', 'eigr'])
+            op2.apply_data_code_value('analysis_method', 'eigr')
+        elif op2.analysis_code == 9:  # complex eigenvalues
             ## mode number
-            self.mode = self.add_data_parameter(data, 'mode', b'i', 5)
-            self._analysis_code_fmt = b'i'
+            op2.mode = op2.add_data_parameter(data, 'mode', b'i', 5)
+            op2._analysis_code_fmt = b'i'
             ## real eigenvalue
-            #self.eigr = self.add_data_parameter(data, 'eigr', b'f', 6, False)
+            #op2.eigr = op2.add_data_parameter(data, 'eigr', b'f', 6, False)
             ## imaginary eigenvalue
-            self.eigi = self.add_data_parameter(data, 'eigi', b'f', 7, False)
-            self.data_names = self.apply_data_code_value('data_names', ['node_id', 'eigr', 'eigi'])
-            self.apply_data_code_value('analysis_method', 'mode')
-        elif self.analysis_code == 10:  # nonlinear statics
+            op2.eigi = op2.add_data_parameter(data, 'eigi', b'f', 7, False)
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id', 'eigr', 'eigi'])
+            op2.apply_data_code_value('analysis_method', 'mode')
+        elif op2.analysis_code == 10:  # nonlinear statics
             ## load step
-            #self.lftsfq = self.add_data_parameter(data, 'lftsfq', b'f', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'lftsfq')
-        elif self.analysis_code == 11:  # old geometric nonlinear statics
+            #self.lftsfq = op2.add_data_parameter(data, 'lftsfq', b'f', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'lftsfq')
+        elif op2.analysis_code == 11:  # old geometric nonlinear statics
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'f'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-        elif self.analysis_code == 12:
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'f'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+        elif op2.analysis_code == 12:
             # contran ? (may appear as aCode=6)  --> straight from DMAP...grrr...
             ## load set number
-            #self.lsdvmn = self.add_data_parameter(data, 'lsdvmn', b'i', 5)
-            self._analysis_code_fmt = b'i'
-            self.data_names = self.apply_data_code_value('data_names', ['node_id'])
-            self.apply_data_code_value('analysis_method', 'lsdvmn')
-        else:
-            msg = 'invalid analysis_code...analysis_code=%s' % self.analysis_code
+            #op2.lsdvmn = op2.add_data_parameter(data, 'lsdvmn', b'i', 5)
+            op2._analysis_code_fmt = b'i'
+            op2.data_names = op2.apply_data_code_value('data_names', ['node_id'])
+            op2.apply_data_code_value('analysis_method', 'lsdvmn')
+        else:  # pragma: no cover
+            msg = 'invalid analysis_code...analysis_code=%s' % op2.analysis_code
             raise RuntimeError(msg)
 
-        self.fix_format_code()
-        if self.num_wide == 8:
-            self.format_code = 1
-            self.data_code['format_code'] = 1
+        op2.fix_format_code()
+        if op2.num_wide == 8:
+            op2.format_code = 1
+            op2.data_code['format_code'] = 1
         else:
-            #self.fix_format_code()
-            if self.format_code == 1:
-                self.format_code = 2
-                self.data_code['format_code'] = 2
-            assert self.format_code in [2, 3], self.code_information()
+            #op2.fix_format_code()
+            if op2.format_code == 1:
+                op2.format_code = 2
+                op2.data_code['format_code'] = 2
+            assert op2.format_code in [2, 3], op2.code_information()
 
-        if self.is_debug_file:
-            self.binary_debug.write('  approach_code  = %r\n' % self.approach_code)
-            self.binary_debug.write('  tCode          = %r\n' % self.tCode)
-            self.binary_debug.write('  isubcase       = %r\n' % self.isubcase)
-        self._read_title(data)
-        self._write_debug_bits()
+        if op2.is_debug_file:
+            op2.binary_debug.write('  approach_code  = %r\n' % op2.approach_code)
+            op2.binary_debug.write('  tCode          = %r\n' % op2.tCode)
+            op2.binary_debug.write('  isubcase       = %r\n' % op2.isubcase)
+        op2._read_title(data)
+        op2._write_debug_bits()
 
-    def _read_onr1_4(self, data, ndata):
+    def _read_onr1_4(self, data: bytes, ndata: int) -> int:
         """
         reads ONRGY1 subtable 4
         """
-        if self.table_code == 18:  # element strain energy
-            if self.table_name not in self.table_name in [b'ONRGY', b'ONRGY1']:
-                msg = 'table_name=%s table_code=%s' % (self.table_name, self.table_code)
+        op2 = self.op2
+        if op2.table_code == 18:  # element strain energy
+            if op2.table_name not in [b'ONRGY', b'ONRGY1', b'ONRGY2']:
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
                 raise NotImplementedError(msg)
-            n = self._read_element_strain_energy(data, ndata)
-        else:
-            raise NotImplementedError(self.table_code)
+            n = self._read_element_strain_energy(data, ndata, result_name_suffix='_strain_energy')
+        elif op2.table_code == 36:  # element kinetic energy
+            if op2.table_name not in [b'OEKE1']:
+                msg = f'table_name={op2.table_name} table_code={op2.table_code}'
+                raise NotImplementedError(msg)
+            n = self._read_element_strain_energy(data, ndata, result_name_suffix='_kinetic_energy')
+        else:  # pragma: no cover
+            raise NotImplementedError(op2.table_code)
         return n
 
-    def _read_element_strain_energy(self, data, ndata):
+    def _read_element_strain_energy(self, data: bytes, ndata: int,
+                                    result_name_suffix: str) -> int:
         """
-        table_code = 19
+        table_code = 19 : ONR/OEE - element strain energy density
+        table_code = 36 : EKE - element kinetic energy density
         """
-        dt = self.nonlinear_factor
+        op2 = self.op2
+        dt = op2.nonlinear_factor
         n = 0
 
-        element_name = self.data_code['element_name']
+        element_name = op2.data_code['element_name']
         try:
             result_name = RESULT_NAME_MAP[element_name]
-        except KeyError:
-            raise NotImplementedError('element_name=%r' % (self.data_code['element_name']))
+        except KeyError:  # pragma: no cover
+            raise NotImplementedError(f'element_name1={element_name!r} element_name={op2.data_code["element_name"]!r}')
         prefix, postfix = self.get_onr_prefix_postfix()
-        result_name = prefix + result_name + postfix
+
+        # strain_energy.cbar_strain_energy
+        # kinetic_energy.cbar_kinetic_energy
+        result_name = f'{prefix}{result_name}{result_name_suffix}{postfix}'
         #result_name = 'strain_energy'
 
-        if self._results.is_not_saved(result_name):
+        is_saved, slot = get_is_slot_saved(op2, result_name)
+        if not is_saved:
             return ndata
-        self._results._found_result(result_name)
 
-        slot = self.get_result(result_name)
+        if 'strain_energy' in result_name:
+            real_cls = RealStrainEnergyArray
+            complex_cls = ComplexStrainEnergyArray
+        elif 'kinetic_energy' in result_name:
+            real_cls = RealKineticEnergyArray
+            complex_cls = None
+        else:
+            raise NotImplementedError(result_name)
 
         #auto_return = False
-        if self.is_debug_file:
-            self.binary_debug.write('cvalares = %s\n' % self.cvalres)
-        if self.format_code in [1, 2] and self.num_wide == 4:
-            assert self.cvalres in [0, 1], self.cvalres
+        if op2.is_debug_file:
+            op2.binary_debug.write('cvalares = %s\n' % op2.cvalres)
 
-            assert self.num_wide == 4
-            ntotal = 16 * self.factor  # 4*4=16
+        factor = op2.factor
+        if op2.format_code in [1, 2] and op2.num_wide == 4:
+            assert op2.cvalres in [0, 1], op2.cvalres
+
+            assert op2.num_wide == 4
+            ntotal = 16 * factor  # 4*4=16
             nelements = ndata // ntotal
-            auto_return, is_vectorized = self._create_oes_object4(
-                nelements, result_name, slot, RealStrainEnergyArray)
+            auto_return, is_vectorized = op2._create_oes_object4(
+                nelements, result_name, slot, real_cls)
 
             if auto_return:
                 #if obj.dt_temp is None or obj.itime is None and obj.dt_temp == dt:
-                    #element_name = self.data_code['element_name']
+                    #element_name = op2.data_code['element_name']
                     #if element_name in obj.element_name_count:
                         #obj.element_name_count[element_name] += nelements
                     #else:
@@ -475,29 +534,33 @@ class ONR(OP2Common):
                     #obj.dt_temp = dt
                 return nelements * ntotal
             #itime = obj.itime #// obj.nelement_types
+            #op2.show_data(data, types='if')
 
-            obj = self.obj
+            obj = op2.obj
             itime = obj.itime
 
-            if self.is_debug_file:
-                self.binary_debug.write('  [cap, element1, element2, ..., cap]\n')
-                self.binary_debug.write('  cap = %i  # assume 1 cap when there could have been multiple\n' % ndata)
-                self.binary_debug.write('  #elementi = [eid_device, energy, percent, density]\n')
-                self.binary_debug.write('  nelements=%i\n' % nelements)
+            if op2.is_debug_file:
+                op2.binary_debug.write('  [cap, element1, element2, ..., cap]\n')
+                op2.binary_debug.write(f'  cap = {ndata:d}  # assume 1 cap when there could have been multiple\n')
+                op2.binary_debug.write('  #elementi = [eid_device, energy, percent, density]\n')
+                op2.binary_debug.write(f'  nelements={nelements:d}\n')
 
-            if self.use_vector and self.sort_method == 1: # and self.is_sort1:
+            if op2.is_optistruct:
+                op2.use_vector = False
+
+            if op2.use_vector and op2.sort_method == 1:  # and op2.is_sort1:
                 n = nelements * ntotal
                 ielement = obj.ielement
                 ielement2 = obj.ielement + nelements
                 itotal = obj.itotal
                 itotal2 = obj.itotal + nelements * 4
 
-                floats = np.frombuffer(data, dtype=self.fdtype8).reshape(nelements, 4)
+                floats = np.frombuffer(data, dtype=op2.fdtype8).reshape(nelements, 4)
                 obj._times[itime] = dt
                 #if obj.itime == 0:
-                ints = np.frombuffer(data, dtype=self.idtype8).reshape(nelements, 4)
+                ints = np.frombuffer(data, dtype=op2.idtype8).reshape(nelements, 4)
                 eids = ints[:, 0] // 10
-                assert eids.min() > 0, f'etype={self.element_name} isubtable={self.isubtable} eids.min()={eids.min()}'
+                assert eids.min() > 0, f'etype={element_name} isubtable={op2.isubtable} eids.min()={eids.min()}'
                 obj.element[itime, ielement:ielement2] = eids
 
                 #[energy, percent, density]
@@ -505,46 +568,32 @@ class ONR(OP2Common):
                 obj.itotal2 = itotal2
                 obj.ielement = ielement2
             else:
-                fmt = mapfmt(self._endian + self._analysis_code_fmt + b'3f', self.size)
-                struct1 = Struct(fmt)
-                for unused_i in range(nelements):
-                    edata = data[n:n+ntotal]
-
-                    out = struct1.unpack(edata)
-                    (eid_device, energy, percent, density) = out
-                    if self.sort_method == 1:
-                        eid = eid_device // 10
-                    else:
-                        eid = self.nonlinear_factor
-                        dt = eid_device
-                    if self.is_debug_file:
-                        self.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
-                    self.obj.add_sort1(dt, eid, energy, percent, density)
-                    n += ntotal
-        elif self.format_code == 1 and self.num_wide == 5:
-            assert self.cvalres in [0, 1, 2], self.cvalres # 0??
-            ntotal = 20
+                n = real_strain_energy_4(op2, obj, data,
+                                         n, ntotal, nelements, dt)
+        elif op2.format_code == 1 and op2.num_wide == 5:  # complex
+            assert op2.cvalres in [0, 1, 2], op2.cvalres  # 0??
+            ntotal = 20 * factor
             nnodes = ndata // ntotal
             nelements = nnodes
 
-            auto_return, is_vectorized = self._create_oes_object4(
-                nelements, result_name, slot, RealStrainEnergyArray)
+            auto_return, is_vectorized = op2._create_oes_object4(
+                nelements, result_name, slot, real_cls)
             if auto_return:
-                return nelements * self.num_wide * 4
+                return nelements * op2.num_wide * 4
 
-            obj = self.obj
-            if self.use_vector:
-                n = nelements * 4 * self.num_wide
+            obj = op2.obj
+            if op2.use_vector:
+                n = nelements * ntotal
                 itotal = obj.ielement
                 ielement2 = obj.itotal + nelements
                 itotal2 = ielement2
 
-                floats = np.frombuffer(data, dtype=self.fdtype).reshape(nelements, 5).copy()
+                floats = np.frombuffer(data, dtype=op2.fdtype).reshape(nelements, 5).copy()
                 obj._times[obj.itime] = dt
 
-                strings = np.frombuffer(data, dtype=self._uendian + 'S4').reshape(nelements, 5)
+                strings = np.frombuffer(data, dtype=op2._uendian + 'S4').reshape(nelements, 5)
                 if obj.itime == 0:
-                    ints = np.frombuffer(data, dtype=self.idtype).reshape(nelements, 5)
+                    ints = np.frombuffer(data, dtype=op2.idtype).reshape(nelements, 5)
                     if obj.element_name == 'DMIG':
                         s = np.array([(s1+s2).decode('latin1').strip()
                                       for s1, s2 in zip(strings[:, 0], strings[:, 1])], dtype='|U8')
@@ -565,38 +614,32 @@ class ONR(OP2Common):
                 obj.itotal = itotal2
                 obj.ielement = ielement2
             else:
-                s = Struct(self._endian + b'8s3f')
-                for unused_i in range(nnodes):
-                    edata = data[n:n+20]
-                    out = s.unpack(edata)
-                    (word, energy, percent, density) = out
-                    word = word.strip()
-                    if self.is_debug_file:
-                        self.binary_debug.write('  eid/word=%r; %s\n' % (word, str(out)))
-                    obj.add_sort1(dt, word, energy, percent, density)
-                    n += ntotal
-        elif self.format_code in [2, 3] and self.num_wide == 5:
+                n = complex_strain_energy_4(op2, obj, data, op2.sort_method,
+                                            n, ntotal, nelements, dt)
+        elif op2.format_code in [2, 3] and op2.num_wide == 5:
             #ELEMENT-ID   STRAIN-ENERGY (MAG/PHASE)  PERCENT OF TOTAL  STRAIN-ENERGY-DENSITY
             #    5         2.027844E-10 /   0.0            1.2581            2.027844E-09
-            ntotal = 20
-            nelements = ndata // ntotal
-            auto_return, is_vectorized = self._create_oes_object4(
-                nelements, result_name, slot, ComplexStrainEnergyArray)
-            if auto_return:
-                return nelements * self.num_wide * 4
+            assert complex_cls is not None, op2.code_information()
 
-            obj = self.obj
-            if self.use_vector:
-                n = nelements * 4 * self.num_wide
+            ntotal = 20 * factor
+            nelements = ndata // ntotal
+            auto_return, is_vectorized = op2._create_oes_object4(
+                nelements, result_name, slot, complex_cls)
+            if auto_return:
+                return nelements * ntotal
+
+            obj = op2.obj
+            if op2.use_vector:
+                n = nelements * 4 * op2.num_wide
                 itotal = obj.ielement
                 ielement2 = obj.itotal + nelements
                 itotal2 = ielement2
 
-                floats = np.frombuffer(data, dtype=self.fdtype).reshape(nelements, 5)
+                floats = np.frombuffer(data, dtype=op2.fdtype).reshape(nelements, 5)
                 obj._times[obj.itime] = dt
 
                 #if obj.itime == 0:
-                ints = np.frombuffer(data, dtype=self.idtype).reshape(nelements, 5)
+                ints = np.frombuffer(data, dtype=op2.idtype).reshape(nelements, 5)
                 eids = ints[:, 0] // 10
                 assert eids.min() > 0, eids.min()
                 obj.element[itotal:itotal2] = eids
@@ -608,46 +651,34 @@ class ONR(OP2Common):
                 obj.itotal = itotal2
                 obj.ielement = ielement2
             else:
-                s = Struct(self._endian + b'i4f')
-                for unused_i in range(nelements):
-                    edata = data[n:n+20]
-                    out = s.unpack(edata)
-                    (eid_device, energyr, energyi, percent, density) = out
-                    eid = eid_device // 10
-                    #if is_magnitude_phase:
-                        #energy = polar_to_real_imag(energyr, energyi)
-                    #else:
-                        #energy = complex(energyr, energyi)
+                n = complex_strain_energy_5(op2, obj, data,
+                                            n, ntotal, nelements, dt)
 
-                    if self.is_debug_file:
-                        self.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
-                    obj.add_sort1(dt, eid, energyr, energyi, percent, density)
-                    n += ntotal
-
-        elif self.format_code == 1 and self.num_wide == 6:  ## TODO: figure this out...
-            ntotal = 24
-            nnodes = ndata // ntotal
-            auto_return, is_vectorized = self._create_oes_object4(
+        elif op2.format_code == 1 and op2.num_wide == 6:
+            ## TODO: figure this out...
+            ntotal = 24 * factor
+            nelements = ndata // ntotal
+            auto_return, is_vectorized = op2._create_oes_object4(
                 nelements, result_name, slot, RealStrainEnergyArray)
 
             if auto_return:
-                return nelements * self.num_wide * 4
+                return nelements * ntotal
 
-            obj = self.obj
-            if self.use_vector:
-                n = nelements * 4 * self.num_wide
+            obj = op2.obj
+            if op2.use_vector:
+                n = nelements * ntotal
                 itotal = obj.ielement
                 ielement2 = obj.itotal + nelements
                 itotal2 = ielement2
 
-                floats = np.frombuffer(data, dtype=self.fdtype).reshape(nelements, 5)
+                floats = np.frombuffer(data, dtype=op2.fdtype).reshape(nelements, 5)
                 obj._times[obj.itime] = dt
 
                 if obj.itime == 0:
-                    strings = np.frombuffer(data, dtype=self._uendian + 'S4').reshape(nelements, 6)
+                    strings = np.frombuffer(data, dtype=op2._uendian + 'S4').reshape(nelements, 6)
                     s = np.array([s1+s2 for s1, s2 in zip(strings[:, 1], strings[:, 2])])
 
-                    ints = np.frombuffer(data, dtype=self.idtype).reshape(nelements, 6)
+                    ints = np.frombuffer(data, dtype=op2.idtype).reshape(nelements, 6)
                     eids = ints[:, 0] // 10
                     assert eids.min() > 0, eids.min()
                     obj.element[itotal:itotal2] = eids
@@ -658,20 +689,10 @@ class ONR(OP2Common):
                 obj.itotal = itotal2
                 obj.ielement = ielement2
             else:
-                struct1 = Struct(self._endian + b'i8s3f')
-                for unused_i in range(nnodes):
-                    edata = data[n:n+24]
-                    out = struct1.unpack(edata)
-                    (word, energy, percent, density) = out  # TODO: this has to be wrong...
-                    word = word.strip()
-                    #print "eType=%s" % (eType)
-                    #print "%s" %(self.get_element_type(self.element_type)), data_in
-                    #eid = self.obj.add_new_eid_sort1(out)
-                    if self.is_debug_file:
-                        self.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
-                    obj.add_sort1(dt, word, energy, percent, density)
-                    n += ntotal
-        elif self.format_code in [2, 3] and self.num_wide == 4:
+                n = real_strain_energy_6(
+                    op2, obj, data,
+                    n, ntotal, nelements, dt)
+        elif op2.format_code in [2, 3] and op2.num_wide == 4:
             #
             #  FREQUENCY =  1.000000E+01
             #                           E L E M E N T   S T R A I N   E N E R G I E S   ( A V E R A G E )
@@ -704,7 +725,157 @@ class ONR(OP2Common):
             #MSC Nastran
             raise NotImplementedError('onr')
         else:
-            msg = self.code_information()
-            return self._not_implemented_or_skip(data, ndata, msg)
-            #raise NotImplementedError(self.code_information())
+            msg = op2.code_information()
+            return op2._not_implemented_or_skip(data, ndata, msg)
+            #raise NotImplementedError(op2.code_information())
         return n
+
+
+def real_strain_energy_6(op2: OP2,
+                         obj: RealStrainEnergyArray,
+                         data: bytes,
+                         n: int,
+                         ntotal: int,
+                         nelements: int,
+                         dt) -> int:
+    if op2.size == 4:
+        struct1 = Struct(op2._endian + b'i8s3f')
+    else:
+        struct1 = Struct(op2._endian + b'q16s3d')
+
+    for unused_i in range(nelements):  # TODO: is this nnodes?
+        edata = data[n:n + ntotal]
+        out = struct1.unpack(edata)
+        (word, energy, percent, density) = out  # TODO: this has to be wrong...
+        word = word.strip()
+        # print "eType=%s" % (eType)
+        # print "%s" %(self.get_element_type(self.element_type)), data_in
+        # eid = op2.obj.add_new_eid_sort1(out)
+        if op2.is_debug_file:
+            op2.binary_debug.write('  word=%s; %s\n' % (word, str(out)))
+        obj.add_sort1(dt, word, energy, percent, density)
+        n += ntotal
+    return n
+
+
+def complex_strain_energy_5(op2: OP2,
+                            obj: ComplexStrainEnergyArray,
+                            data: bytes,
+                            n: int,
+                            ntotal: int, nelements: int, dt) -> int:
+
+    #fmt = mapfmt(op2._endian + op2._analysis_code_fmt + b'3f', size)
+    fmt = op2._endian + mapfmt(b'i4f', op2.size)
+    struct1 = Struct(fmt)
+    for unused_i in range(nelements):
+        edata = data[n:n + ntotal]
+        out = struct1.unpack(edata)
+        (eid_device, energyr, energyi, percent, density) = out
+        eid, dt = get_eid_dt_from_eid_device(
+            eid_device, op2.nonlinear_factor, op2.sort_method)
+
+        # if is_magnitude_phase:
+        # energy = polar_to_real_imag(energyr, energyi)
+        # else:
+        # energy = complex(energyr, energyi)
+
+        if op2.is_debug_file:
+            op2.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
+
+        #             dt, eid, energyi, percenti, densityi
+        obj.add_sort1(dt, eid, energyr, energyi, percent, density)
+        n += ntotal
+    return n
+
+
+def real_strain_energy_4(op2: OP2,
+                         obj: RealStrainEnergyArray | RealKineticEnergyArray,
+                         data: bytes,
+                         n: int,
+                         ntotal: int,
+                         nelements: int,
+                         dt: int | float) -> int:
+    """
+    (eid_device       eid energy percent  density)
+    (11                 1 0.0114 0.1983   0.01147) typical
+    ( 0                 0      0      0        -1) optistruct - final
+    (1000000000 100000000    sum    sum       NaN) nx/msc     - final
+
+    """
+    fmt = op2._endian + mapfmt(op2._analysis_code_fmt + b'3f', op2.size)
+    struct1 = Struct(fmt)
+    if op2.is_optistruct:
+        fmt2 = mapfmt(op2._endian + op2._analysis_code_fmt + b'2f i', op2.size)
+        struct2 = Struct(fmt2)
+
+        edata = data[n:n+ntotal]
+        sum_energy = 0.
+        sum_percent = 0.
+        for unused_i in range(nelements-1):
+            edata = data[n:n+ntotal]
+            out = struct1.unpack(edata)
+            (eid_device, energy, percent, density) = out
+            eid, dt = get_eid_dt_from_eid_device(
+                eid_device, op2.nonlinear_factor, op2.sort_method)
+
+            # print(f'adding dt={dt:g} eid_device={eid_device} eid={eid} '
+            #       f'energy={energy:g} percent={percent:g} density={density:g}')
+            if op2.is_debug_file:
+                op2.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
+            sum_energy += energy
+            sum_percent += percent
+            obj.add_sort1(dt, eid, energy, percent, density)
+            n += ntotal
+            edata = data[n:n+ntotal]
+
+        out = struct2.unpack(edata)
+        (eid_device, energy, percent, density) = out
+        assert eid_device == 0, eid_device
+        eid, dt = get_eid_dt_from_eid_device(
+            eid_device, op2.nonlinear_factor, op2.sort_method)
+
+        # print(f'adding dt={dt:g} eid_device={eid_device} eid={eid} '
+        #       f'energy={energy:g} percent={percent:g} density={density:g}')
+        #if op2.is_debug_file:
+            #op2.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
+
+        eid = 100000000
+        obj.add_sort1(dt, eid, sum_energy, sum_percent, np.nan)
+        n += ntotal
+    else:
+        for unused_i in range(nelements):
+            edata = data[n:n+ntotal]
+            out = struct1.unpack(edata)
+            (eid_device, energy, percent, density) = out
+            eid, dt = get_eid_dt_from_eid_device(
+                eid_device, op2.nonlinear_factor, op2.sort_method)
+
+            # print(f'adding dt={dt:g} eid_device={eid_device} eid={eid} '
+            #       f'energy={energy} percent={percent:g} density={density:g}')
+            if op2.is_debug_file:
+                op2.binary_debug.write('  eid=%i; %s\n' % (eid, str(out)))
+            obj.add_sort1(dt, eid, energy, percent, density)
+            n += ntotal
+    return n
+
+
+def complex_strain_energy_4(op2: OP2,
+                            obj: ComplexStrainEnergyArray,
+                            data: bytes, sort_method: int,
+                            n: int,
+                            ntotal: int, nnodes: int, dt) -> int:
+    if op2.size == 4:
+        structi = Struct(op2._endian + b'8s3f')
+    else:
+        structi = Struct(op2._endian + b'16s3d')
+    for unused_i in range(nnodes):
+        edata = data[n:n+ntotal]
+        out = structi.unpack(edata)
+        (word, energy, percent, density) = out
+        word = word.strip()
+        if op2.is_debug_file:
+            op2.binary_debug.write('  eid/word=%r; %s\n' % (word, str(out)))
+        #dt, eid, energyr, energyi, percenti, densityi
+        obj.add_sort1(dt, word, energy, percent, density)
+        n += ntotal
+    return n

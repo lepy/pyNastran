@@ -2,9 +2,11 @@
 Defines functions for double precision 16 character field writing.
 """
 import sys
-from typing import List, Union
+import warnings
+from typing import Optional
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.utils import wipe_empty_fields
+
 
 def print_scientific_double(value: float) -> str:
     """
@@ -14,11 +16,11 @@ def print_scientific_double(value: float) -> str:
     Double Precision Scientific Notation:  5.0D+1
     """
     if value < 0:
-        Format = "%16.9e"
+        fmt = "%16.9e"
     else:
-        Format = "%16.10e"
+        fmt = "%16.10e"
 
-    svalue = Format % value
+    svalue = fmt % value
     field = svalue.replace('e', 'D')
 
     if field == '-0.0000000000D+00':
@@ -28,7 +30,7 @@ def print_scientific_double(value: float) -> str:
     return field
 
 
-def print_field_double(value: Union[int, float, str, None]) -> str:
+def print_field_double(value: Optional[int | float | str]) -> str:
     """
     Prints a 16-character width field
 
@@ -49,13 +51,14 @@ def print_field_double(value: Union[int, float, str, None]) -> str:
     return field
 
 
-def print_card_double(fields: List[Union[int, float, str, None]], wipe_fields: bool=True) -> str:
+def print_card_double(fields: list[Optional[int | float | str]],
+                      wipe_fields: bool=True) -> str:
     """
     Prints a nastran-style card with 16-character width fields.
 
     Parameters
     ----------
-    fields : List[varies]
+    fields : list[varies]
         all the fields in the BDF card (no trailing Nones)
     wipe_fields : bool; default=True
         some cards (e.g. PBEAM) have ending fields
@@ -72,16 +75,17 @@ def print_card_double(fields: List[Union[int, float, str, None]], wipe_fields: b
               format where the first 8 is the card name or
               blank (continuation).  The last 8-character field indicates
               an optional continuation, but because it's a left-justified
-              unneccessary field, print_card doesnt use it.
+              unnecessary field, print_card doesn't use it.
 
     .. code-block:: python
 
-      >>> fields = ['DUMMY', 1, 2, 3, None, 4, 5, 6, 7, 8.]
-      >>> print_card_double(fields)
-      DUMMY*                 1               2               3
-      *                      4               5               6               7
-      *       8.0000000000D+00
-      *
+       >>> fields = ['DUMMY', 1, 2, 3, None, 4, 5, 6, 7, 8.]
+       >>> print_card_double(fields)
+       DUMMY*                 1               2               3
+       *                      4               5               6               7
+       *       8.0000000000D+00
+       *
+
     """
     if wipe_fields:
         fields = wipe_empty_fields(fields)
@@ -94,8 +98,8 @@ def print_card_double(fields: List[Union[int, float, str, None]], wipe_fields: b
 
     try:
         out = '%-8s' % (fields[0] + '*')
-    except:
-        print("ERROR!  fields=%s" % fields)
+    except Exception:
+        warnings.warn("ERROR!  fields=%s" % fields)
         sys.stdout.flush()
         raise
 
@@ -103,8 +107,8 @@ def print_card_double(fields: List[Union[int, float, str, None]], wipe_fields: b
         field = fields[i]
         try:
             out += print_field_double(field)
-        except:
-            print("bad fields = %s" % fields)
+        except Exception:
+            warnings.warn("bad fields = %s" % fields)
             raise
         if i % 4 == 0:  # allow 1+4 fields per line
             out = out.rstrip(' ')

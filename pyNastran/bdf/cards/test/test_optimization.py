@@ -4,13 +4,15 @@ import os
 import unittest
 
 import numpy as np
-from cpylog import get_logger
+from cpylog import get_logger, SimpleLogger
 
 import pyNastran
 from pyNastran.bdf.bdf import BDF, read_bdf
-from pyNastran.op2.op2 import read_op2
+from pyNastran.op2.op2 import OP2, read_op2
 from pyNastran.bdf.cards.test.utils import save_load_deck
-from pyNastran.bdf.cards.optimization import break_word_by_trailing_integer
+from pyNastran.bdf.cards.optimization import (
+    break_word_by_trailing_integer,
+    validate_dvcrel, validate_dvmrel, validate_dvprel)
 
 MODEL_PATH = os.path.join(pyNastran.__path__[0], '..', 'models')
 
@@ -20,6 +22,304 @@ class TestOpt(unittest.TestCase):
     The cards tested are:
      * DEQATN
     """
+    def test_dvcrel2(self):
+        model = BDF(debug=None)
+        oid = 20
+
+        equation_id = 100
+        eqs = ['fstress(x,y) = x + 10.']
+        model.add_deqatn(equation_id, eqs, comment='deqatn')
+
+        model.add_desvar(10, 'VAR', 1.0)
+        model.add_desvar(11, 'VAR2', 3.0)
+        desvar_ids = [10, 11]
+        eid = 100
+        pid = 101
+        mid = 102
+        model.add_grid(20, [0., 0., 0.])
+        model.add_grid(21, [1., 0., 0.])
+        model.add_mat1(mid, 3.0e7, None, 0.3)
+        model.add_pbarl(pid, mid, 'BAR', [1., 2.,])
+        model.add_cbar(eid, pid, [20, 21], [0., 1., 0.], None)
+        model.add_dvcrel2(oid, 'CBAR', eid, 'X3', equation_id,
+                          desvar_ids, labels=None,
+                          cp_min=2., cp_max=4.,
+                          validate=True,)
+        save_load_deck(model, run_convert=False)
+
+    def test_validate_dvprel(self):
+        prop_type = 'PSHELL'
+        pname_fid = 'T'
+        validate = False
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        validate = True
+        prop_type = 'PSHELL'
+        pname_fid = 'T'
+        validate_dvprel(prop_type, pname_fid, validate)
+        pname_fid = 'Z1'
+        validate_dvprel(prop_type, pname_fid, validate)
+        pname_fid = 'Z2'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PCOMP'
+        pname_fid = 'T1'
+        validate_dvprel(prop_type, pname_fid, validate)
+        pname_fid = 'THETA3'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PCOMPG'
+        pname_fid = 'Z0'
+        validate_dvprel(prop_type, pname_fid, validate)
+        # pname_fid = 'THETA3'
+        # validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PSHEAR'
+        pname_fid = 'T'
+        validate_dvprel(prop_type, pname_fid, validate)
+        pname_fid = 'NSM'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PROD'
+        pname_fid = 'A'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PTUBE'
+        pname_fid = 'T'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBAR'
+        pname_fid = 'A'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBARL'
+        pname_fid = 'DIM1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBEAM'
+        pname_fid = 'A'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBEAML'
+        pname_fid = 'DIM1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PMASS'
+        pname_fid = 3
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PVISC'
+        pname_fid = 'CE1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBUSH'
+        pname_fid = 'K1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBUSH1D'
+        pname_fid = 'K'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PBUSHT'
+        pname_fid = 'TBID1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PGAP'
+        pname_fid = 'KA'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PDAMP'
+        pname_fid = 'B1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PWELD'
+        pname_fid = 'D'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+        prop_type = 'PFAST'
+        pname_fid = 'KT1'
+        validate_dvprel(prop_type, pname_fid, validate)
+
+    def test_validate_dvmrel(self):
+        validate = False
+        element_type = 'MAT1'
+        cp_name = 'E'
+        validate_dvmrel(validate, element_type, cp_name)
+
+        validate = True
+        validate_dvmrel(validate, element_type, cp_name)
+
+        element_type = 'MAT2'
+        cp_name = 'G11'
+        validate_dvmrel(validate, element_type, cp_name)
+
+        element_type = 'MAT3'
+        cp_name = 'EX'
+        validate_dvmrel(validate, element_type, cp_name)
+
+        # element_type = 'MAT4'
+        # cp_name = 'E'
+        # validate_dvmrel(validate, element_type, cp_name)
+
+        # element_type = 'MAT5'
+        # cp_name = 'E'
+        # validate_dvmrel(validate, element_type, cp_name)
+
+        element_type = 'MAT8'
+        cp_name = 'E1'
+        validate_dvmrel(validate, element_type, cp_name)
+
+        element_type = 'MAT9'
+        cp_name = 'G11'
+        validate_dvmrel(validate, element_type, cp_name)
+
+        element_type = 'MAT10'
+        cp_name = 'BULK'
+        validate_dvmrel(validate, element_type, cp_name)
+
+        element_type = 'MAT11'
+        cp_name = 'E3'
+        validate_dvmrel(validate, element_type, cp_name)
+
+    def test_validate_dvcrel(self):
+        validate = False
+        element_type = 'CONM2'
+        cp_name = 'X1'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        validate = True
+        validate_dvcrel(validate, element_type, cp_name)
+
+        element_type = 'CQUAD4'
+        cp_name = 'T1'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        element_type = 'CTRIA3'
+        cp_name = 'T1'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        element_type = 'CMASS4'
+        cp_name = 'M'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        element_type = 'CELAS4'
+        cp_name = 'K'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        element_type = 'CBEAM'
+        cp_name = 'X2'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        element_type = 'CBUSH'
+        cp_name = 'X2'
+        validate_dvcrel(validate, element_type, cp_name)
+
+        # element_type = 'CBEAM'
+        # cp_name = 'X2'
+        # validate_dvcrel(validate, element_type, cp_name)
+
+    def test_dmncon_dvtrel1_topvar(self):
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+
+        options = {
+            'STRESS': {'allowable': 10.0},
+        }
+        options_stress = {
+            'SYM': {
+                'cid': 0,
+                'mirror_symmetry1': 'ZX',
+                'mirror_symmetry2': 'ZX',
+                'mirror_symmetry3': 'ZX',
+                'cyclic_symmetry': 'X',
+                'num_cyclic_symmetries': 5,
+            },
+        }
+        opt_id = 3
+        xinit = 0.1
+        pid = 42
+        prop_type = 'FAKE'
+        label = 'cat'
+        topvar1 = model.add_topvar(
+            opt_id, label, prop_type, xinit, pid,
+            xlb=0.001, delxv=0.2, power=3.0,
+            options=None, comment='topvar')
+        model.add_pelas(pid, 3.14)
+        topvar1.raw_fields()
+        topvar1.write_card(size=8, is_double=False)
+        topvar1.write_card(size=16, is_double=False)
+        opt_id = 4
+        topvar2 = model.add_topvar(
+            opt_id, label, prop_type, xinit, pid,
+            xlb=0.001, delxv=0.2, power=3.0,
+            options=options, comment='topvar')
+        topvar2.raw_fields()
+
+        opt_id = 5
+        topvar2 = model.add_topvar(
+            opt_id, label, prop_type, xinit, pid,
+            xlb=0.001, delxv=0.2, power=3.0,
+            options=options_stress, comment='topvar')
+        topvar2.raw_fields()
+
+        constraint_id = 1
+        constraint_type = 'SYMP'
+        xyz = [1., 2., 3.]
+        normal = [0., 0., 1.]
+        dmncon = model.add_dmncon(
+            constraint_id, constraint_type,
+            xyz=xyz, normal=normal, comment='dmncon',
+        )
+        dmncon.raw_fields()
+        dmncon.write_card(size=8, is_double=False)
+        dmncon.write_card(size=16, is_double=False)
+
+        constraint_id += 1
+        constraint_type = 'ADDM'
+        dmncon = model.add_dmncon(
+            constraint_id, constraint_type,
+            xyz=xyz, normal=normal,
+            angle=223., mind=42.0,
+            comment='dmncon',
+        )
+        dmncon.write_card(size=8, is_double=False)
+
+        # constraint_id += 1
+        # constraint_type = 'SYMC'
+        # dmncon = model.add_dmncon(
+        #     constraint_id, constraint_type,
+        #     xyz=xyz, normal=normal,
+        #     m=[1., 2., 3.], nsections=4, comment='dmncon',
+        # )
+        # dmncon.write_card(size=8, is_double=False)
+
+        constraint_id += 1
+        constraint_type = 'CDID'
+        dmncon = model.add_dmncon(
+            constraint_id, constraint_type,
+            xyz=xyz, normal=normal, d=[1], comment='dmncon',
+        )
+        dmncon.write_card(size=8, is_double=False)
+
+        constraint_id += 1
+        constraint_type = 'EXTC'
+        dmncon = model.add_dmncon(
+            constraint_id, constraint_type,
+            normal=normal, comment='dmncon',
+        )
+        dmncon.write_card(size=8, is_double=False)
+
+        dvt_id = 3
+        group_id = 1
+        label = 'label'
+        dvtrel1 = model.add_dvtrel1(
+            dvt_id, label, group_id,
+            state='ACTIVE', dsv_flag=0, dvid1=0,
+            validate=True, comment='dvtrel1')
+        dvtrel1.raw_fields()
+        dvtrel1.write_card()
+        save_load_deck(model, run_save_load_hdf5=False)
+
     def test_opt_1(self):
         """tests SOL 200"""
         log = get_logger(level='warning')
@@ -29,7 +329,9 @@ class TestOpt(unittest.TestCase):
         #bdf, op2 = run_model(bdf_filename, op2_filename,
                              #f06_has_weight=False, vectorized=True,
                              #encoding='utf-8')
-        op2 = read_op2(op2_filename, log=log, debug=True, debug_file='temp.debug')
+
+        op2 = OP2(log=log, debug=True, debug_file='temp.debug')
+        op2.read_op2(op2_filename)
         unused_subcase_ids = op2.subcase_key.keys()
         #for subcase_id in subcase_ids:
             #assert isinstance(subcase_id, integer_types), subcase_id
@@ -40,7 +342,15 @@ class TestOpt(unittest.TestCase):
 
     def test_opt_2(self):
         """tests updating model based on DESVARs"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+
+        modtrak_id = 100
+        low_range = 3
+        high_range = 6
+        mt_filter = 0.9
+        model.add_modtrak(modtrak_id, low_range, high_range, mt_filter, comment='modtrak')
+
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -153,10 +463,12 @@ class TestOpt(unittest.TestCase):
         assert model.Mass(eid_conm2).mass == mass_new, 'mass=%s mass_new=%s' % (model.Mass(eid_conm2).mass, mass_new)
         assert model.Mass(eid_conm2).X[0] == x1_new, 'X1=%s x1_new=%s' % (model.Mass(eid_conm2).mass, x1_new)
         assert model.properties[pid_pcomp].thicknesses[0] == tpcomp_new, 't=%s tnew=%s' % (model.properties[pid_pcomp].thicknesses[0], tpcomp_new)
+        save_load_deck(model)
 
     def test_ddval(self):
         """tests a DDVAL"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         oid = 10
         ddvals = [0.1, 0.2, 0.3, 0.5]
         ddval = model.add_ddval(oid, ddvals, comment='ddval')
@@ -172,7 +484,8 @@ class TestOpt(unittest.TestCase):
         """tests a doptprm"""
         #DOPTPRM    CONV1  .00001  DELOBJ .000001  DESMAX     100      P1       1
         #              P2      13
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
 
         params = {
             'CONV1' : 0.0001,
@@ -197,7 +510,8 @@ class TestOpt(unittest.TestCase):
 
     def test_dlink(self):
         """tests a DLINK"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         oid = 10 # optimization id
         dvid = 11 # dlink id?
         IDv = [20, 21, 22]
@@ -229,6 +543,149 @@ class TestOpt(unittest.TestCase):
         model2.add_card(lines, 'DLINK', is_list=False)
         dlink = model.dlinks[10]
         dlink.write_card()
+        save_load_deck(model)
+
+    def test_dresp1s(self):
+        model = BDF(debug=False)
+        model.set_as_nx()
+
+        pid = 1
+        mid = 1
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_pshell(pid, mid1=mid, t=1.0)
+        model.add_mat1(mid, E, G, nu)
+        #----------------------------------------------
+        #no args
+        dresp_id = 1
+        label = 'COMPLIA'
+        #DRESP1, 12, CMPL1, CMPLNCE
+        response_type = 'CMPLNCE' # 'Compliance'
+        property_type = None
+        region = None
+        atta = None
+        attb = None
+        atti = []
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        label = 'DWEIGHT'
+        response_type = 'DWEIGHT'
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        label = 'WEIGHT'
+        response_type = 'WEIGHT'
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        #----------------------------------------------
+        dresp_id += 1
+        label = 'FLUTTER'
+        response_type = 'FLUTTER'
+        atti = [1, 2, 3, 4]
+        property_type = 'PKNL'
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+        model.add_set1(1, [10]) # nodes
+        model.add_flfact(2, [0.1]) # rho
+        model.add_flfact(3, [0.9]) # mach
+        model.add_flfact(4, [1100.]) # vel
+        property_type = None
+        #----------------------------------------------
+        # reset
+        atti = []
+
+        #----------------------------------------------
+        # atta only
+        dresp_id += 1
+        atta = 2
+        label = 'CEIG'
+        response_type = 'CEIG'
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        atta = 2
+        label = 'LAMA'
+        response_type = 'LAMA'
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        atta = 2
+        label = 'EIGN'
+        response_type = 'EIGN'
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+        #----------------------------------------------
+        # atti only
+        dresp_id += 1
+        #atta = 2
+        label = 'STABDER'
+        response_type = 'STABDER'
+        atti = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type,  atta, attb, atti, region=region)
+
+        # reset
+        atti = []
+        #----------------------------------------------
+        # property_type, atta only
+        property_type = None
+        # ---------------------------------------------
+        # property_type, atta, atti
+        dresp_id += 1
+        label = 'STRESS'
+        response_type = 'STRESS'
+        property_type = 'PSHELL'
+        atta = 4
+        atti = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        label = 'STRAIN'
+        response_type = 'STRAIN'
+        property_type = 'PSHELL'
+        atta = 4
+        atti = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        label = 'FORCE'
+        response_type = 'FORCE'
+        property_type = 'PROD'
+        atta = 2
+        atti = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        # attb is the lamina number
+        dresp_id += 1
+        label = 'CSTRESS'
+        response_type = 'CSTRESS'
+        property_type = 'PCOMP'
+        atta = 4
+        atti = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        label = 'CSTRAIN'
+        response_type = 'CSTRAIN'
+        property_type = 'PCOMP'
+        atta = 4
+        atti = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+
+        dresp_id += 1
+        label = 'CFAILURE'
+        response_type = 'CFAILURE'
+        property_type = 'PCOMP'
+        atta = 3
+        attai = [1]
+        model.add_dresp1(dresp_id, label, response_type, property_type, atta, attb, atti, region=region)
+        # ---------------------------------------------
+
+        #  reset
+        property_type = None
+        atta = None
+        atti = []
+        # ---------------------------------------------
+
         save_load_deck(model)
 
     def test_dvprel1(self):
@@ -277,6 +734,27 @@ class TestOpt(unittest.TestCase):
         equation_id = 100
         eqs = ['fstress(x) = x + 10.']
         model.add_deqatn(equation_id, eqs, comment='deqatn')
+
+        deqation2 = 101
+        labels = ['CAT']
+        dvprel2b = model.add_dvprel2(dvprel2_id+1, prop_type, pid, pname_fid, deqation2,
+                                     dvids, labels, p_min=None, p_max=p_max,
+                                     validate=True, comment='dvprel2')
+
+        dvids = []
+        labels = ['TVAL']
+        dvprel2 = model.add_dvprel2(dvprel2_id+2, prop_type, pid, pname_fid, deqation,
+                                    dvids, labels, p_min=None, p_max=p_max,
+                                    validate=True, comment='dvprel2')
+
+        equation_id = 101
+        eqs = ['fstress(x,y) = x * y + 10.']
+        model.add_deqatn(equation_id, eqs, comment='deqatn')
+        default_values = {'CAT': 42.0,
+                          'TVAL': 0.3,}
+        model.add_dtable(default_values, comment='dtable')
+
+
         #print(deqatn.object_attributes())
         #print(deqatn.func_str)
         #print(deqatn)
@@ -290,12 +768,10 @@ class TestOpt(unittest.TestCase):
         attb = None
         atti = pid
         dresp1 = model.add_dresp1(dresp1_id, label, response_type,
-                                  property_type, region,
-                                  atta, attb, atti, validate=True, comment='dresp1')
-        assert dresp1.rtype == dresp1.response_type
-        assert dresp1.ptype == dresp1.property_type
-        dresp1.rtype = response_type
-        dresp1.ptype = property_type
+                                  property_type,
+                                  atta, attb, atti, region=region, validate=True, comment='dresp1')
+        dresp1.response_type = response_type
+        dresp1.property_type = property_type
 
         dconstr = model.add_dconstr(dresp1_id, dresp1_id, lid=-1.e20, uid=1.e20,
                                     lowfq=0., highfq=1.e20, comment='dconstr')
@@ -309,7 +785,7 @@ class TestOpt(unittest.TestCase):
         dequation = equation_id
         label = 'dresp2'
         region = None
-        dresp2 = model.add_dresp2(dresp2_id, label, dequation, region, params,
+        dresp2 = model.add_dresp2(dresp2_id, label, dequation, params, region=region,
                                   method='MIN', c1=100., c2=0.005, c3=None,
                                   comment='dresp2')
         dresp2.raw_fields()
@@ -327,8 +803,8 @@ class TestOpt(unittest.TestCase):
             (3, 'DVPREL2') : [dvprel2_id],
             (3, 'DNODE') : [[100, 101], [1, 2]],
         }
-        dresp3 = model.add_dresp3(dresp3_id, label, group, Type, region,
-                                  params, comment='dresp3')
+        dresp3 = model.add_dresp3(dresp3_id, label, group, Type,
+                                  params, region=region, comment='dresp3')
         dresp3.raw_fields()
 
         oid = 1001
@@ -345,7 +821,7 @@ class TestOpt(unittest.TestCase):
         dconstrs = [1001, 1002, 1003]
         dconadd = model.add_dconadd(oid, dconstrs, comment='dconadd')
 
-        dscreen = model.add_dscreen('dunno', comment='dscreen')
+        dscreen = model.add_dscreen('DISP', comment='dscreen')
         dscreen.raw_fields()
 
         #print(dresp3)
@@ -411,7 +887,24 @@ class TestOpt(unittest.TestCase):
         grid.nid = 200
         assert '200' in str(dresp3), dresp3
 
-        save_load_deck(model, run_convert=False)
+        # DCONADD (45) is part of dconstrs
+        dconstr_keys = list(model.dconstrs.keys())
+        dconstr_keys.sort()
+        assert dconstr_keys == [42, 45, 1001, 1002, 1003], f'actual={dconstr_keys}'
+
+        model2 = save_load_deck(model, run_convert=False)
+
+        # DCONADD (45) is not part of self.dconstrs
+        dconstr_keys = list(model.dconstrs.keys())
+        dconstr_keys.sort()
+        assert dconstr_keys == [42, 45, 1001, 1002, 1003], f'actual={dconstr_keys}'
+
+        # 42 is a free DCONSTR
+        dconaddi = model2.dconstrs[45][0]
+        dconstr_subkeys = dconaddi.dconstrs
+        dconstr_subkeys.sort()
+        assert dconaddi.dconstrs == dconstrs, f'model2.dconadds={model2.dconadds}'
+        assert dconstr_subkeys == [1001, 1002, 1003], f'actual={dconstr_subkeys}'
 
     def test_dvprel1_02(self):
         model = BDF()
@@ -437,7 +930,8 @@ class TestOpt(unittest.TestCase):
 
     def test_dvmrel1(self):
         """tests a DVMREL1"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
 
         model.add_desvar(11, 'X11', 1.0)
         oid = 10
@@ -470,6 +964,13 @@ class TestOpt(unittest.TestCase):
                                       dvids, labels, mp_min=None, mp_max=1e20,
                                       validate=True,
                                       comment='dvmrel')
+        dvids = []
+        labels = ['NUVAL']
+        mp_name = 'NU'
+        model.add_dvmrel2(oid+1, mat_type, mid1, mp_name, deqation, dvids,
+                          labels, mp_min=None, mp_max=1e20, validate=True, comment='')
+        model.add_dtable({'NUVAL': 0.3,})
+
         E = 30.e7
         G = None
         nu = 0.3
@@ -528,7 +1029,8 @@ class TestOpt(unittest.TestCase):
 
     def test_dvcrel1(self):
         """tests a DVCREL1, DVCREL2, DVGRID"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         oid = 10
         conm2_eid = 100
         cp_min = 0.01
@@ -536,6 +1038,8 @@ class TestOpt(unittest.TestCase):
         desvar_id = 11
         desvar_ids = 11
         coeffs = 1.0
+
+        mass = 2.0
         dvcrel1 = model.add_dvcrel1(oid, 'CONM2', conm2_eid, 'X2', desvar_ids, coeffs,
                                     cp_min, cp_max, c0=0., validate=True, comment='dvcrel')
         dvcrel1.Type = 'CONM2'
@@ -553,9 +1057,9 @@ class TestOpt(unittest.TestCase):
         nid1 = 100
         nid2 = 101
         unused_conm2 = model.add_conm2(conm2_eid, nid1, mass, cid=0, X=None, I=None,
-                                comment='conm2')
-        model.add_grid(100, [1., 2., 3.])
-        model.add_grid(101, [2., 2., 4.])
+                                       comment='conm2')
+        model.add_grid(nid1, [1., 2., 3.])
+        model.add_grid(nid2, [2., 2., 4.])
 
         eid = 101
         pid = 102
@@ -589,12 +1093,14 @@ class TestOpt(unittest.TestCase):
         dxyz = [1., 2., 3.]
         dvgrid1 = model.add_dvgrid(dvid, nid, dxyz, cid=0, coeff=1.0,
                                    comment='dvgrid')
+        model.add_desvar(dvid, 'X10000', 0.127, xlb=-1e20, xub=1e20, delx=None, ddval=None, comment='desvar10000')
 
         nid = 101
         dvid = 10001
         dxyz = np.array([1., 2., 3.])
         unused_dvgrid2 = model.add_dvgrid(dvid, nid, dxyz, cid=0, coeff=1.0,
                                           comment='dvgrid')
+        model.add_desvar(dvid, 'X10001', 0.127, xlb=-1e20, xub=1e20, delx=None, ddval=None, comment='desvar10001')
 
         model.pop_parse_errors()
 
@@ -649,7 +1155,7 @@ class TestOpt(unittest.TestCase):
                          #comment='conm2')
         #model2.add_grid(100, [1., 2., 3.])
         #model2.add_grid(101, [2., 2., 4.])
-        #save_load_deck(model2)
+        save_load_deck(model, run_renumber=False, run_convert=False)
 
     def test_break_words(self):
         """tests break_word_by_trailing_integer"""
@@ -661,11 +1167,12 @@ class TestOpt(unittest.TestCase):
 
     def test_dvgrid(self):
         """tests DVGRID"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         desvar_id = 1
         nid = 2
         dxyz = [1., 2., 3.]
         cid = 1
-        model = BDF(debug=False)
         dvgrid = model.add_dvgrid(desvar_id, nid, dxyz, cid=cid, coeff=1.0, comment='')
         model.add_grid(nid, [0., 0., 0.])
 
@@ -769,7 +1276,7 @@ class TestOpt(unittest.TestCase):
         model.add_cbeam(eid+3, pid+3, nids, x, g0, offt='GGG', bit=None, pa=0, pb=0,
                         wa=wa, wb=wb, sa=0, sb=0, comment='')
 
-        model.add_pbar(pid, mid, A=0., i1=0., i2=0., i12=0., j=0., nsm=0.,
+        model.add_pbar(pid, mid, A=1., i1=0., i2=0., i12=0., j=0., nsm=0.,
                        c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
                        k1=1.e8, k2=1.e8, comment='')
         Type = 'BAR'
@@ -912,6 +1419,54 @@ class TestOpt(unittest.TestCase):
 
         model.cross_reference()
         save_load_deck(model, xref='standard', punch=True)
+
+    def test_dtable(self):
+        """
+        tests:
+         - DTABLE
+         - DRESP2
+
+        """
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+        default_values = {
+            'A' : 1.0,
+            'B1': 2.0,
+            'C': -3.,
+        }
+        dtable = model.add_dtable(default_values, comment='table')
+        str(dtable)
+        #print(dtable)
+        dresp_id = 42
+        label = 'cat'
+        dequation = 1000
+        region = None
+        params = {
+            (0, 'DTABLE'): ['B1', 'C', 'A'],
+        }
+        dresp2 = model.add_dresp2(dresp_id, label, dequation, params, region=region,
+                                  method='MIN', c1=1., c2=0.005, c3=10., validate=True,
+                                  comment='')
+        eqs = [
+            'f(a,b,c)=a+b+c'
+        ]
+        model.add_deqatn(dequation, eqs)
+        fields = dresp2.raw_fields()
+        #print(fields)
+        expected_fields = ['DRESP2', 42, 'cat', 1000, None, 'MIN', 1.0, 0.005, 10.0,
+                           'DTABLE', 'B1', 'C', 'A', None, None, None, None]
+        assert fields == expected_fields
+        #DRESP2        42     cat    1000
+        #          DTABLE      B1       C       A
+        #---------------------------------
+        dresp2.cross_reference(model)
+        str(dresp2)
+        fields = dresp2.raw_fields()
+        assert fields == expected_fields, fields
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

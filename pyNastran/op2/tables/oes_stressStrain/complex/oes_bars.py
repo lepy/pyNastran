@@ -1,12 +1,11 @@
-from typing import List
-
 import numpy as np
-from numpy import zeros
 
 from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_imag_floats_13e
+from pyNastran.op2.writer.utils import op2_stringify
 
 
 class ComplexBarArray(OES_Object):
@@ -27,7 +26,67 @@ class ComplexBarArray(OES_Object):
         else:
             raise NotImplementedError('SORT2')
 
-    def _reset_indices(self):
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        h5_table_dict = {
+            'EID': Int64Col(pos=0),
+            'X1AR': Float64Col(pos=1),
+            'X2AR': Float64Col(pos=2),
+            'X3AR': Float64Col(pos=3),
+            'X4AR': Float64Col(pos=4),
+            'AXR': Float64Col(pos=5),
+
+            'X1AI': Float64Col(pos=6),
+            'X2AI': Float64Col(pos=7),
+            'X3AI': Float64Col(pos=8),
+            'X4AI': Float64Col(pos=9),
+            'AXI': Float64Col(pos=10),
+
+            'X1BR': Float64Col(pos=11),
+            'X2BR': Float64Col(pos=12),
+            'X3BR': Float64Col(pos=13),
+            'X4BR': Float64Col(pos=14),
+
+            'X1BI': Float64Col(pos=15),
+            'X2BI': Float64Col(pos=16),
+            'X3BI': Float64Col(pos=17),
+            'X4BI': Float64Col(pos=18),
+
+            'DOMAIN_ID': Int64Col(pos=19),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr,
+                        ntime_neid0: int, ntime_neid1: int,
+                        itime: int):
+
+        arr["EID"][ntime_neid0:ntime_neid1] = self.element
+        arr["X1AR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 0].real
+        arr["X2AR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 1].real
+        arr["X3AR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 2].real
+        arr["X4AR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 3].real
+        arr["AXR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 4].real
+
+        #self.data[self.itime, self.itotal, :] = [
+        #    e1a, e2a, e3a, e4a, axial,
+        #    e1b, e2b, e3b, e4b,]
+        arr["X1AI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 0].imag
+        arr["X2AI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 1].imag
+        arr["X3AI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 2].imag
+        arr["X4AI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 3].imag
+        arr["AXI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 4].imag
+
+        arr["X1BR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 5].real
+        arr["X2BR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 6].real
+        arr["X3BR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 7].real
+        arr["X4BR"][ntime_neid0:ntime_neid1] = self.data[itime, :, 8].real
+
+        arr["X1BI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 5].imag
+        arr["X2BI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 6].imag
+        arr["X3BI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 7].imag
+        arr["X4AI"][ntime_neid0:ntime_neid1] = self.data[itime, :, 8].imag
+
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -47,9 +106,7 @@ class ComplexBarArray(OES_Object):
         """sizes the vectorized attributes of the ComplexCBarArray"""
         #print('ntimes=%s nelements=%s ntotal=%s subtitle=%s' % (
             #self.ntimes, self.nelements, self.ntotal, self.subtitle))
-        if self.is_built:
-            return
-        nnodes = 1
+        #nnodes = 1
 
         #self.names = []
         #self.nelements //= nnodes
@@ -58,15 +115,14 @@ class ComplexBarArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
         #print('ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
-        self._times = zeros(self.ntimes, dtype=dtype)
+        idtype, cfdtype = get_complex_times_dtype(self.size)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
         #self.element = array(self.nelements, dtype='|S8')
 
         #self.ntotal = self.nelements * nnodes
-        self.element = zeros(self.ntotal, dtype=idtype)
+        self.element = np.zeros(self.ntotal, dtype=idtype)
 
         # the number is messed up because of the offset for the element's properties
         #if self.nelements * nnodes != self.ntotal:
@@ -77,7 +133,7 @@ class ComplexBarArray(OES_Object):
             #raise RuntimeError(msg)
 
         #[s1a, s2a, s3a, s4a, axial, s2a, s2b, s2c, s2d]
-        self.data = zeros((self.ntimes, self.ntotal, 9), cfdtype)
+        self.data = np.zeros((self.ntimes, self.ntotal, 9), cfdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -93,9 +149,10 @@ class ComplexBarArray(OES_Object):
         #           s2c    (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)
         #           s2d    (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)  (-0+0j)
         headers = self.get_headers()
-        column_names, column_values = self._build_dataframe_transient_header()
-        data_frame = self._build_pandas_transient_elements(column_values, column_names,
-                                                           headers, self.element, self.data)
+        column_names, column_values = build_dataframe_transient_header(self)
+        data_frame = build_pandas_transient_elements(
+            self, column_values, column_names,
+            headers, self.element, self.data)
         #data_frame = pd.Panel(self.data, items=column_values,
                               #major_axis=self.element, minor_axis=headers).to_frame()
         #data_frame.columns.names = column_names
@@ -116,17 +173,17 @@ class ComplexBarArray(OES_Object):
                     for ieid, eid in enumerate(self.element):
                         t1 = self.data[itime, ieid, :]
                         t2 = table.data[itime, ieid, :]
-                        (s1a1, s2a1, s3a1, s4a1, axial1, s2a1, s2b1, s2c1, s2d1) = t1
-                        (s1a2, s2a2, s3a2, s4a2, axial2, s2a2, s2b2, s2c2, s2d2) = t2
+                        (s1a1, s2a1, s3a1, s4a1, axial1, s1b1, s2b1, s3b1, s4b1) = t1
+                        (s1a2, s2a2, s3a2, s4a2, axial2, s1b2, s2b2, s3b2, s4b2) = t2
                         #d = t1 - t2
                         if not np.allclose(
-                            [s1a1.real, s2a1.real, s3a1.real, s4a1.real, axial1.real, s2a1.real, s2b1.real, s2c1.real, s2d1.real],
-                            [s1a2.real, s2a2.real, s3a2.real, s4a2.real, axial2.real, s2a2.real, s2b2.real, s2c2.real, s2d2.real], atol=0.0001):
+                            [s1a1.real, s2a1.real, s3a1.real, s4a1.real, axial1.real, s1b1.real, s2b1.real, s3b1.real, s4b1.real],
+                            [s1a2.real, s2a2.real, s3a2.real, s4a2.real, axial2.real, s1b2.real, s2b2.real, s3b2.real, s4b2.real], atol=0.0001):
                         #if not np.array_equal(t1, t2):
                             msg += '%-4s  (%s, %s, %s, %s, %s, %s, %s, %s, %s)\n      (%s, %s, %s, %s, %s, %s, %s, %s, %s)\n' % (
                                 eid,
-                                s1a1.real, s2a1.real, s3a1.real, s4a1.real, axial1.real, s2a1.real, s2b1.real, s2c1.real, s2d1.real,
-                                s1a2.real, s2a2.real, s3a2.real, s4a2.real, axial2.real, s2a2.real, s2b2.real, s2c2.real, s2d2.real,
+                                s1a1.real, s2a1.real, s3a1.real, s4a1.real, axial1.real, s1b1.real, s2b1.real, s3b1.real, s4b1.real,
+                                s1a2.real, s2a2.real, s3a2.real, s4a2.real, axial2.real, s1b2.real, s2b2.real, s3b2.real, s4b2.real,
                                 )
                             i += 1
                         if i > 10:
@@ -154,19 +211,19 @@ class ComplexBarArray(OES_Object):
         self.element[self.itotal] = eid
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
         ntimes = self.ntimes
         #ntotal = self.ntotal
         nelements2 = self.element.shape[0]
-        assert nelements, nelements2
+        assert nelements == nelements2, f'nelements={nelements} nelements2={nelements2}'
         msg = []
 
         if self.nonlinear_factor not in (None, np.nan):  # transient
@@ -190,7 +247,7 @@ class ComplexBarArray(OES_Object):
         return msg
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         #msg_temp, nnodes = get_f06_header(self, is_mag_phase, is_sort1)
@@ -264,9 +321,9 @@ class ComplexBarArray(OES_Object):
             #[sa1, sa2, sa3, sa4, axial, sb1, sb2, sb3, sb4]
 
             eids = self.element
-            for eid, s1ai, s2ai, s3ai, s4ai, axiali, s2ai, s2bi, s2ci, s2di in zip(eids, sa1, sa2, sa3, sa4, axial, sb1, sb2, sb3, sb4):
+            for eid, s1ai, s2ai, s3ai, s4ai, axiali, s1bi, s2bi, s3bi, s4bi in zip(eids, sa1, sa2, sa3, sa4, axial, sb1, sb2, sb3, sb4):
                 vals = (s1ai, s2ai, s3ai, s4ai, axiali,
-                        s2ai, s2bi, s2ci, s2di)
+                        s1bi, s2bi, s3bi, s4bi)
                 vals2 = write_imag_floats_13e(vals, is_mag_phase)
                 (s1ar, s2ar, s3ar, s4ar, axialr,
                  s1br, s2br, s3br, s4br,
@@ -288,17 +345,17 @@ class ComplexBarArray(OES_Object):
             page_num += 1
         return page_num
 
-    def write_op2(self, op2, op2_ascii, itable, new_result,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result,
                   date, is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
         from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -325,7 +382,7 @@ class ComplexBarArray(OES_Object):
         #print('shape = %s' % str(self.data.shape))
         #assert self.ntimes == 1, self.ntimes
 
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         #fmt = '%2i %6f'
         #print('ntotal=%s' % (ntotal))
@@ -338,7 +395,7 @@ class ComplexBarArray(OES_Object):
 
         op2_ascii.write('%s-nelements=%i\n' % (self.element_name, nelements))
         for itime in range(self.ntimes):
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             #print('stress itable = %s' % itable)
@@ -348,10 +405,10 @@ class ComplexBarArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
             sa1 = self.data[itime, :, 0]
             sa2 = self.data[itime, :, 1]
@@ -365,17 +422,17 @@ class ComplexBarArray(OES_Object):
             #[sa1, sa2, sa3, sa4, axial, sb1, sb2, sb3, sb4]
 
             eids = self.element
-            for eid_device, s1ai, s2ai, s3ai, s4ai, axiali, s2ai, s2bi, s2ci, s2di in zip(eids_device, sa1, sa2, sa3, sa4, axial, sb1, sb2, sb3, sb4):
+            for eid_device, s1ai, s2ai, s3ai, s4ai, axiali, s1bi, s2bi, s3bi, s4bi in zip(eids_device, sa1, sa2, sa3, sa4, axial, sb1, sb2, sb3, sb4):
 
                 data = [eid_device,
-                        s1ai.real, s2ai.real, s3ai.real, s4ai.real, axiali.real, s2ai.real, s2bi.real, s2ci.real, s2di.real,
-                        s1ai.imag, s2ai.imag, s3ai.imag, s4ai.imag, axiali.imag, s2ai.imag, s2bi.imag, s2ci.imag, s2di.imag]
-                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, str(data)))
-                op2.write(struct1.pack(*data))
+                        s1ai.real, s2ai.real, s3ai.real, s4ai.real, axiali.real, s1bi.real, s2bi.real, s3bi.real, s4bi.real,
+                        s1ai.imag, s2ai.imag, s3ai.imag, s4ai.imag, axiali.imag, s1bi.imag, s2bi.imag, s3bi.imag, s4bi.imag]
+                op2_ascii.write('  eid_device=%s data=%s\n' % (eid_device, op2_stringify(data)))
+                op2_file.write(struct1.pack(*data))
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -385,7 +442,8 @@ class ComplexBarStressArray(ComplexBarArray, StressObject):
         ComplexBarArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['s1a', 's1b', 's1c', 's1d', 'axial',
                    's2a', 's2b', 's2c', 's2d', ]
         #headers = ['s1a', 's1b', 's1c', 's1d', 's1e', 'axial',
@@ -397,7 +455,8 @@ class ComplexBarStrainArray(ComplexBarArray, StrainObject):
         ComplexBarArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['e1a', 'e1b', 'e1c', 'e1d', 'axial',
                    'e2a', 'e2b', 'e2c', 'e2d', ]
         #headers = ['e1a', 'e1b', 'e1c', 'e1d', 'e1e', 'axial',

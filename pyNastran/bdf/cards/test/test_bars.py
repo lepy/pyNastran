@@ -2,12 +2,14 @@ import os
 import unittest
 
 import numpy as np
+from cpylog import SimpleLogger
 
 from pyNastran.bdf.bdf import BDF, BDFCard, CBAR, PBAR, PBARL, GRID, MAT1
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.mesh_utils.mass_properties import (
     mass_properties, mass_properties_nsm)  #mass_properties_breakdown
 from pyNastran.bdf.cards.test.utils import save_load_deck
+from pyNastran.bdf.mesh_utils.loads import sum_forces_moments, sum_forces_moments_elements
 
 
 class TestBars(unittest.TestCase):
@@ -129,6 +131,7 @@ class TestBars(unittest.TestCase):
 
     def test_pbar_3(self):
         """tests the PBAR validate"""
+        log = SimpleLogger(level='warning')
         pid = 42
         mid = 10
         i1 = -1.
@@ -150,10 +153,13 @@ class TestBars(unittest.TestCase):
             pbar.validate()
 
         pbar.j = 4.
+        with self.assertRaises(ValueError):
+            pbar.validate()
+        pbar.A = 3.14
         pbar.validate()
 
-        model = BDF(debug=False)
-        pbar = model.add_pbar(pid, mid, A=0., i1=2., i2=2., i12=1., j=4., nsm=0., c1=0., c2=0.,
+        model = BDF(debug=False, log=log)
+        pbar = model.add_pbar(pid, mid, A=0.1, i1=2., i2=2., i12=1., j=4., nsm=0., c1=0., c2=0.,
                               d1=0., d2=0., e1=0., e2=0., f1=0., f2=0., k1=1.e8,
                               k2=1.e8, comment='pbar')
         pbar.validate()
@@ -164,18 +170,16 @@ class TestBars(unittest.TestCase):
         model.add_cbar(eid, pid, nids, x, g0, comment='cbar')
         model.add_grid(100, [0., 0., 0.])
         model.add_grid(101, [1., 0., 0.])
-        E = 3.0e7
-        G = None
-        nu = 0.3
-        model.add_mat1(mid, E, G, nu)
+        model.add_mat1(mid, 3.0e7, None, 0.3)
         save_load_deck(model)
 
     def test_cbar_g0(self):
         """modification of test_cbeam_01"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(debug=False, log=log)
         pid = 200
         mid = 6
-        model.add_pbar(pid, mid, A=0., i1=2., i2=2., i12=1., j=4., nsm=0., c1=0., c2=0.,
+        model.add_pbar(pid, mid, A=0.1, i1=2., i2=2., i12=1., j=4., nsm=0., c1=0., c2=0.,
                        d1=0., d2=0., e1=0., e2=0., f1=0., f2=0., k1=1.e8,
                        k2=1.e8, comment='pbar')
 
@@ -404,9 +408,36 @@ class TestBars(unittest.TestCase):
         pid = 102
         x = None
         g0 = 3
-        unused_cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
-                                     pa=0, pb=0, wa=None, wb=None,
-                                     comment='CBAR')
+        cbar = model.add_cbar(eid, pid, nids, x, g0, offt='GGG',
+                              pa=0, pb=0, wa=None, wb=None,
+                              comment='CBAR')
+        with self.assertRaises(RuntimeError):
+            cbar.Mid()
+        with self.assertRaises(RuntimeError):
+            cbar.E()
+        with self.assertRaises(RuntimeError):
+            cbar.G()
+        with self.assertRaises(RuntimeError):
+            cbar.Nu()
+        with self.assertRaises(RuntimeError):
+            cbar.Rho()
+        with self.assertRaises(RuntimeError):
+            cbar.Area()
+        with self.assertRaises(RuntimeError):
+            cbar.I1()
+        with self.assertRaises(RuntimeError):
+            cbar.I2()
+        with self.assertRaises(RuntimeError):
+            cbar.J()
+        with self.assertRaises(RuntimeError):
+            cbar.Centroid()
+        with self.assertRaises(RuntimeError):
+            cbar.MassPerLength()
+        with self.assertRaises(RuntimeError):
+            cbar.Nsm()
+        with self.assertRaises(RuntimeError):
+            cbar.Mass()
+
         Type = 'BOX'
         dim = [1., 2., 0.1, 0.1]
         unused_pbarl = model.add_pbarl(pid, mid, Type, dim, group='MSCBML0', nsm=0.,
@@ -438,6 +469,20 @@ class TestBars(unittest.TestCase):
 
         model.cross_reference()
         model.pop_xref_errors()
+        cbar.Mid()
+        cbar.E()
+        cbar.G()
+        cbar.Nu()
+        cbar.Rho()
+        cbar.Area()
+        cbar.I1()
+        cbar.I2()
+        cbar.J()
+        cbar.Centroid()
+        cbar.MassPerLength()
+        cbar.Nsm()
+        cbar.Mass()
+
 
         model._verify_bdf(xref=True)
         model.uncross_reference()
@@ -541,10 +586,10 @@ class TestBars(unittest.TestCase):
         p0 = 1
         eids = None
         nids = None
-        force1, moment1 = model.sum_forces_moments(p0, loadcase_id,
-                                                   include_grav=False, xyz_cid0=None)
-        force2, moment2 = model.sum_forces_moments_elements(p0, loadcase_id, eids, nids,
-                                                            include_grav=False, xyz_cid0=None)
+        force1, moment1 = sum_forces_moments(model, p0, loadcase_id,
+                                             include_grav=False, xyz_cid0=None)
+        force2, moment2 = sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
+                                                      include_grav=False, xyz_cid0=None)
         #print(force1, force2)
         assert np.allclose(force1, force2), force1
         assert np.allclose(moment1, moment2), moment1
@@ -552,7 +597,8 @@ class TestBars(unittest.TestCase):
 
     def test_baror(self):
         """tests a BAROR"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(debug=False, log=log)
         n1 = 10
         n2 = 20
         model.add_grid(n1, [0., 0., 0.])
@@ -581,7 +627,8 @@ class TestBars(unittest.TestCase):
         save_load_deck(model)
 
     def test_baror_2(self):
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(debug=False, log=log)
         pid = 12
         is_g0 = True
         g0 = 42
@@ -591,39 +638,6 @@ class TestBars(unittest.TestCase):
         baror.write_card(size=8)
         baror.write_card(size=16)
         save_load_deck(model)
-
-    def test_cbend(self):
-        """tests a CBEND"""
-        model = BDF(debug=False)
-
-        eid = 7
-        pid = 10
-        nids = [2, 3]
-        g0 = 5
-        x = None
-        geom = 1
-        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
-        model.add_grid(2, [0., 0., 0.])
-        model.add_grid(3, [0., 0., 0.])
-        model.add_grid(5, [0., 0., 0.])
-        #pbend = model.add_pbend(pid, mid, beam_type, A, i1, i2, j,
-                                #c1, c2, d1, d2, e1, e2, f1, f2,
-                                #k1, k2, nsm, rc, zc, delta_n, fsi,
-                                #rm, t, p, rb, theta_b, comment='')
-
-        cbend.validate()
-        cbend.raw_fields()
-        cbend.write_card()
-        cbend.write_card(size=16)
-
-        model.validate()
-        model._verify_bdf(xref=False)
-        model.pop_parse_errors()
-        #model.cross_reference()
-        #model.pop_xref_errors()
-
-        #model._verify_bdf(xref=True)
-        #model.uncross_reference()
 
     def test_cbeam3(self):
         """tests a CBEAM3"""
@@ -748,6 +762,7 @@ class TestBars(unittest.TestCase):
                 pbarl.I12()
             assert np.allclose(areai, area2), 'bar_type=%r dims=%s area=%s area_expected=%s' % (bar_type, dims, area2, areai)
             pid += 1
+
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

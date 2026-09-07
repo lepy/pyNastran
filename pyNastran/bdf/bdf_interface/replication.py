@@ -3,14 +3,14 @@ Defines various utilities for replicated BDF parsing including:
  - to_fields
 
 """
-from typing import List, Optional
+from typing import Optional
 
 from pyNastran.bdf.bdf_interface.utils import expand_tabs
 from pyNastran.bdf.cards.utils import wipe_empty_fields
 from pyNastran.bdf.errors import ReplicationError
 
 
-def to_fields_replication(card_lines: List[str]) -> List[Optional[str]]:
+def to_fields_replication(card_lines: list[str]) -> list[Optional[str]]:
     """
     Converts a series of lines in a card into string versions of the field.
     Handles large, small, and CSV formatted cards.  Same as to_fields, but
@@ -18,12 +18,12 @@ def to_fields_replication(card_lines: List[str]) -> List[Optional[str]]:
 
     Parameters
     ----------
-    lines : List[str]
+    lines : list[str]
         the lines of the BDF card object
 
     Returns
     -------
-    fields : List[str]
+    fields : list[str]
         the string formatted fields of the card
 
     .. warning:: this function is used by the reader and isn't intended
@@ -31,11 +31,11 @@ def to_fields_replication(card_lines: List[str]) -> List[Optional[str]]:
 
     .. code-block:: python
 
-      >>> card_lines = ['GRID,1,,1.0,2.0,3.0']
-      >>> card_name = 'GRID'
-      >>> fields = to_fields_replication(lines)
-      >>> fields
-      ['GRID', '1', '', '1.0', '2.0', '3.0']
+       >>> card_lines = ['GRID,1,,1.0,2.0,3.0']
+       >>> card_name = 'GRID'
+       >>> fields = to_fields_replication(lines)
+       >>> fields
+       ['GRID', '1', '', '1.0', '2.0', '3.0']
 
     """
     #print('to_fields_replicationA =', card_lines)
@@ -79,7 +79,7 @@ def to_fields_replication(card_lines: List[str]) -> List[Optional[str]]:
                                line[32:40], line[40:48], line[48:56], line[56:64],
                                line[64:72]])
     if '*' in card_name:
-        raise ReplicationError('* found in unexpected position; %r\nlines = %s' % (card_name, card_lines))
+        raise ReplicationError(f'* found in unexpected position; {card_name!r}\nlines = {card_lines}')
 
     wiped_fields = wipe_empty_fields(fields)
     for field in fields:
@@ -88,13 +88,13 @@ def to_fields_replication(card_lines: List[str]) -> List[Optional[str]]:
             #sfield = field.replace('= ','=')
             #print('sfield=%r' % sfield)
         if ' ' in sfield:
-            raise RuntimeError('field=%r has embedded blanks\nfields=%s' % (sfield, fields))
+            raise RuntimeError(f'field={sfield!r} has embedded blanks '
+                               f'(mixed comma/space separated fields)\nfields={fields}')
     return wiped_fields
 
-def get_nrepeats(field: str, old_card: List[str], new_card: List[str]) -> int:
+def get_nrepeats(field: str, old_card: list[str], new_card: list[str]) -> int:
     """=4, =(11)"""
-    msg = 'field=%r; expected =(1), =2, ...\nold_card=%s\nnew_card=%s' % (
-        field, old_card, new_card)
+    msg = f'field={field!r}; expected =(1), =2, ...\nold_card={old_card}\nnew_card={new_card}'
     assert field[0] == '=', msg
     assert '.' not in field, msg
     assert '*' not in field, msg
@@ -113,7 +113,7 @@ def get_nrepeats(field: str, old_card: List[str], new_card: List[str]) -> int:
 
 def float_replication(field: str, old_field: str) -> float:
     """*4., *(11.5)"""
-    msg = 'field=%r; expected *(1.), *2., ..., *11.' % field
+    msg = f'field={field!r}; expected *(1.), *2., ..., *11.'
     assert field[0] == '*', msg
     assert '.' in field, msg
     assert len(field) >= 3, msg
@@ -133,7 +133,7 @@ def float_replication(field: str, old_field: str) -> float:
 
 def int_replication(field: str, old_field: str) -> int:
     """*4, *(11)"""
-    msg = 'field=%r; expected *(1), *2, ..., *11' % field
+    msg = f'field={field!r}; expected *(1), *2, ..., *11'
     assert field[0] == '*', msg
     assert '.' not in field, msg
     if '(' in field:
@@ -155,7 +155,7 @@ def int_replication(field: str, old_field: str) -> int:
     field2 = nint + int(old_field)
     return field2
 
-def _field(old_card: List[str], ifield: int) -> str:
+def _field(old_card: list[str], ifield: int) -> str:
     """helper for replication"""
     #if isinstance(old_card, list):
     #print(old_card, ifield)
@@ -164,7 +164,7 @@ def _field(old_card: List[str], ifield: int) -> str:
         #field2 = old_card.field(ifield)
     return field2
 
-def repeat_cards(old_card: List[str], new_card: List[str]) -> List[List[str]]:
+def repeat_cards(old_card: list[str], new_card: list[str]) -> list[list[str]]:
     """helper for replication"""
     card = []
     cards = []
@@ -199,11 +199,13 @@ def repeat_cards(old_card: List[str], new_card: List[str]) -> List[List[str]]:
             old_field = _field(old_card, ifield)
             #old_field = old_card.field(ifield)
             if '.' in field:
+                assert old_field is not None, f'old_card:{old_card}\nnew_card:\n{new_card}'
                 field2 = float_replication(field, old_field)
             else:
+                assert old_field is not None, f'old_card:{old_card}\nnew_card:\n{new_card}'
                 field2 = int_replication(field, old_field)
         else:
-            msg = 'field=%r\nold_card=%s\nnew_card=%s' % (field, old_card, new_card)
+            msg = f'field={field!r}\nold_card={old_card}\nnew_card={new_card}'
             assert '(' not in field, msg
             assert '*' not in field, msg
             assert '=' not in field, msg

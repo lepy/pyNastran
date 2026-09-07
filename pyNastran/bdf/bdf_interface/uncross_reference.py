@@ -1,6 +1,10 @@
 """Unlinks up the various cards in the BDF."""
-from typing import List, Dict, Any
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.bdf.bdf_interface.safe_cross_reference import SafeXrefMesh
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
+
 
 class UnXrefMesh(SafeXrefMesh):
     """
@@ -29,8 +33,16 @@ class UnXrefMesh(SafeXrefMesh):
         self._uncross_reference_contact()
         self._uncross_reference_superelements()
 
-        for super_id, superelement in sorted(self.superelement_models.items()):
-            superelement.uncross_reference(word=' (Superelement %i)' % super_id)
+        for super_tuple, superelement in sorted(self.superelement_models.items()):
+            if isinstance(super_tuple, int):
+                word = f' (Superelement {super_tuple:d})'
+            else:
+                wordi, value, label = super_tuple
+                if label:
+                    word = f'BEGIN {wordi}={value:d} LABEL={label}\n'
+                else:
+                    word = f'BEGIN {wordi}={value:d}\n'
+            superelement.uncross_reference(word=word)
 
     def _uncross_reference_nodes(self) -> None:
         """uncross references the GRID objects"""
@@ -40,7 +52,7 @@ class UnXrefMesh(SafeXrefMesh):
             point.uncross_reference()
 
     def _uncross_reference_coords(self) -> None:
-        """uncross references the CORDx objects"""
+        """uncross references the Coord objects"""
         for cid, coord in self.coords.items():
             if cid == 0:
                 continue
@@ -158,6 +170,7 @@ class UnXrefMesh(SafeXrefMesh):
             self.aero.uncross_reference()
         if self.aeros:
             self.aeros.uncross_reference()
+        self.zaero.uncross_reference()
 
     def _uncross_reference_constraints(self) -> None:
         """
@@ -268,3 +281,11 @@ class UnXrefMesh(SafeXrefMesh):
             desvar.uncross_reference()
         for unused_key, topvar in self.topvar.items():
             topvar.uncross_reference()
+
+    def _uncross_reference_contact(self) -> None:
+        """uncross references the contact objects"""
+        model: BDF = self
+        for blseg in model.blseg.values():
+            blseg.uncross_reference()
+        for bconp in model.bconp.values():
+            bconp.uncross_reference()

@@ -4,17 +4,17 @@ defines:
 
 """
 # -*- coding: utf-8 -*-
-from typing import List
+import numpy as np
 
-from numpy import ndarray
-
-from pyNastran.bdf.utils import parse_patran_syntax #, parse_patran_syntax_dict
+from pyNastran.bdf.utils import parse_patran_syntax  # parse_patran_syntax_dict
 from pyNastran.bdf.cards.collpase_card import collapse_colon_packs
 
 
 class Group:
-    def __init__(self, name, element_str, elements_pound, editable=True):
-        # type: (str, str, int, bool) -> None
+    def __init__(self, name: str,
+                 element_str: str, elements_pound: int,
+                 node_str: str, nodes_pound: int,
+                 editable: bool=True) -> None:
         """
         Creates an element group
 
@@ -22,9 +22,9 @@ class Group:
         ----------
         name : str
             the name of the group
-        element_str : str
-            a shortened form for storing element ids
-        elements_pound : int
+        element_str / node_str: str
+            a shortened form for storing ids
+        elements_pound / nodes_pound: int
             the max id
         editable : bool; default=True
             not sure what this is used for
@@ -42,21 +42,62 @@ class Group:
             element_str = ' '.join(str(s) for s in element_str)
         else:
             assert isinstance(element_str, str), 'element_str=%r type=%s' % (element_str, type(element_str))
-        self.element_str = element_str
+
+        if isinstance(node_str, list):
+            node_str = ' '.join(str(s) for s in node_str)
+        else:
+            assert isinstance(node_str, str), 'node_str=%r type=%s' % (node_str, type(node_str))
+        self._element_str = element_str
         self.elements_pound = elements_pound
+        self._node_str = node_str
+        self.nodes_pound = nodes_pound
         self.editable = editable
+        self._element_ids_cache: np.ndarray | None = None
+        self._node_ids_cache: np.ndarray | None = None
 
     @property
-    def element_ids(self):
-        return parse_patran_syntax(self.element_str, pound=self.elements_pound)
+    def element_str(self) -> str:
+        return self._element_str
+
+    @element_str.setter
+    def element_str(self, value: str) -> None:
+        self._element_str = value
+        self._element_ids_cache = None
+
+    @property
+    def node_str(self) -> str:
+        return self._node_str
+
+    @node_str.setter
+    def node_str(self, value: str) -> None:
+        self._node_str = value
+        self._node_ids_cache = None
+
+    @property
+    def element_ids(self) -> np.ndarray:
+        if self._element_ids_cache is None:
+            self._element_ids_cache = parse_patran_syntax(self._element_str, pound=self.elements_pound)
+        return self._element_ids_cache
 
     @element_ids.setter
-    def element_ids(self, eids):
-        assert isinstance(eids, ndarray), eids
-        self.element_str = _get_collapsed_text(eids).strip()
+    def element_ids(self, eids: np.ndarray) -> None:
+        assert isinstance(eids, np.ndarray), eids
+        self._element_str = _get_collapsed_text(eids).strip()
+        self._element_ids_cache = eids
 
-    def __repr__(self):
-        # type: () -> str
+    @property
+    def node_ids(self) -> np.ndarray:
+        if self._node_ids_cache is None:
+            self._node_ids_cache = parse_patran_syntax(self._node_str, pound=self.nodes_pound)
+        return self._node_ids_cache
+
+    @node_ids.setter
+    def node_ids(self, nids: np.ndarray) -> None:
+        assert isinstance(nids, np.ndarray), nids
+        self._node_str = _get_collapsed_text(nids).strip()
+        self._node_ids_cache = nids
+
+    def __repr__(self) -> str:
         msg = 'Group:\n'
         msg += '  name: %s\n' % self.name
         msg += '  editable: %s\n' % self.editable
@@ -68,8 +109,8 @@ class Group:
 
 
 class NodeGroup:
-    def __init__(self, name, node_str, nodes_pound, editable=True):
-        # type: (str, str, int, bool) -> None
+    def __init__(self, name: str, node_str: str,
+                 nodes_pound: int, editable: bool=True) -> None:
         """
         Creates a node group
 
@@ -96,21 +137,33 @@ class NodeGroup:
             node_str = ' '.join(str(s) for s in node_str)
         else:
             assert isinstance(node_str, str), 'node_str=%r type=%s' % (node_str, type(node_str))
-        self.node_str = node_str
+        self._node_str = node_str
         self.nodes_pound = nodes_pound
         self.editable = editable
+        self._node_ids_cache: np.ndarray | None = None
 
     @property
-    def node_ids(self):
-        return parse_patran_syntax(self.node_str, pound=self.nodes_pound)
+    def node_str(self) -> str:
+        return self._node_str
+
+    @node_str.setter
+    def node_str(self, value: str) -> None:
+        self._node_str = value
+        self._node_ids_cache = None
+
+    @property
+    def node_ids(self) -> np.ndarray:
+        if self._node_ids_cache is None:
+            self._node_ids_cache = parse_patran_syntax(self._node_str, pound=self.nodes_pound)
+        return self._node_ids_cache
 
     @node_ids.setter
-    def node_ids(self, nids):
-        assert isinstance(nids, ndarray), nids
-        self.node_str = _get_collapsed_text(nids).strip()
+    def node_ids(self, nids: np.ndarray):
+        assert isinstance(nids, np.ndarray), nids
+        self._node_str = _get_collapsed_text(nids).strip()
+        self._node_ids_cache = nids
 
-    def __repr__(self):
-        # type: () -> str
+    def __repr__(self) -> str:
         msg = 'NodeGroup:\n'
         msg += '  name: %s\n' % self.name
         msg += '  editable: %s\n' % self.editable
@@ -118,8 +171,8 @@ class NodeGroup:
         msg += '  nodes_pound: %s\n' % self.nodes_pound
         return msg
 
-def _get_collapsed_text(values):
-    # type: (List[int]) -> str
+
+def _get_collapsed_text(values: list[int]) -> str:
     """writes the collapsed text for ``Group`` and ``NodeGroup``"""
     singles, doubles = collapse_colon_packs(values)
     text = ' '.join([str(s) for s in singles]) + ' '

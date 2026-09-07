@@ -1,9 +1,8 @@
 # coding: utf-8
 #pylint disable=C0103
-from typing import List
 import numpy as np
 
-from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 
 
@@ -22,26 +21,23 @@ class RealCPLSTRNPlateArray(OES_Object):
             raise NotImplementedError('SORT2')
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
-
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
 
     def is_bilinear(self):
         #if self.element_type in [33, 74]:  # CQUAD4, CTRIA3
             #return False
         #elif self.element_type in [144, 64, 82, 70, 75]:  # CQUAD4
             #return True
-        raise NotImplementedError('name=%s type=%s' % (self.element_name, self.element_type))
+        raise NotImplementedError(f'name={self.element_name} type={self.element_type}')
 
     def build(self):
         """sizes the vectorized attributes of the RealCPLSTRNPlateArray"""
@@ -73,18 +69,15 @@ class RealCPLSTRNPlateArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.element = np.zeros(self.ntotal, dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(self.ntotal, dtype=idtype)
 
         #[fiber_dist, oxx, oyy, txy, angle, majorP, minorP, ovm]
-        self.data = np.zeros((self.ntimes, self.ntotal, 5), dtype='float32')
+        self.data = np.zeros((self.ntimes, self.ntotal, 5), dtype=fdtype)
 
     def __eq__(self, table):  # pragma: no cover
         self._eq_header(table)
@@ -116,12 +109,12 @@ class RealCPLSTRNPlateArray(OES_Object):
                     raise ValueError(msg)
         return True
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -145,15 +138,15 @@ class RealCPLSTRNPlateArray(OES_Object):
         n = len(headers)
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n,
                                                                  str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
+        msg.append(f'  element.shape = {self.element.shape}\n')
         msg.append('  data.shape=%s\n' % str(self.data.shape))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     #def get_element_index(self, eids):
         ## elements are always sorted; nodes are not
-        #itot = searchsorted(eids, self.element_node[:, 0])  #[0]
+        #itot = np.searchsorted(eids, self.element_node[:, 0])  #[0]
         #return itot
 
     #def eid_to_element_node_index(self, eids):
@@ -164,7 +157,7 @@ class RealCPLSTRNPlateArray(OES_Object):
         #return ind
 
     #def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  #page_num=1, is_mag_phase=False, is_sort1=True):
+                  #page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         #if header is None:
             #header = []
         #msg, nnodes, cen = _get_plate_msg(self)
@@ -231,7 +224,8 @@ class RealCPLSTRNPlateStressArray(RealCPLSTRNPlateArray, StressObject):
         RealCPLSTRNPlateArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['oxx', 'oyy', 'txy', 'von_mises']
         return headers
 
@@ -241,7 +235,8 @@ class RealCPLSTRNPlateStrainArray(RealCPLSTRNPlateArray, StrainObject):
         RealCPLSTRNPlateArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['exx', 'eyy', 'exy', 'von_mises']
         return headers
 
@@ -343,5 +338,5 @@ def _get_clpstsn_msg(self):
         #is_bilinear = True
         cen = 'CEN/3'
     else:
-        raise NotImplementedError('name=%s type=%s' % (self.element_name, self.element_type))
+        raise NotImplementedError(f'name={self.element_name} type={self.element_type}')
     return msg, nnodes, cen

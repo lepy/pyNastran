@@ -1,9 +1,9 @@
-from typing import List
-
 import numpy as np
 from numpy import zeros
 
 from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_element_node
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
     StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
@@ -15,7 +15,7 @@ class RandomBeamArray(OES_Object):
      - RandomBeamStressArray
      - RandomBeamStrainArray
     """
-    def __init__(self, data_code, is_sort1, isubcase, unused_dt):
+    def __init__(self, data_code, is_sort1: bool, isubcase: int, unused_dt):
         OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
@@ -33,22 +33,23 @@ class RandomBeamArray(OES_Object):
             #self.addNewNode = self.addNewNodeSort2
 
     @property
-    def is_real(self):
+    def nnodes_per_element(self) -> int:
+        return 2
+
+    @property
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
         raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
-
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
 
     def build(self):
         """sizes the vectorized attributes of the RealBeamArray"""
@@ -58,10 +59,8 @@ class RandomBeamArray(OES_Object):
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
         #self.names = []
-        if self.element_type == 2:
-            nnodes_per_element = 10
-        else:
-            raise NotImplementedError(self.element_type)
+        assert self.element_type == 2, self.element_type
+        nnodes_per_element = 10
 
         self.nnodes = nnodes_per_element
         self.nelements //= self.ntimes
@@ -72,47 +71,71 @@ class RandomBeamArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes,
             #self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element_node = zeros((self.ntotal, 2), dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+
+        if self.is_sort1:
+            ntimes = self.ntimes
+            ntotal = self.ntotal
+        else:
+            ntimes = self.ntotal
+            ntotal = self.ntimes
+
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        self.element_node = np.zeros((ntotal, 2), dtype=idtype)
 
         # sxc, sxd, sxe, sxf
-        self.xxb = zeros(self.ntotal, dtype='float32')
-        self.data = zeros((self.ntimes, self.ntotal, 4), dtype='float32')
+        self.xxb = np.zeros(ntotal, dtype=fdtype)
+        self.data = np.zeros((ntimes, ntotal, 4), dtype=fdtype)
 
-    def finalize(self):
-        sd = self.data[0, :, 0].real
-        i_sd_zero = np.where(sd != 0.0)[0]
-        i_node_zero = np.where(self.element_node[:, 1] != 0)[0]
-        assert i_node_zero.max() > 0, 'CBEAM element_node hasnt been filled'
-        i = np.union1d(i_sd_zero, i_node_zero)
-        #self.element = self.element[i]
-        self.element_node = self.element_node[i, :]
-        self.data = self.data[:, i, :]
+    #def finalize(self):
+        #sd = self.data[0, :, 0].real
+        #i_sd_zero = np.where(sd != 0.0)[0]
+        #i_node_zero = np.where(self.element_node[:, 1] != 0)[0]
+        #assert i_node_zero.max() > 0, 'CBEAM element_node has not been filled'
+        #i = np.union1d(i_sd_zero, i_node_zero)
+        ##self.element = self.element[i]
+        #self.element_node = self.element_node[i, :]
+        #self.data = self.data[:, i, :]
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
         import pandas as pd
         headers = self.get_headers()
-        element_node = [self.element_node[:, 0], self.element_node[:, 1]]
+        # TODO: should consider data
+        irow = np.where((self.element_node[:, 1] > 0) | (self.xxb > 0))[0]
+
         if self.nonlinear_factor not in (None, np.nan):
-            column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = pd.Panel(self.data, items=column_values,
-                                       major_axis=element_node, minor_axis=headers).to_frame()
-            self.data_frame.columns.names = column_names
-            self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+            column_names, column_values = build_dataframe_transient_header(self)
+            # nelement_node = len(self.element_node)
+            # assert self.xxb.shape == (nelement_node,), (nelement_node, self.xxb.shape)
+            data = {
+                'ElementID': self.element_node[irow, 0],
+                'NodeID': self.element_node[irow, 1],
+                'Station': self.xxb[irow],
+            }
+            names = list(data.keys()) + ['Item']
+            data_list = list(data.values())
+
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
+                headers, data_list, self.data[:, irow, :],
+                from_tuples=False, from_array=True,
+                names=names,
+            )
         else:
-            self.data_frame = pd.Panel(self.data, major_axis=element_node,
-                                       minor_axis=headers).to_frame()
-            self.data_frame.columns.names = ['Static']
-            self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+            element_node = [self.element_node[irow, 0],
+                            self.element_node[irow, 1]]
+            raise RuntimeError('replace pd.Panel')
+            data_frame = pd.Panel(self.data[:, irow, :],
+                                  major_axis=element_node,
+                                  minor_axis=headers).to_frame()
+            data_frame.columns.names = ['Static']
+            data_frame.index.names = ['ElementID', 'NodeID', 'Item']
+        self.data_frame = data_frame
 
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
@@ -154,7 +177,8 @@ class RandomBeamArray(OES_Object):
                 raise ValueError(msg)
         return True
 
-    def add_new_eid_sort1(self, dt, eid, grid, sd, sxc, sxd, sxe, sxf):
+    def add_eid_sort1(self, dt, eid, grid, sd,
+                      sxc, sxd, sxe, sxf):
         assert isinstance(eid, integer_types), eid
         assert eid >= 0, eid
         self._times[self.itime] = dt
@@ -172,12 +196,35 @@ class RandomBeamArray(OES_Object):
         self.data[self.itime, self.itotal, :] = [sxc, sxd, sxe, sxf]
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_eid_sort2(self, dt, eid, grid, sd, sxc, sxd, sxe, sxf):
+        assert isinstance(eid, integer_types), eid
+        assert eid >= 0, eid
+        itotal = self.itime
+        itime = self.itotal
+        self._times[itime] = dt
+        self.element_node[itotal] = [eid, grid]
+        self.xxb[itotal] = sd
+        self.data[itime, itotal, :] = [sxc, sxd, sxe, sxf]
+        self.itotal += 1
+        self.ielement += 1
+
+    def add_sort2(self, dt, eid, grid, sd, sxc, sxd, sxe, sxf):
+        """unvectorized method for adding SORT2 transient data"""
+        assert self.is_sort2, self
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        itotal = self.itime
+        itime = self.itotal
+        self.element_node[itotal, :] = [eid, grid]
+        self.xxb[itotal] = sd
+        self.data[itime, itotal, :] = [sxc, sxd, sxe, sxf]
+        self.itotal += 1
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -202,21 +249,21 @@ class RandomBeamArray(OES_Object):
         assert n == self.data.shape[2], 'nheaders=%s shape=%s' % (n, str(self.data.shape))
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (
             ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element_node.shape = %s\n' % str(self.element_node.shape).replace('L', ''))
-        msg.append('  xxb.shape = %s\n' % str(self.xxb.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element_node.shape = {self.element_node.shape}\n')
+        msg.append(f'  xxb.shape = {self.xxb.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     #def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        #itot = searchsorted(eids, self.element_node[:, 0])  #[0]
+        #itot = np.searchsorted(eids, self.element_node[:, 0])  #[0]
         #return itot
 
     #def eid_to_element_node_index(self, eids):
-        #ind = ravel([searchsorted(self.element_node[:, 0] == eid) for eid in eids])
-        #ind = searchsorted(eids, self.element)
+        #ind = np.ravel([np.searchsorted(self.element_node[:, 0] == eid) for eid in eids])
+        #ind = np.searchsorted(eids, self.element)
         #ind = ind.reshape(ind.size)
         #ind.sort()
         #return ind
@@ -270,23 +317,22 @@ class RandomBeamArray(OES_Object):
 
 class RandomBeamStressArray(RandomBeamArray, StressObject):
     """Random CBEAM Stress"""
-    def __init__(self, data_code, is_sort1, isubcase, dt):
+    def __init__(self, data_code, is_sort1: bool, isubcase: int, dt):
         RandomBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = [
             #'grid', 'xxb',
             'sxc', 'sxd', 'sxe', 'sxf',
         ]
         return headers
 
-    def _get_msgs(self):
-        if self.element_type == 2:
-            pass
-        else:
-            raise NotImplementedError(self.element_type)
+    def _get_msgs(self) -> list[str]:
+        assert self.element_type == 2, self.element_type
 
+        assert self.table_name in ['OESXNO1', 'OESXRMS1', 'OESATO2', 'OESATO1', 'OESCRM1', 'OESPSD1'], f'table_name={self.table_name!r}'
         msg = [
             '                                  S T R E S S E S   I N   B E A M   E L E M E N T S        ( C B E A M )\n',
             '                    STAT DIST/\n',
@@ -296,11 +342,12 @@ class RandomBeamStressArray(RandomBeamArray, StressObject):
 
 class RandomBeamStrainArray(RandomBeamArray, StrainObject):
     """Random CBEAM Strain"""
-    def __init__(self, data_code, is_sort1, isubcase, dt):
+    def __init__(self, data_code, is_sort1: bool, isubcase: int, dt):
         RandomBeamArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = [
             #'grid', 'xxb',
             'sxc', 'sxd', 'sxe', 'sxf',
@@ -308,11 +355,9 @@ class RandomBeamStrainArray(RandomBeamArray, StrainObject):
         return headers
 
     def _get_msgs(self):
-        if self.element_type == 2:
-            pass
-        else:
-            raise NotImplementedError(self.element_type)
+        assert self.element_type == 2, self.element_type
 
+        assert self.table_name in ['OSTRNO1', 'OSTRRMS1', 'OSTRATO2', 'OSTRATO1', 'OSTRCRM1', 'OSTRPSD1'], self.table_name
         msg = [
             '                                  S T R A I N S   I N   B E A M   E L E M E N T S        ( C B E A M )\n',
             '                    STAT DIST/\n',

@@ -102,11 +102,11 @@ def load_panair_file(fname='panair.in'):
 #2400.     60.       40.       90.
 
 
-def sInt(value):
+def sInt(value) -> str:
     """
     int represented as a short float
     """
-    value = "%f" % (value)
+    value = f"{value:f}"
     return value.rstrip('0')
 
 
@@ -135,7 +135,7 @@ class Cart3dToPanair(PanairGridHelper):
     def fix_point(self, pointIn):
         pointOut = []
         for value in pointIn:
-            sValue = '%s' % (value)
+            sValue = f'{value}'
             if len(sValue) > 10:
                 sValue = sValue[0:9]
             pointOut.append(sValue.rstrip('0'))
@@ -240,7 +240,7 @@ def main():  # pragma: no cover
     #cart3d_geom_filename  = os.path.join('models','spike.a.tri')
     #outfilename = os.path.join('models', 'panair.inp')
     Cart3dToPanair(cart3d_geom_filename, panair_inp_filename, varmap)
-    print("done...")
+    #print("done...")
 
 if __name__ == '__main__':  # pragma: no cover
     main()

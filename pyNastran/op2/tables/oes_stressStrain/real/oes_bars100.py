@@ -1,11 +1,11 @@
 from itertools import count
-from typing import List
-
 import numpy as np
 from numpy import zeros, searchsorted
-from pyNastran.utils.numpy_utils import integer_types
 
-from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
+from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
+    StressObject, StrainObject, OES_Object)
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
 
 
@@ -28,15 +28,16 @@ class RealBar10NodesArray(OES_Object):
     def is_complex(self) -> bool:
         return False
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
         raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
 
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1  # TODO: probably wrong
 
     def build(self):
         """sizes the vectorized attributes of the RealBar10NodesArray"""
@@ -49,7 +50,7 @@ class RealBar10NodesArray(OES_Object):
         #self.names = []
         if self.element_type == 100:
             nnodes_per_element = 1
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError(self.element_type)
 
         self.nnodes = nnodes_per_element
@@ -61,19 +62,16 @@ class RealBar10NodesArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
 
-        _times = zeros(self.ntimes, dtype=dtype)
-        element = zeros(self.ntotal, dtype='int32')
+        _times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        element = np.zeros(self.ntotal, dtype=idtype)
 
         #[sd, sxc, sxd, sxe, sxf, axial, smax, smin, MS]
-        data = zeros((self.ntimes, self.ntotal, 9), dtype='float32')
+        data = np.zeros((self.ntimes, self.ntotal, 9), dtype=fdtype)
 
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
@@ -104,9 +102,9 @@ class RealBar10NodesArray(OES_Object):
             #          smin   1.000000e-03 -1.001432e-01 -2.200126e-01
             #          MS     1.401298e-45  1.401298e-45  1.401298e-45
             #          sd     5.000000e-01  5.000000e-01  5.000000e-01
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
         else:
             # >=25.0
@@ -186,12 +184,12 @@ class RealBar10NodesArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -215,25 +213,25 @@ class RealBar10NodesArray(OES_Object):
         n = len(headers)
         assert n == self.data.shape[2], 'nheaders=%s shape=%s' % (n, str(self.data.shape))
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element_node[:, 0])  #[0]
+        itot = np.searchsorted(eids, self.element_node[:, 0])  #[0]
         return itot
 
     #def eid_to_element_node_index(self, eids):
-        #ind = ravel([searchsorted(self.element_node[:, 0] == eid) for eid in eids])
-        ##ind = searchsorted(eids, self.element)
+        #ind = np.ravel([np.searchsorted(self.element_node[:, 0] == eid) for eid in eids])
+        ##ind = np.searchsorted(eids, self.element)
         ##ind = ind.reshape(ind.size)
         ##ind.sort()
         #return ind
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s', page_num=1, is_mag_phase=False, is_sort1=True):
+    def write_f06(self, f06_file, header=None, page_stamp: str='PAGE %s', page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg = self._get_msgs()
@@ -283,7 +281,8 @@ class RealBar10NodesStressArray(RealBar10NodesArray, StressObject):
         RealBar10NodesArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         #if self.is_fiber_distance:
             #fiber_dist = 'fiber_distance'
         #else:
@@ -311,7 +310,8 @@ class RealBar10NodesStrainArray(RealBar10NodesArray, StrainObject):
         RealBar10NodesArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         #if self.is_fiber_distance:
             #fiber_dist = 'fiber_distance'
         #else:

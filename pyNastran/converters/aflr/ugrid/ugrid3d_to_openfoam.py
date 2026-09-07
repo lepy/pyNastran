@@ -2,8 +2,7 @@ import os
 from copy import deepcopy
 from collections import defaultdict
 
-from numpy import zeros, unique, where, argsort, searchsorted, allclose, array
-
+import numpy as np
 from pyNastran.converters.aflr.ugrid.ugrid_reader import read_ugrid
 from pyNastran.converters.aflr.surf.surf_reader import TagReader
 
@@ -72,10 +71,10 @@ def _write_points(ugrid, points_filename):
 
 
         points_file.write('\n\n')
-        points_file.write('%i\n' % (nnodes))
+        points_file.write('%i\n' % nnodes)
         points_file.write('(\n')
         for node in enumerate(ugrid.nodes):
-            points_file.write(('    (%-12s %-12s %-12s)\n') % (node[0], node[1], node[2]))
+            points_file.write('    (%-12s %-12s %-12s)\n' % (node[0], node[1], node[2]))
         points_file.write(')\n')
 
 def _write_boundary(ugrid, boundary_filename, tag_filename):
@@ -85,7 +84,7 @@ def _write_boundary(ugrid, boundary_filename, tag_filename):
         #f.write('%i\n' % (nnodes))
         boundary_file.write('(\n')
 
-        uboundaries = unique(ugrid.pids)
+        uboundaries = np.unique(ugrid.pids)
         nboundaries = len(uboundaries)
         boundary_file.write('%i\n' % nboundaries)
         boundary_file.write('(\n')
@@ -94,7 +93,7 @@ def _write_boundary(ugrid, boundary_filename, tag_filename):
         tag_data = tagger.read_tag_filename(tag_filename)
 
 
-        isort = argsort(ugrid.pids)
+        isort = np.argsort(ugrid.pids)
         ugrid.pids.sort()
         #print(isort)
         pids = ugrid.pids
@@ -104,7 +103,7 @@ def _write_boundary(ugrid, boundary_filename, tag_filename):
             #is_trans, is_delete, bl_spacing, bl_thickness, nlayers = data
             name = data[0]
 
-            i = where(iboundary == pids)[0]
+            i = np.where(iboundary == pids)[0]
             nfaces = i.max() - i.min() + 1
             startface = i.min()
 
@@ -139,8 +138,8 @@ def _write_faces(ugrid, faces_filename):
     #quad_face_to_eids = ones((nq, 2), dtype='int32')
     quad_face_to_eids = defaultdict(list)
 
-    tri_faces = zeros((ntri_faces, 3), dtype='int32')
-    quad_faces = zeros((nquad_faces, 4), dtype='int32')
+    tri_faces = np.zeros((ntri_faces, 3), dtype='int32')
+    quad_faces = np.zeros((nquad_faces, 4), dtype='int32')
 
     with open(faces_filename, 'wb') as faces_file:
         faces_file.write('\n\n')
@@ -332,8 +331,8 @@ def _write_faces(ugrid, faces_filename):
                 #raise RuntimeError()
 
             e1, e2 = eids
-            i1 = searchsorted(eid_keys, e1)
-            i2 = searchsorted(eid_keys, e2)
+            i1 = np.searchsorted(eid_keys, e1)
+            i2 = np.searchsorted(eid_keys, e2)
 
             if i1 == 1: # tet
                 it1 = (e1-1) * 4
@@ -344,23 +343,23 @@ def _write_faces(ugrid, faces_filename):
                 #print("faces1 = \n", faces1_sort, '\n')
 
                 # figure out irow; 3 for the test case
-                face = array(face, dtype='int32')
+                face = np.array(face, dtype='int32')
 
                 #print('face  = %s' % face)
                 #print('face3 = %s' % faces1_sort[3, :])
 
-                if allclose(face, faces1_sort[0, :]):
+                if np.allclose(face, faces1_sort[0, :]):
                     n1 = 0
-                elif allclose(face, faces1_sort[1, :]):
+                elif np.allclose(face, faces1_sort[1, :]):
                     n1 = 1
-                elif allclose(face, faces1_sort[2, :]):
+                elif np.allclose(face, faces1_sort[2, :]):
                     n1 = 2
-                elif allclose(face, faces1_sort[3, :]):
+                elif np.allclose(face, faces1_sort[3, :]):
                     n1 = 3
                 else:
                     raise RuntimeError('cant find face=%s in faces for eid1=%s' % (face, e1))
 
-                if allclose(face, faces1_unsorted[n1, :]):
+                if np.allclose(face, faces1_unsorted[n1, :]):
                     unused_owner = e1
                     unused_neighbor = e2
                 else:

@@ -4,6 +4,7 @@ import signal
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 import vtk
+from vtk import vtkActor2D
 
 apply_colors = False
 
@@ -99,15 +100,16 @@ def main():
     actor.GetProperty().SetRepresentationToWireframe()
 
     # label actor
-    cell_label_actor = vtk.vtkActor2D()
+    cell_label_actor = vtkActor2D()
     cell_label_actor.SetMapper(cell_label_mapper)
 
     #point_label_actor = vtk.vtkActor2D()
     #point_label_actor.SetMapper(point_label_mapper)
 
     # renderer
-    renderer = vtk.vtkRenderer()
-    renderWindow = vtk.vtkRenderWindow()
+    from pyNastran.gui.vtk_rendering_core import vtkRenderer, vtkRenderWindow, vtkActor2D
+    renderer = vtkRenderer()
+    renderWindow = vtkRenderWindow()
     renderWindow.AddRenderer(renderer)
     renderWindowInteractor = vtk.vtkRenderWindowInteractor()
     renderWindowInteractor.SetRenderWindow(renderWindow)
@@ -117,5 +119,5 @@ def main():
     renderWindow.Render()
     renderWindowInteractor.Start()
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     main()

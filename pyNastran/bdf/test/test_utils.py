@@ -1,14 +1,111 @@
+from pathlib import Path
 import unittest
 import numpy as np
 
+import pyNastran
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.utils import (
     parse_patran_syntax, parse_patran_syntax_dict, parse_patran_syntax_dict_map,
-    write_patran_syntax_dict, split_eids_along_nids)
+    write_patran_syntax_dict, split_eids_along_nids,
+    parse_femap_syntax, parse_femap_syntax_copy,
+    split_comment_to_femap_comment,
+    get_femap_property_comments_dict,
+    get_femap_material_comments_dict)
+PKG_PATH = Path(pyNastran.__path__[0])
+MODEL_PATH = PKG_PATH / '..' / 'models'
+
 
 class TestBdfUtils(unittest.TestCase):
+    def test_split_comment_to_femap_comment(self):
+        in1 = '$ Femap Region 12345 : Wing NSM'
+        is_passed, error_msg, (word, idi, name) = split_comment_to_femap_comment(in1)
+        assert is_passed, is_passed
+        assert error_msg == '', error_msg
+        assert word == 'Region', word
+        assert idi == 12345, idi
+        assert name == 'Wing NSM', name
+
+        in2 = '$ Femap Property 100 : Wing Skin 20 Plies\n$\n$ Femap Layup 101 : 20 Ply\n'
+        is_passed, error_msg, (word, idi, name) = split_comment_to_femap_comment(in2)
+        assert not is_passed, is_passed
+        # assert error_msg == '', error_msg
+        # assert word == 'Property', word
+        # assert idi == 100, idi
+        # assert name == 'Wing Skin 20 Plies', name
+
+        in3 = '$$ Femap Material 202 : Steel:42\n'
+        is_passed, error_msg, (word, idi, name) = split_comment_to_femap_comment(in2)
+        assert not is_passed, is_passed
+        # assert error_msg == '', error_msg
+        # assert word == 'Material', word
+        # assert idi == 202, idi
+        # assert name == 'Steel:42', name
+
+        in4 = (
+            '$ Femap Property 8000007 : Aileron, Steel Pin dia=.375\n'
+            '$ Femap PropShape 8000007 : 5,0,0.1875,0.,0.,0.,0.,0.\n'
+            '$ Femap PropMethod 8000007 : 5,0,1,0.\n'
+            '$ Femap PropOrient 8000007 : 5,0,0.,1.,2.,3.,4.,-1.,0.,0.')
+        split_comment_to_femap_comment(in4)
+
+    def test_get_femap_comments_dict(self):
+        """tests:
+          - ``get_femap_property_comments_dict``
+          - ``get_femap_material_comments_dict``
+        """
+        model = BDF(log=False)
+        model.add_pshell(2, 1, 0.1, comment='Femap Property: fake property')
+        model.add_mat1(1, 3.0e7, None, 0.3, comment= 'Femap Material: fake material')
+        model.add_mat1(2, 3.0e7, None, 0.3, comment= 'other comment')
+        model.add_mat1(3, 3.0e7, None, 0.3, comment= '')
+        # word = 'Femap Material'
+        get_femap_property_comments_dict(model.properties)
+        out = get_femap_material_comments_dict(model.materials)
+        # {1: 'fake material'}
+        print(out)
+
+    def test_femap_syntax_copy(self):
+        """tests ``parse_femap_syntax``"""
+        lines = [
+            '7203615,7203654,1 7203990,7204010,1 7204032,7204050,1',
+            '7203594,7203614,1 7203655,7203675,1 7203969,7203989,1 7204011,7204031,1',
+        ]
+        out = parse_femap_syntax_copy(lines, combine_rows=False)
+        assert len(out) == 2, out
+
+        out = parse_femap_syntax_copy(lines, combine_rows=True)
+        assert len(out) == 1, out
+
+    def test_femap_syntax(self):
+        """tests ``parse_femap_syntax``"""
+        lines = [
+            'Add            1646           0           1',
+        ]
+        out = parse_femap_syntax(lines)
+        expected = np.array([1646])
+        assert len(out) == len(expected)
+        assert np.array_equal(out, expected)
+
+        lines = [
+            'Add            1422        1502           1',
+        ]
+        out = parse_femap_syntax(lines)
+        expected = np.array(list(range(1422, 1502+1)))
+        assert len(out) == len(expected)
+        assert np.array_equal(out, expected)
+
+        lines = [
+            'Add            1646           0           1',
+            'Add            1422        1502           1',
+            'Add            1505        1645           1',
+        ]
+        out = parse_femap_syntax(lines)
+        expected = np.unique([1646] + list(range(1422, 1502+1)) + list(range(1505, 1645+1)))
+        assert len(out) == len(expected)
+        assert np.array_equal(out, expected)
+
     def test_utils_parse_patran_syntax(self):
-        """tests parse_patran_syntax"""
+        """tests ``parse_patran_syntax``"""
         msg = '1:10  14:20:2  50:40:-1'
         output = parse_patran_syntax(msg, pound=None)
         expected = np.array(
@@ -27,7 +124,7 @@ class TestBdfUtils(unittest.TestCase):
         msg = '#:1'
         with self.assertRaises(ValueError):
             output = parse_patran_syntax(msg, pound=None)
-        #assert array_equal(output, [1, 2, 3, 4, 5])
+        # assert array_equal(output, [1, 2, 3, 4, 5])
 
         msg = '1:#'
         output = parse_patran_syntax(msg, pound='5')
@@ -35,7 +132,7 @@ class TestBdfUtils(unittest.TestCase):
 
         # should this raise an error?
         msg = '#:1'
-        #with self.assertRaises(ValueError):
+        # with self.assertRaises(ValueError):
         output = parse_patran_syntax(msg, pound='5')
 
     def test_utils_parse_patran_syntax_dict_1(self):
@@ -94,17 +191,17 @@ class TestBdfUtils(unittest.TestCase):
         """tests parse_patran_syntax_dict"""
         node_sets = "e 1:3 n 2:6:2 Node 10:13 N 15 coord 1:10"
         type_map = {
-            'n' : 'Node',
-            'Node' : 'Node',
-            'e' : 'Element',
-            'Elm' : 'Element',
-            'Element' : 'Element',
+            'n': 'Node',
+            'Node': 'Node',
+            'e': 'Element',
+            'Elm': 'Element',
+            'Element': 'Element',
         }
 
         data = parse_patran_syntax_dict(node_sets, type_map)
         data_expected = {
-            'Element' : np.array([1, 2, 3]),
-            'Node' : np.array([2, 4, 6, 10, 11, 12, 13, 15]),
+            'Element': np.array([1, 2, 3]),
+            'Node': np.array([2, 4, 6, 10, 11, 12, 13, 15]),
         }
 
         data = parse_patran_syntax_dict_map(node_sets, type_map, msg='')
@@ -143,8 +240,8 @@ class TestBdfUtils(unittest.TestCase):
         eids = [1, 2]
         nids = [2, 5, 8]
         split_eids_along_nids(model, eids, nids)
-        #print(model.nodes)
-        #print(model.elements)
+        # print(model.nodes)
+        # print(model.elements)
         expected_element_nids = {
             1 : [7, 12, 11, 4],
             2 : [4, 11, 10, 1],

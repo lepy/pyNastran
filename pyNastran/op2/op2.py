@@ -4,7 +4,7 @@ Defines the main OP2 class.  Defines:
 
  - read_op2(op2_filename=None, combine=True, subcases=None,
             exclude_results=None, include_results=None,
-            log=None, debug=True, debug_file=None, build_dataframe=None,
+            log=None, debug=True, debug_file=None, build_dataframe=False,
             skip_undefined_matrices=True, mode='msc', encoding=None)
 
  - OP2(debug=True, log=None, debug_file=None, mode='msc')
@@ -14,7 +14,7 @@ Defines the main OP2 class.  Defines:
    - object_attributes(mode='public', keys_to_skip=None, filter_properties=False)
    - object_methods(mode='public', keys_to_skip=None)
    - print_subcase_key()
-   - read_op2(op2_filename=None, combine=True, build_dataframe=None,
+   - read_op2(op2_filename=None, combine=True, build_dataframe=False,
               skip_undefined_matrices=False, encoding=None)
    - set_mode(mode)
    - transform_displacements_to_global(i_transform, coords, xyz_cid0=None, debug=False)
@@ -25,26 +25,30 @@ from __future__ import annotations
 import sys
 from collections import defaultdict
 from pickle import load, dump, dumps
-from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING
 
 import numpy as np
 
 #import pyNastran
 from pyNastran.utils import (
-    object_attributes, object_methods, ipython_info)
+    object_attributes, object_methods, ipython_info, PathLike)
 from pyNastran.utils.numpy_utils import integer_types
-from pyNastran.op2.result_objects.monpnt import MONPNT1, MONPNT3
 
 from pyNastran.f06.errors import FatalError
-from pyNastran.op2.errors import SortCodeError, DeviceCodeError, FortranMarkerError
+from pyNastran.op2.errors import (SortCodeError, DeviceCodeError,
+                                  FortranMarkerError, SixtyFourBitError,
+                                  OverwriteTableError, EmptyRecordError)
 from pyNastran.op2.writer.op2_writer import OP2Writer
 #from pyNastran.op2.op2_interface.op2_f06_common import Op2F06Attributes
+from pyNastran.op2.op2_interface.types import NastranKey
 from pyNastran.op2.op2_interface.op2_scalar import OP2_Scalar
 from pyNastran.op2.op2_interface.transforms import (
-    transform_displacement_to_global, transform_gpforce_to_globali)
+    transform_displacement_to_global, transform_gpforce_to_globali,
+    transform_displacement_global_to_local)
 from pyNastran.utils import check_path
 if TYPE_CHECKING:  # pragma: no cover
     from h5py import File as H5File
+    from pyNastran.op2.op2_geom import OP2Geom
 
 
 class OP2(OP2_Scalar, OP2Writer):
@@ -53,17 +57,21 @@ class OP2(OP2_Scalar, OP2Writer):
                    'matrix_tables', 'table_name_str']
 
     def __init__(self,
-                 debug: bool=True,
+                 debug: Optional[bool]=True,
                  log: Any=None,
-                 debug_file: Optional[str]=None,
-                 mode: Optional[str]=None) -> None:
+                 debug_file: Optional[PathLike]=None,
+                 mode: Optional[str]=None,
+                 revision: str='') -> None:
         """
         Initializes the OP2 object
 
         Parameters
         ----------
-        debug : bool; default=False
-            enables the debug log and sets the debug in the logger
+        debug : bool/None; default=True
+            used to set the logger if no logger is passed in
+                True:  logs debug/info/warning/error messages
+                False: logs info/warning/error messages
+                None:  logs warning/error messages
         log : Log()
             a logging object to write debug messages to
          (.. seealso:: import logging)
@@ -71,25 +79,79 @@ class OP2(OP2_Scalar, OP2Writer):
             sets the filename that will be written to
         mode : str; default=None -> 'msc'
             {msc, nx}
+        revision : str; default=None
+            the nastran revision (e.g., XXXXXXXX, 2412.5)
 
         """
+        # Nastran closes the file properly 99.9% of the time, but when working
+        # with DMAP, it may not. Rather than fighting it, I've given it :)
+        #
+        # In general, this should be False because it does a pretty solid job
+        # of catching Fatal Errors (assuming you didn't fail on a GEOMCHECK).
+        self.stop_on_unclosed_file = True
+        self.allow_empty_records = False
+
+        # separate table_passer crasher; previously controlled by is_release
+        # TODO: currently no warn option
+        self.stop_on_op2_table_passer = False
+
+        ## True=turns on skipping of tables that aren't supported
+        # a missed table refers to the not_implemented_error_or_skip method
+        self.warn_on_op2_missed_table = True
+
+        # stop takes priority; previously controlled by is_release
+        # a missed table refers to the not_implemented_error_or_skip method
+        self.stop_on_op2_missed_table = False
+
+        # you can pass a few more tests if you add the OP2 table name (i.e., OUGV1)
+        # to the result key, but rarely do you want to do it
+        self.use_table_name_in_code = False
+
+        # flag that you can disable
+        self.read_matpool = True
+
         self.encoding = None
         self.mode = mode
+        self._nastran_format = ''
         if mode is not None:
             self.set_mode(mode)
+        if revision:
+            self._nastran_revision = revision
         make_geom = False
+
+        # Interlacing only applies to 64-bit strings
+        #   Non-interlaced string:
+        #    - 'ABCDEFGH        '
+        #   Interlaced string:
+        #    - 'ABCD    EFGH    '
+        # MSC likes to be different, so they interlace, while
+        # NX does not. Non-interlaced strings are easier to parse.
+        self.is_interlaced = True
         assert make_geom is False, make_geom
         OP2_Scalar.__init__(self, debug=debug, log=log, debug_file=debug_file)
         self.ask = False
         self.post = None
         self.table_count = defaultdict(int)
+        # self._set_mode(mode)
+
+        # hackery to fix the version
+        if self._nastran_format == '':
+            self._nastran_format = None
+
 
     def __del__(self) -> None:
         if hasattr(self, 'h5_file') and self.h5_file is not None:
             self.h5_file.close()
 
-    def object_attributes(self, mode: str='public', keys_to_skip: Optional[List[str]]=None,
-                          filter_properties: bool=False) -> List[str]:
+    def set_revision_from_model(self, model: OP2, revision: str='') -> None:
+        if revision:
+            self._nastran_revision = revision
+        else:
+            self._nastran_revision = model._nastran_revision
+
+    def object_attributes(self, mode: str='public',
+                          keys_to_skip: Optional[list[str]]=None,
+                          filter_properties: bool=False) -> list[str]:
         """
         List the names of attributes of a class as strings. Returns public
         attributes as default.
@@ -102,12 +164,12 @@ class OP2(OP2_Scalar, OP2Writer):
             * 'private' - names that begin with single underscore
             * 'both' - private and public
             * 'all' - all attributes that are defined for the object
-        keys_to_skip : List[str]; default=None -> []
+        keys_to_skip : list[str]; default=None -> []
             names to not consider to avoid deprecation warnings
 
         Returns
         -------
-        attribute_names : List[str]
+        attribute_names : list[str]
             sorted list of the names of attributes of a given type or None
             if the mode is wrong
 
@@ -115,14 +177,19 @@ class OP2(OP2_Scalar, OP2Writer):
         if keys_to_skip is None:
             keys_to_skip = []
 
-        my_keys_to_skip = [
-            'object_methods', 'object_attributes',
-        ]
-        return object_attributes(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip,
-                                 filter_properties=filter_properties)
+        #my_keys_to_skip = []
+        my_keys_to_skip = _get_keys_to_skip(self)
+
+        # get rid of deprecation warnings
+        backup_level = self.log.level
+        self.log.level = 'error'
+        out = object_attributes(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip,
+                                filter_properties=filter_properties)
+        self.log.level = backup_level
+        return out
 
     def object_methods(self, mode: str='public',
-                       keys_to_skip: Optional[List[str]]=None) -> List[str]:
+                       keys_to_skip: Optional[list[str]]=None) -> list[str]:
         """
         List the names of methods of a class as strings. Returns public methods
         as default.
@@ -137,26 +204,29 @@ class OP2(OP2_Scalar, OP2Writer):
             * "private" - names that begin with single underscore
             * "both" - private and public
             * "all" - all methods that are defined for the object
-        keys_to_skip : List[str]; default=None -> []
+        keys_to_skip : list[str]; default=None -> []
             names to not consider to avoid deprecation warnings
 
         Returns
         -------
-        method : List[str]
+        method : list[str]
             sorted list of the names of methods of a given type
             or None if the mode is wrong
 
         """
         if keys_to_skip is None:
             keys_to_skip = []
-        my_keys_to_skip = []
+        #my_keys_to_skip = []
+        my_keys_to_skip = _get_keys_to_skip(self)
 
-        my_keys_to_skip = [
-            'object_methods', 'object_attributes',
-        ]
-        return object_methods(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip)
+        # get rid of deprecation warnings
+        backup_level = self.log.level
+        self.log.level = 'error'
+        out = object_methods(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip)
+        self.log.level = backup_level
+        return out
 
-    def __eq__(self, op2_model) -> bool:
+    def __eq__(self, op2_model: OP2) -> bool:
         """
         Diffs the current op2 model vs. another op2 model.
         Crashes if they're not equal.
@@ -169,8 +239,9 @@ class OP2(OP2_Scalar, OP2Writer):
             raise
         return is_equal
 
-    def assert_op2_equal(self, op2_model, skip_results: Optional[List[str]]=None,
-                         stop_on_failure: bool=True, debug: bool=False) -> None:
+    def assert_op2_equal(self, op2_model,
+                         skip_results: Optional[list[str]]=None,
+                         stop_on_failure: bool=True, debug: bool=False) -> bool:
         """
         Diffs the current op2 model vs. another op2 model.
 
@@ -178,7 +249,7 @@ class OP2(OP2_Scalar, OP2Writer):
         ----------
         op2_model : OP2()
             the model to compare to
-        skip_results : List[str]; default=None -> []
+        skip_results : list[str]; default=None -> []
             results that shouldn't be compred
         stop_on_failure : bool; default=True
             True : Crashes if they're not equal
@@ -198,23 +269,22 @@ class OP2(OP2_Scalar, OP2Writer):
 
         """
         if skip_results is None:
-            skip_results = set()
+            skip_results_set = set()
         else:
-            skip_results = set(skip_results)
+            skip_results_set = set(skip_results)
+        del skip_results
 
-        skip_results.add('gpdt')
-        skip_results.add('bgpdt')
-        skip_results.add('eqexin')
-        skip_results.add('psds')
+        skip_results_set.update({'gpdt', 'bgpdt', 'eqexin', 'psds', 'superelement_tables', 'cstm'})
 
         if not self.read_mode == op2_model.read_mode:
             self.log.warning('self.read_mode=%s op2_model.read_mode=%s ... assume True' % (
                 self.read_mode, op2_model.read_mode))
             return True
 
+        warned_classes: list[str] = []
         table_types = self.get_table_types()
         for table_type in table_types:
-            if table_type in skip_results or table_type.startswith('responses.'):
+            if table_type in skip_results_set or table_type.startswith('responses.'):
                 continue
             # model.displacements
             adict = self.get_result(table_type)
@@ -226,6 +296,8 @@ class OP2(OP2_Scalar, OP2Writer):
             if len(adict) != len(bdict):
                 self.log.warning('len(self.%s)=%s len(op2_model.%s)=%s' % (
                     table_type, len(adict), table_type, len(bdict)))
+                if table_type == 'params':
+                    continue
                 if stop_on_failure:
                     return False
                 continue
@@ -237,15 +309,18 @@ class OP2(OP2_Scalar, OP2Writer):
 
                 # get the displacement for model B
                 bvalue = bdict[key]
-                is_equal = self._is_op2_case_equal(table_type, key, avalue, bvalue,
-                                                   stop_on_failure=stop_on_failure, debug=debug)
+                is_equal = self._is_op2_case_equal(
+                    table_type, key, avalue, bvalue,
+                    warned_classes, stop_on_failure=stop_on_failure, debug=debug)
                 if not is_equal and stop_on_failure:
                     return is_equal
         return True
 
     def _is_op2_case_equal(self, table_type: str,
                            key, a_obj, b_obj,
-                           stop_on_failure: bool=True, debug: bool=False) -> bool:
+                           warned_classes: list[str],
+                           stop_on_failure: bool=True,
+                           debug: bool=False) -> bool:
         """
         Helper method for ``assert_op2_equal``
 
@@ -256,7 +331,7 @@ class OP2(OP2_Scalar, OP2Writer):
         key : subcase_id / tuple_obj
             subcase_id : int
                 the subcase_id
-            tuple_obj : Tuple(???, ???, ...)
+            tuple_obj : tuple(???, ???, ...)
                 the fancy tuple thingy that you see in single subcase buckling...
 
                 subcase_id : int
@@ -299,17 +374,32 @@ class OP2(OP2_Scalar, OP2Writer):
         aname = a_obj.__class__.__name__
         bname = b_obj.__class__.__name__
         if not aname == bname:
-            self.log.warning('type(a)=%s type(b)=%s' % (aname, bname))
+            self.log.warning(f'type(a)={aname} type(b)={bname}')
             return False
 
-        if aname == 'PARAM': # TODO: update this
+        if aname == 'PARAM':  # TODO: update this
             return True
 
         # does this ever hit?
-        if not any(word in aname for word in ['Array', 'Eigenvalues', 'GridPointWeight']):
-            msg = '%s is not an Array ... assume equal' % aname
+        skip_names = [
+            'Array', 'Eigenvalues', 'GridPointWeight', 'TRMBU', 'TRMBD',
+            'FlutterResponse', 'CampbellData',
+            # trim
+            'TrimVariables',
+            'TrimDerivatives', 'HingeMomentDerivatives',
+            'ControlSurfacePositionHingeMoment',
+            'AeroPressure', 'AeroForce',
+        ]
+        if aname in skip_names:
+            if aname not in warned_classes:
+                msg = f'{aname} is not an Array ... assume equal'
+                self.log.warning(msg)
+                warned_classes.append(aname)
+            return True
+        if not any(word in aname for word in skip_names):
+            msg = f'{aname} is not an Array ... assume equal'
             self.log.warning(msg)
-            raise NotImplementedError('%s __eq__' % aname)
+            raise NotImplementedError(f'{aname} __eq__')
             #continue
 
         # use the array methods to check for equality
@@ -325,42 +415,79 @@ class OP2(OP2_Scalar, OP2Writer):
             return False
         return True
 
+    # def _set_mode(self, mode: str):
+    #     """explicitly set the format"""
+    #     if mode is None:
+    #         return
+        # elif mode == 'msc':
+            # self.set_as_msc()
+        # elif mode == 'nx':
+            # self.set_as_nx()
+        # elif mode == 'autodesk':
+            # self.set_as_autodesk()
+        # else:
+            # raise NotImplementedError(f'mode={mode!r} must be msc, nx or autodesk.')
+
     def set_mode(self, mode: str) -> None:
         """
-        Sets the mode as 'msc', 'nx', 'autodesk', 'nasa95', or 'optistruct'
+        Sets the mode as 'msc', 'nx', 'autodesk', or 'optistruct'
         """
+        assert isinstance(mode, str), mode
         if mode.lower() == 'msc':
             self.set_as_msc()
         elif mode.lower() == 'nx':
             self.set_as_nx()
         elif mode.lower() == 'autodesk':
             self.set_as_autodesk()
-        elif mode.lower() == 'nasa95':
-            self.set_as_nasa95()
-        elif mode.lower() == 'optistruct': # radioss,
+        elif mode.lower() == 'optistruct':  # radioss,
             self.set_as_optistruct()
         else:
             raise RuntimeError(f'mode={mode!r} and must be in [msc, nx, '
-                               f'autodesk, nasa95, optistruct]')
+                               f'autodesk, optistruct]')
+
+    def to_nx(self, msg='') -> None:
+        if self.is_msc:
+            #assert msg != ''
+            self.log.warning(f'switching to NX{msg}')
+            self.set_as_nx()
+            self.set_table_type()
+
+    def to_msc(self, msg='') -> None:
+        if self.is_nx:
+            self.log.warning(f'switching to MSC{msg}')
+            self.set_as_msc()
 
     def include_exclude_results(self,
-                                exclude_results: Optional[List[str]]=None,
-                                include_results: Optional[List[str]]=None) -> None:
+                                flag_dict: dict[str, bool]=None,
+                                exclude_results: Optional[list[str]]=None,
+                                include_results: Optional[list[str]]=None) -> None:
         """
         Sets results to include/exclude
 
         Parameters
         ----------
-        exclude_results / include_results : List[str] / str; default=None
+        flag_dict : dict[key, value]
+            flags to have finer control over results
+            eigenvectors_real: True
+            eigenvectors_complex: True
+        exclude_results / include_results : list[str] / str; default=None
             a list of result types to exclude/include
             one of these must be None
 
         """
+        if flag_dict:
+            # eigenvectors_real: True
+            # eigenvectors_complex: True
+            for key, flag in flag_dict.items():
+                assert key in self.flags, (key, flag)
+                assert isinstance(flag, bool), (key, flag)
+                self.flags[key] = flag
+
         if exclude_results and include_results:
             msg = (
                 'exclude_results or include_results must be None\n'
-                'exclude_results=%r\n'
-                'include_results=%r\n' % (exclude_results, include_results)
+                f'exclude_results={exclude_results!r}\n'
+                f'include_results={include_results!r}\n'
             )
             raise RuntimeError(msg)
 
@@ -383,8 +510,6 @@ class OP2(OP2_Scalar, OP2Writer):
         del state['log']
         if hasattr(self, 'results') and hasattr(self._results, 'log'):
             del state['_results'].log
-        #if hasattr(self, '_card_parser_b'):
-            #del state['_card_parser_b']
         #if hasattr(self, '_card_parser_prepare'):
             #del state['_card_parser_prepare']
 
@@ -398,13 +523,14 @@ class OP2(OP2_Scalar, OP2Writer):
                 if isinstance(value, dict) and len(value) == 0:
                     continue
                 #if not isinstance(value, (str, int, float)):
-                if i > 100:
-                    #print('deleting', key)
+                if i > 90:
+                    #print(f'deleting  {key}')
                     del state[key]
                 else:
                     #print('***', key, value)
                     i += 1
                 #else:
+                    #print(f'keeping {key}')
                     #print(key, type(value), value)
                     #break
                 #i += 1
@@ -432,6 +558,7 @@ class OP2(OP2_Scalar, OP2Writer):
             'ask',
             'binary_debug',
             '_close_op2',
+            '_data_factor',
             '_count',
             '_results',
             '_table_mapper',
@@ -465,8 +592,11 @@ class OP2(OP2_Scalar, OP2Writer):
 
             try:
                 val = getattr(obj, key)
+            except AttributeError:
+                raise AttributeError(f'obj={obj} key={key!r}')
+
             except NameError:
-                self.log.warning('key=%r val=%s' % (key, val))
+                self.log.warning(f'key={key!r} val={val}')
                 continue
             #print(key)
             #if isinstance(val, types.FunctionType):
@@ -474,7 +604,7 @@ class OP2(OP2_Scalar, OP2Writer):
             try:
                 setattr(self, key, val)
             except AttributeError:
-                print('key=%r val=%s' % (key, val))
+                print(f'key={key!r} val={val}')
                 raise
 
         #self.case_control_deck = CaseControlDeck(self.case_control_lines, log=self.log)
@@ -484,9 +614,9 @@ class OP2(OP2_Scalar, OP2Writer):
     def is_geometry(self) -> bool:
         return False
 
-    def read_op2(self, op2_filename: Optional[str]=None,
+    def read_op2(self, op2_filename: Optional[PathLike]=None,
                  combine: bool=True,
-                 build_dataframe: Optional[bool]=None,
+                 build_dataframe: Optional[bool]=False,
                  skip_undefined_matrices: bool=False,
                  encoding: Optional[str]=None) -> None:
         """
@@ -503,14 +633,17 @@ class OP2(OP2_Scalar, OP2Writer):
         #load_as_h5 : default=False
             #loads the op2 as an h5 file to save memory
             #stores the result.element/data attributes in h5 format
-        build_dataframe : bool (default=None -> True if in iPython, False otherwise)
+        build_dataframe : bool; default=False
             builds a pandas DataFrame for op2 objects
+            None: True if in iPython, False otherwise
         skip_undefined_matrices : bool; default=False
              True : prevents matrix reading crashes
         encoding : str
             the unicode encoding (default=None; system default)
 
         """
+        if op2_filename:
+            check_path(op2_filename, name='op2_filename')
         mode = self.mode
         if build_dataframe is None:
             build_dataframe = False
@@ -524,7 +657,7 @@ class OP2(OP2_Scalar, OP2Writer):
         self.skip_undefined_matrices = skip_undefined_matrices
         assert self.ask in [True, False], self.ask
         self.is_vectorized = True
-        self.log.debug('combine=%s' % combine)
+        self.log.debug(f'combine={combine}')
         self.log.debug('-------- reading op2 with read_mode=1 (array sizing) --------')
         self.read_mode = 1
         self._close_op2 = False
@@ -545,43 +678,23 @@ class OP2(OP2_Scalar, OP2Writer):
             self.read_mode = 2
             self._close_op2 = True
             self.log.debug('-------- reading op2 with read_mode=2 (array filling) --------')
+            op2_reader = self.op2_reader
             _create_hdf5_info(self.op2_reader.h5_file, self)
             OP2_Scalar.read_op2(self, op2_filename=self.op2_filename, mode=mode)
         except FileNotFoundError:
             raise
-        except:
+        except Exception:
             OP2_Scalar.close_op2(self, force=True)
             raise
         self._finalize()
+        op2_reader._create_objects_from_matrices()
         if build_dataframe:
             self.build_dataframe()
-        self.create_objects_from_matrices()
         self.combine_results(combine=combine)
         self.log.debug('finished reading op2')
-
-    def create_objects_from_matrices(self) -> None:
-        """
-        creates the following objects:
-          - monitor3 : MONPNT3 object from the MP3F matrix
-          - monitor1 : MONPNT1 object from the PMRF, PERF, PFRF, AGRF, PGRF, AFRF matrices
-
-        """
-        #assert len(self._frequencies) > 0, self._frequencies
-        if 'MP3F' in self.matrices:
-            self.monitor3 = MONPNT3(self._frequencies, self.matrices['MP3F'])
-
-        # these are totally wrong...it doesn't go by component;
-        # it goes by inertial, external, flexibility, etc.
-        if 'PERF' in self.matrices:
-            #self.monitor1 = MONPNT1(
-                #self._frequencies, self.matrices, [
-                # :)       ?       :)      :)      ?       ?
-                #'PMRF', 'AFRF', 'PFRF', 'PGRF', 'AGRF', 'PERF', ])
-
-            self.monitor1 = MONPNT1(
-                self._frequencies, self.matrices,
-                #  :)       ?       :)      :)2     ?       ?
-                ['PMRF', 'PERF', 'PFRF', 'AGRF', 'PGRF', 'AFRF', ])
+        str(self.op2_results)
+        if len(self.op2_results.thermal_load):
+            self.app = 'HEAT'
 
     def _finalize(self) -> None:
         """internal method"""
@@ -589,11 +702,24 @@ class OP2(OP2_Scalar, OP2Writer):
             del self.subcase
 
         result_types = self.get_table_types()
+        skip_results = (
+            'params', 'gpdt', 'bgpdt', 'eqexin', 'psds', 'monitor1', 'monitor3',
+            'cstm', 'trmbu', 'trmbd',
+        )
         for result_type in result_types:
-            if result_type in ['params', 'gpdt', 'bgpdt', 'eqexin', 'psds'] or result_type.startswith('responses.'):
+            if result_type in skip_results or result_type.startswith('responses.'):
                 continue
             result = self.get_result(result_type)
-            for obj in result.values():
+            try:
+                values = result.values()
+            except AttributeError:
+                self.log.error(f'result_type = {result_type}')
+                raise
+            if len(values) == 0:
+                continue
+
+            #print(result_type)
+            for obj in values:
                 if hasattr(obj, 'finalize'):
                     obj.finalize()
                 elif hasattr(obj, 'tCode') and not obj.is_sort1:
@@ -612,6 +738,9 @@ class OP2(OP2_Scalar, OP2Writer):
          - RealCompositePlateStrainArray (???)
 
         """
+        import pandas
+        #if pandas.__version__ >= '2.0.0':
+            #raise NotImplementedError('pandas >= 2.0 is not supported')
         # TODO: sorter = uniques.argsort()
         #C:\Anaconda\lib\site-packages\pandas\core\algorithms.py:198:
         #    DeprecationWarning: unorderable dtypes;
@@ -630,7 +759,10 @@ class OP2(OP2_Scalar, OP2Writer):
                     raise NotImplementedError()
                     #continue
 
-        skip_pandas = ['params', 'gpdt', 'bgpdt', 'eqexin', 'grid_point_weight', 'psds']
+        skip_pandas = (
+            'params', 'gpdt', 'bgpdt', 'eqexin', 'grid_point_weight', 'psds',
+            'monitor1', 'monitor3', 'superelement_tables',
+            'cstm', 'trmbu', 'trmbd', 'vg_vf_response')
         for result_type in result_types:
             if result_type in skip_pandas or result_type.startswith('responses.'):
                 #self.log.debug('skipping %s' % result_type)
@@ -649,16 +781,16 @@ class OP2(OP2_Scalar, OP2Writer):
                     try:
                         obj.build_dataframe()
                         assert obj.data_frame is not None
-                    except MemoryError:
+                    except MemoryError:  # pragma: no cover
                         raise
-                    except:
+                    except Exception:
                         self.log.error(obj)
-                        self.log.error('build_dataframe is broken for %s' % class_name)
+                        self.log.error(f'build_dataframe is broken for {class_name}')
                         raise
                     continue
                 if obj.is_sort2:
                     #self.log.warning(obj)
-                    self.log.warning('build_dataframe is not supported for %s - SORT2' % class_name)
+                    self.log.warning(f'build_dataframe is not supported for {class_name} - SORT2')
                     continue
 
                 # SORT1
@@ -667,25 +799,43 @@ class OP2(OP2_Scalar, OP2Writer):
                 #except TypeError:
                     #self.log.error(obj)
                     #self.log.error('build_dataframe is broken with a TypeError for %s' % class_name)
-                except MemoryError:
+                except MemoryError:  # pragma: no cover
                     raise
-                except NotImplementedError:
+                except NotImplementedError:  # pragma: no cover
                     self.log.warning(obj)
-                    self.log.warning('build_dataframe is broken for %s' % class_name)
+                    self.log.warning(f'build_dataframe is broken for {class_name}')
                     raise
-                except:
+                except Exception:
                     self.log.error(obj)
-                    self.log.error('build_dataframe is broken for %s' % class_name)
+                    self.log.error(f'build_dataframe is broken for {class_name}')
                     raise
 
-    def load_hdf5(self, hdf5_filename: str, combine: bool=True) -> None:  # praga: no cover
-        """Loads an h5 file into an OP2 object"""
-        self.deprecated('load_hdf5', 'load_hdf5_filename', '1.2')
-        return self.load_hdf5_filename(hdf5_filename, combine=True)
-
-    def load_hdf5_filename(self, hdf5_filename: str, combine: bool=True) -> None:
+    def read_h5(hdf5_filename: PathLike, combine: bool=True):
         """
-        Loads an h5 file into an OP2 object
+        Loads an MSC-style h5 file into an OP2 object
+
+        Parameters
+        ----------
+        hdf5_filename : str
+            the path to the an hdf5 file
+        combine : bool; default=True
+            runs the combine routine
+
+        """
+        check_path(hdf5_filename, 'hdf5_filename')
+        self.op2_filename = hdf5_filename
+
+        self.log.info(f'hdf5_op2_filename = {hdf5_filename!r}')
+        debug = False
+        from tables import File
+        with File(hdf5_filename, 'r') as h5_file:
+            load_op2_from_hdf5_file(self, h5_file, self.log, debug=debug)
+        self.combine_results(combine=combine)
+
+    def load_hdf5_filename(self, hdf5_filename: PathLike,
+                           combine: bool=True) -> None:
+        """
+        Loads a pyNastran-style h5 file into an OP2 object
 
         Parameters
         ----------
@@ -700,11 +850,19 @@ class OP2(OP2_Scalar, OP2Writer):
         import h5py
         self.op2_filename = hdf5_filename
 
-        self.log.info('hdf5_op2_filename = %r' % hdf5_filename)
+        self.log.info(f'hdf5_op2_filename = {hdf5_filename!r}')
         debug = False
         with h5py.File(hdf5_filename, 'r') as h5_file:
             load_op2_from_hdf5_file(self, h5_file, self.log, debug=debug)
         self.combine_results(combine=combine)
+
+    def read_h5(self, h5_filename: H5File,
+                nastran_format: str='msc',
+                combine: bool=True) -> None:
+        """doesn't support geometry - need a new h5 reader that goes to the OG-BDF class"""
+        assert nastran_format == 'msc', 'this function is currently intended only for msc'
+        from pyNastran.dev.op2_vectorized3.op2_interface.h5_pytables.h5_results import read_h5_result
+        read_h5_result(self, h5_filename, root_path='/')
 
     def load_hdf5_file(self, h5_file: H5File, combine: bool=True) -> None:
         """
@@ -724,11 +882,6 @@ class OP2(OP2_Scalar, OP2Writer):
         debug = False
         load_op2_from_hdf5_file(self, h5_file, self.log, debug=debug)
         self.combine_results(combine=combine)
-
-    def export_hdf5(self, hdf5_filename: str) -> None:
-        """Converts the OP2 objects into hdf5 object"""
-        self.deprecated('export_hdf5', 'export_hdf5_filename', '1.2')
-        return self.export_hdf5_filename(hdf5_filename)
 
     def export_hdf5_filename(self, hdf5_filename: str) -> None:
         """
@@ -760,56 +913,79 @@ class OP2(OP2_Scalar, OP2Writer):
         from pyNastran.op2.op2_interface.hdf5_interface import export_op2_to_hdf5_file
         export_op2_to_hdf5_file(hdf5_file, self)
 
-    def combine_results(self, combine: str=True) -> None:
+    def combine_results(self, combine: bool=True) -> None:
         """
         we want the data to be in the same format and grouped by subcase, so
         we take
 
         .. code-block:: python
 
-          stress = {
-              # isubcase, analysis_code, sort_method, count, superelement_adaptivity_index, pval_step
-              (1, 2, 1, 0, 'SUPERELEMENT 0', '') : result1,
-              (1, 2, 1, 0, 'SUPERELEMENT 10', '') : result2,
-              (1, 2, 1, 0, 'SUPERELEMENT 20', '') : result3,
-              (2, 2, 1, 0, 'SUPERELEMENT 0', '') : result4,
+           stress = {
+               # isubcase, analysis_code, sort_method, count, superelement_adaptivity_index, pval_step
+               (1, 2, 1, 0, 'SUPERELEMENT 0', '') : result1,
+               (1, 2, 1, 0, 'SUPERELEMENT 10', '') : result2,
+               (1, 2, 1, 0, 'SUPERELEMENT 20', '') : result3,
+               (2, 2, 1, 0, 'SUPERELEMENT 0', '') : result4,
 
-        code = (isubcase, analysis_code, sort_method, count, ogs,
-                superelement_adaptivity_index, pval_step)
-          }
+           code = (isubcase, analysis_code, sort_method, count, ogs,
+                   superelement_adaptivity_index, pval_step)
+             }
         and convert it to:
 
         .. code-block:: python
 
-          stress = {
-              1 : result1 + result2 + results3,
-              2 : result4,
-          }
+           stress = {
+               1 : result1 + result2 + results3,
+               2 : result4,
+           }
 
         """
+        #self.log.info('---self.get_key_order()---')
+        #for key in self.get_key_order(filter_keys=True):
+            #self.log.info('  %s' % str(key))
+        #self.get_key_order(filter_keys=True)
+
         self.combine = combine
         result_types = self.get_table_types()
-        results_to_skip = ['bgpdt', 'gpdt', 'eqexin', 'grid_point_weight', 'psds']
+        results_to_skip = (
+            'bgpdt', 'gpdt', 'eqexin', 'grid_point_weight', 'psds',
+            'monitor1', 'monitor3',
+            'cstm', 'trmbu', 'trmbd',
+        )
 
         # set subcase_key
         for result_type in result_types:
             if result_type in results_to_skip or result_type.startswith('responses.'):
                 continue
             result = self.get_result(result_type)
-            case_keys = sorted(result.keys())
-            # unique_isubcases = []  # List[int]
+            try:
+                case_keys = sorted(result.keys())
+            except AttributeError:
+                self.log.error(f'result_type = {result_type}')
+                raise
+            # unique_isubcases = []  # list[int]
             for case_key in case_keys:
                 #print('case_key =', case_key)
                 if isinstance(case_key, tuple):
-                    isubcasei, analysis_codei, sort_methodi, counti, isuperelmemnt_adaptivity_index, pval_step, ogs = case_key
-                    #isubcasei, analysis_codei, sort_methodi, counti, isuperelmemnt_adaptivity_index, table_name = case_key
-                    if ogs == 0:
-                        value = (analysis_codei, sort_methodi, counti,
-                                 isuperelmemnt_adaptivity_index, pval_step)
+                    if self.use_table_name_in_code:
+                        isubcasei, analysis_codei, sort_methodi, counti, isuperelmemnt_adaptivity_index, pval_step, ogs, table_name = case_key
+                        if ogs == 0:
+                            value = (analysis_codei, sort_methodi, counti,
+                                     isuperelmemnt_adaptivity_index, pval_step, table_name)
+                        else:
+                            value = (analysis_codei, sort_methodi, counti,
+                                     isuperelmemnt_adaptivity_index, pval_step, ogs, table_name)
                     else:
-                        value = (analysis_codei, sort_methodi, counti,
-                                 isuperelmemnt_adaptivity_index, pval_step, ogs)
+                        isubcasei, analysis_codei, sort_methodi, counti, isuperelmemnt_adaptivity_index, pval_step, ogs = case_key
+                        #isubcasei, analysis_codei, sort_methodi, counti, isuperelmemnt_adaptivity_index, table_name = case_key
+                        if ogs == 0:
+                            value = (analysis_codei, sort_methodi, counti,
+                                     isuperelmemnt_adaptivity_index, pval_step)
+                        else:
+                            value = (analysis_codei, sort_methodi, counti,
+                                     isuperelmemnt_adaptivity_index, pval_step, ogs)
 
+                    isubcasei = int(isubcasei)
                     if value not in self.subcase_key[isubcasei]:
                         #print('isubcase=%s value=%s' % (isubcasei, value))
                         self.subcase_key[isubcasei].append(value)
@@ -855,9 +1031,14 @@ class OP2(OP2_Scalar, OP2Writer):
                     key1 = (isubcase, analysis_code, 1, count, isuperelmemnt_adaptivity_index, pval_step)
                     key2 = (isubcase, analysis_code, 2, count, isuperelmemnt_adaptivity_index, pval_step)
                 else:
-                    isubcase, analysis_code, unused_sort_code, count, isuperelmemnt_adaptivity_index, pval_step, ogs = key0
-                    key1 = (isubcase, analysis_code, 1, count, isuperelmemnt_adaptivity_index, pval_step, ogs)
-                    key2 = (isubcase, analysis_code, 2, count, isuperelmemnt_adaptivity_index, pval_step, ogs)
+                    if self.use_table_name_in_code:
+                        isubcase, analysis_code, unused_sort_code, count, isuperelmemnt_adaptivity_index, pval_step, ogs, table_name = key0
+                        key1 = (isubcase, analysis_code, 1, count, isuperelmemnt_adaptivity_index, pval_step, ogs, table_name)
+                        key2 = (isubcase, analysis_code, 2, count, isuperelmemnt_adaptivity_index, pval_step, ogs, table_name)
+                    else:
+                        isubcase, analysis_code, unused_sort_code, count, isuperelmemnt_adaptivity_index, pval_step, ogs = key0
+                        key1 = (isubcase, analysis_code, 1, count, isuperelmemnt_adaptivity_index, pval_step, ogs)
+                        key2 = (isubcase, analysis_code, 2, count, isuperelmemnt_adaptivity_index, pval_step, ogs)
 
                 #isubcase, analysis_code, sort_code, count, isuperelmemnt_adaptivity_index, table_name = key0
                 #key1 = (isubcase, analysis_code, 1, count, isuperelmemnt_adaptivity_index, table_name)
@@ -894,11 +1075,12 @@ class OP2(OP2_Scalar, OP2Writer):
                         continue
 
                     res1 = result[key1]
+                    class_name = res1.__class__.__name__
                     if not hasattr(res1, 'combine'):
-                        self.log.info("res=%s has no method combine" % res1.__class__.__name__)
+                        self.log.info(f'res={class_name} has no method combine')
                         continue
 
-                    self.log.info("res=%s has combine" % res1.__class__.__name__)
+                    self.log.info(f'res={class_name} has combine')
                     res2 = result[key2]
                     del result[key1]
                     del result[key2]
@@ -912,17 +1094,26 @@ class OP2(OP2_Scalar, OP2Writer):
         #print('subcase_key =', self.subcase_key)
 
         subcase_key2 = {}
-        not_results = ['eigenvalues', 'eigenvalues_fluid', 'params', 'gpdt', 'bgpdt',
-                       'eqexin', 'desvars', 'grid_point_weight', 'psds']
+        not_results = (
+            'eigenvalues', 'eigenvalues_fluid', 'params', 'gpdt', 'bgpdt',
+            'eqexin', 'desvars', 'grid_point_weight', 'psds', 'monitor1', 'monitor3',
+            'cstm',
+            #'trmbu', 'trmbd',
+        )
         for result_type in result_types:
             if result_type in not_results or result_type.startswith('responses.'):
                 continue
             result = self.get_result(result_type)
-            case_keys = list(result.keys())
+            try:
+                case_keys = list(result.keys())
+            except AttributeError:
+                self.log.error(f'result_type = {result_type}')
+                raise
+
             try:
                 case_keys = sorted(case_keys)  # TODO: causes DeprecationWarning
             except TypeError:
-                self.log.error('result.keys() = %s' % case_keys)
+                self.log.error(f'result.keys() = {case_keys}')
 
             if len(result) == 0:
                 continue
@@ -932,11 +1123,18 @@ class OP2(OP2_Scalar, OP2Writer):
 
             for isubcase in unique_isubcases:
                 for case_key in case_keys:
-                    #print('isubcase=%s case_key=%s' % (isubcase, case_key))
+                    #print(f'isubcase={isubcase} case_key={case_key}')
                     assert not isinstance(case_key, str), result_type
                     if isinstance(case_key, integer_types):
-                        if isubcase == case_key and case_key not in subcase_key2[isubcase]:
+                        if isubcase == case_key and (
+                            #isinstance(subcase_key2[isubcase], integer_types) and
+                            isinstance(case_key, integer_types) and
+                            not _inlist(case_key, subcase_key2[isubcase])):
+                            #case_key not in subcase_key2[isubcase]):
                             subcase_key2[isubcase] = [isubcase]
+                        #else:
+                            #print(f'duplicate: isubcase={isubcase}; case_key={case_key}')
+                            #pass #  duplicate
                     else:
                         try:
                             subcasei = case_key[0]
@@ -946,21 +1144,100 @@ class OP2(OP2_Scalar, OP2Writer):
                             raise IndexError(msg)
                         #if not subcasei == isubcase:
                             #continue
-                        if case_key not in subcase_key2[subcasei]:
+                        subcase_key2s = list(subcase_key2)
+                        is_new_key = _inlist_int_tuple(case_key, subcase_key2[subcasei])
+                        if not is_new_key:
                             subcase_key2[isubcase].append(case_key)
         self.subcase_key = subcase_key2
         #print('subcase_key = %s' % self.subcase_key)
 
-    def get_key_order(self) -> List[Tuple[int, int, int, int, int, str]]:
+    def slice_data(self, slice_nodes: Optional[np.ndarray],
+                   slice_elements: Optional[np.ndarray]) -> None:
+        """
+        removes specific nodes/elements from a result
+        node/element ids not within the result slice of the object will be removed
+        elemental results do not consider that nodes may be excluded
+        TODO: very limited
+        """
+        if slice_nodes is None and slice_elements is None:
+            return
+        NODE_RESULTS = [
+            'displacements', 'velocities', 'accelerations',
+            'spc_forces', 'mpc_forces', 'eigenvectors',
+        ]
+        for table_type in NODE_RESULTS:
+            res_dict = getattr(self, table_type)
+            for key, res in res_dict.items():
+                #print(''.join(res.get_stats()))
+                # TODO: delete bad results
+                ncommon = res.slice_data(slice_nodes)
+                #print(''.join(res.get_stats()))
+        del table_type
+
+        op2_results = self.op2_results
+        GROUP_NAMES = [
+            'ato', 'crm', 'nrl', 'psd',
+            'stress', 'strain', 'strain_energy',
+        ]
+        for group_name in GROUP_NAMES:
+            group = getattr(self.op2_results, group_name)
+            table_types = group.get_table_types(include_class=False)
+            for table_type in table_types:
+                if not hasattr(group, table_type):
+                    continue
+                res_dict = getattr(group, table_type)
+                if len(res_dict) == 0:
+                    continue
+                for key, res in res_dict.items():
+                    if not hasattr(res, 'slice_data'):
+                        self.log.warning(f'skipping slice_data for {group_name}:{table_type}')
+                        continue
+                    # print(''.join(res.get_stats()))
+                    # TODO: delete bad results
+                    if table_type in NODE_RESULTS:
+                        if slice_nodes is None:
+                            continue
+                        ncommon = res.slice_data(slice_nodes)
+                    else:
+                        if slice_elements is None:
+                            continue
+                        ncommon = res.slice_data(slice_elements)
+
+    def get_key_order(self, filter_keys: bool=False) -> list[NastranKey]:
         """
         Returns
         -------
-        keys3 : List[int, int, int, int, int, str]
+        keys3 : list[tuple[int, int, int, int, int, str, str]]
             the keys in order
+
+            key: isubcase, analysis_code, sort_method, count, ogs, superelement_adaptivity_index, pval_step
+
+            isubcase: int
+               subcase id
+            analysis_code: int (rough guess)
+                1: statics
+                2: modes
+                5: freq
+                6: transient
+                8: post-buckling
+                9: complex eigenvalues
+                10: nonlinear statics
+            sort_method: int
+                0: SORT1; 1: SORT2
+            count: int
+                optimization flag; default = 0
+            ogs: int
+                default = 0
+            superelement_adaptivity_index: str
+                default = ''
+            pval_step: str
+                default = ''
+
         """
         keys = []
         table_types = self.get_table_types()
-        skip_tables = ['gpdt', 'bgpdt', 'eqexin', 'grid_point_weight', 'psds']
+        skip_tables = ['gpdt', 'bgpdt', 'eqexin', 'grid_point_weight', 'psds',
+                       'monitor1', 'monitor3', 'cstm', 'vg_vf_response']
         for table_type in sorted(table_types):
             if table_type in skip_tables or table_type.startswith('responses.'):
                 continue
@@ -972,7 +1249,7 @@ class OP2(OP2_Scalar, OP2Writer):
             for key in result_type_dict:
                 if isinstance(key, str):
                     if table_type not in ['eigenvalues', 'eigenvalues_fluid', 'params']:
-                        self.log.warning('table_type = %s' % table_type)
+                        self.log.warning(f'table_type = {table_type}')
                     continue
                 if key not in keys:
                     keys.append(key)
@@ -987,7 +1264,6 @@ class OP2(OP2_Scalar, OP2Writer):
         #subcase_ids.sort()
         #print('subcase_ids =', subcase_ids)
 
-
         # isubcase, analysis_code, sort_method, count, ogs, superelement_adaptivity_index, pval_step
         #(1, 2, 1, 0, 0, 'SUPERELEMENT 0')  : result1
 
@@ -999,17 +1275,26 @@ class OP2(OP2_Scalar, OP2Writer):
         superelement_adaptivity_indexs = set()
         pval_steps = set()
 
+        used_keys = set([])
+        print(f'keys_order = {keys}')
         for key in keys:
-            #print('key = %s' % str(key))
+            try:
+                len(key)  # vg_vf_response uses a single integer
+            except TypeError:
+                self.log.error('key = %s' % str(key))
+                raise
             if len(key) == 6:
                 isubcase, analysis_code, sort_method, count, superelement_adaptivity_index, pval_step = key
+                used_key = (isubcase, analysis_code, sort_method, count, ogs, superelement_adaptivity_index, pval_step)
                 ogs = 0
             elif len(key) == 7:
                 isubcase, analysis_code, sort_method, count, ogs, superelement_adaptivity_index, pval_step = key
+                used_key = key
             else:
                 print('  %s' % str(key))
                 raise RuntimeError(key)
                 #isubcase, analysis_code, sort_method, count, ogs, superelement_adaptivity_index = key
+
             isubcases.add(isubcase)
             analysis_codes.add(analysis_code)
             sort_methods.add(sort_method)
@@ -1017,6 +1302,8 @@ class OP2(OP2_Scalar, OP2Writer):
             ogss.add(ogs)
             superelement_adaptivity_indexs.add(superelement_adaptivity_index)
             pval_steps.add(pval_step)
+
+            used_keys.add(used_key)
 
         isubcase_list = list(isubcases)
         analysis_code_list = list(analysis_codes)
@@ -1034,7 +1321,7 @@ class OP2(OP2_Scalar, OP2Writer):
         superelement_adaptivity_index_list.sort()
         pval_step_list.sort()
 
-        keys3 = []  # type: List[Tuple[int, int, int, int, int, int, str]]
+        keys3: list[NastranKey] = []
         for isubcase in isubcase_list:
             for count in count_list:
                 for analysis_code in analysis_code_list:
@@ -1042,28 +1329,61 @@ class OP2(OP2_Scalar, OP2Writer):
                         for pval_step in pval_step_list:
                             for sort_method in sort_method_list:
                                 for ogs in ogs_list:
-                                    key = (isubcase, analysis_code, sort_method,
-                                           count, ogs, superelement_adaptivity_index, pval_step)
+                                    key = (isubcase, analysis_code, sort_method, count, ogs,  # ints
+                                           superelement_adaptivity_index, pval_step)  # str
                                     if key not in keys3:
                                         #print('adding ', key)
+                                        #assert key in used_keys, key
                                         keys3.append(key)
         if len(keys3) == 0:
             self.log.warning('No results...\n' + self.get_op2_stats(short=True))
         #assert len(keys3) > 0, keys3
-        return keys3
+        keys_out = _filter_keys(keys3, filter_keys=filter_keys)
+        return keys_out
 
     def print_subcase_key(self) -> None:
         self.log.info('---self.subcase_key---')
         for isubcase, keys in sorted(self.subcase_key.items()):
             if len(keys) == 1:
-                self.log.info('subcase_id=%s : keys=%s' % (isubcase, keys))
+                self.log.info(f'subcase_id={isubcase} : keys={keys}')
             else:
-                self.log.info('subcase_id=%s' % isubcase)
+                self.log.info(f'subcase_id={isubcase}')
                 for key in keys:
                     self.log.info('  %s' % str(key))
         #self.log.info('subcase_key = %s' % self.subcase_key)
 
-    def transform_displacements_to_global(self, icd_transform: Any, coords: Dict[int, Any], xyz_cid0: Any=None,
+    def transform_displacements_global_to_local(self, icd_transform: dict[int, np.ndarray],
+                                                coords: dict[int, Any],
+                                                cid_out: int,
+                                                xyz_cid0: Optional[np.ndarray]=None,
+                                                debug: bool=False) -> None:
+        """
+        Assuming you've called ``self.transform_displacement_to_global`` first,
+        set:
+
+        nnodes = xyz_cid0.shape[0]
+        icd_transform = {
+            0: np.arange(nnodes),
+        }
+        """
+        if cid_out in {0, -1}:
+            return
+        disp_like_dicts = get_disp_like_dicts(self)
+        for disp_like_dict in disp_like_dicts:
+            if not disp_like_dict:
+                continue
+            #print('-----------')
+            for subcase, result in disp_like_dict.items():
+                if result.table_name in ['BOUGV1', 'BOPHIG', 'TOUGV1']:
+                    continue
+                self.log.debug(f'transforming {result.table_name}')
+                transform_displacement_global_to_local(
+                    subcase, result, icd_transform, coords, cid_out,
+                    xyz_cid0, self.log, debug=debug)
+
+    def transform_displacements_to_global(self, icd_transform: dict[int, np.ndarray],
+                                          coords: dict[int, Any],
+                                          xyz_cid0: Optional[np.ndarray]=None,
                                           debug: bool=False) -> None:
         """
         Transforms the ``data`` of displacement-like results into the
@@ -1080,7 +1400,7 @@ class OP2(OP2_Scalar, OP2Writer):
             Dictionary from coordinate id to index of the nodes in
             ``BDF.point_ids`` that their output (`CD`) in that
             coordinate system.
-        coords : dict{int cid :Coord()}
+        coords : dict{int cid : Coord()}
             Dictionary of coordinate id to the coordinate object
             Use this if CD is only rectangular
             Use this if CD is not rectangular
@@ -1105,42 +1425,7 @@ class OP2(OP2_Scalar, OP2Writer):
                     - cp>0 are local frames
 
         """
-        #output = {}
-        ato = self.op2_results.ato
-        crm = self.op2_results.crm
-        psd = self.op2_results.psd
-        rms = self.op2_results.rms
-        #no = self.op2_results.no
-        disp_like_dicts = [
-            # should NO results be transformed?
-            #no.displacements, no.velocities, no.accelerations,
-            #no.spc_forces, no.mpc_forces,
-
-            self.displacements,
-            ato.displacements, crm.displacements, psd.displacements, rms.displacements,
-            self.displacements_scaled,
-            self.displacement_scaled_response_spectra_abs,
-            self.displacement_scaled_response_spectra_nrl,
-
-            self.velocities,
-            ato.velocities, crm.velocities, psd.velocities, rms.velocities,
-            self.velocity_scaled_response_spectra_abs,
-
-            self.accelerations,
-            ato.accelerations, crm.accelerations, psd.accelerations, rms.accelerations,
-            self.acceleration_scaled_response_spectra_abs,
-            self.acceleration_scaled_response_spectra_nrl,
-
-            self.eigenvectors,
-            self.op2_results.RADCONS.eigenvectors, self.op2_results.RADEFFM.eigenvectors,
-            self.op2_results.RADEATC.eigenvectors, self.op2_results.ROUGV1.eigenvectors,
-
-            self.spc_forces, ato.spc_forces, crm.spc_forces, psd.spc_forces, rms.spc_forces,
-            self.mpc_forces, ato.mpc_forces, crm.mpc_forces, psd.mpc_forces, rms.mpc_forces,
-
-            self.applied_loads,
-            self.load_vectors,
-        ]
+        disp_like_dicts = get_disp_like_dicts(self)
         for disp_like_dict in disp_like_dicts:
             if not disp_like_dict:
                 continue
@@ -1148,11 +1433,13 @@ class OP2(OP2_Scalar, OP2Writer):
             for subcase, result in disp_like_dict.items():
                 if result.table_name in ['BOUGV1', 'BOPHIG', 'TOUGV1']:
                     continue
-                self.log.debug("transforming %s" % result.table_name)
-                transform_displacement_to_global(subcase, result, icd_transform, coords, xyz_cid0,
-                                                 self.log, debug=debug)
+                self.log.debug(f'transforming {result.table_name}')
+                transform_displacement_to_global(
+                    subcase, result, icd_transform, coords,
+                    xyz_cid0, self.log, debug=debug)
 
-    def transform_gpforce_to_global(self, nids_all, nids_transform, icd_transform, coords, xyz_cid0=None):
+    def transform_gpforce_to_global(self, nids_all, nids_transform, icd_transform, coords,
+                                    xyz_cid0=None):
         """
         Transforms the ``data`` of GPFORCE results into the
         global coordinate system for those nodes with different output
@@ -1196,18 +1483,151 @@ class OP2(OP2_Scalar, OP2Writer):
         self.log.debug('-----------')
 
 
-def read_op2(op2_filename: Optional[str]=None,
+def _inlist(case_key: int, keys: list[Any]) -> bool:
+    """
+    Fixes numpy deprecation warning
+
+    case_key not in subcase_key2[isubcase])
+    """
+    if len(keys) == 0:
+        return False
+    assert isinstance(case_key, integer_types), case_key
+    assert isinstance(keys, list), keys
+    #print(type(case_key))
+    found_case_key = False
+    for key in keys:
+        if isinstance(key, tuple):
+            continue
+        #print(case_key, key)
+        if key == case_key:
+            return True
+    return found_case_key
+
+
+def _inlist_int_tuple(case_key: int | tuple,
+                      keys: list[Any]) -> bool:
+    """
+    Fixes numpy deprecation warning
+
+    found_case_key = case_key not in subcase_key2[isubcase])
+    """
+    if len(keys) == 0:
+        return False
+    #assert isinstance(case_key, integer_types), case_key
+    assert isinstance(keys, list), keys
+    #print(type(case_key))
+    found_case_key = False
+    if isinstance(case_key, integer_types):
+        for key in keys:
+            if isinstance(key, tuple):
+                continue
+            if key == case_key:
+                return True
+    else:
+        assert isinstance(case_key, tuple), case_key
+        for key in keys:
+            if isinstance(key, integer_types):
+                continue
+            if key == case_key:
+                return True
+    return found_case_key
+
+
+def _filter_keys(keys: list, filter_keys: bool=True) -> list:
+    """
+    Reduce the number of case keys to simplify post-processing
+    TODO: ignore SORT2 for now
+
+    Parameters
+    ----------
+    keys : list
+        all the keys to consider
+
+    Returns
+    -------
+    keys_out : list
+         a reduced set of keys; the max optimization id is kept
+
+    >>> keys = [(1, 1, 1, 1,  0, '', ''),
+                (1, 1, 1, 55, 0, '', ''), ]
+    >>> keys_out = _filter_keys(keys)
+    >>> keys_out
+    [(1, 1, 1, 55, 0, '', '')]
+
+    >>> keys2 = [(1, 2, 1, 0, 0, '', ''),
+                 (1, 2, 2, 0, 0, '', ''),]
+    >>> keys_out2 = _filter_keys(keys2)
+    >>> keys_out2
+    [(1, 2, 1, 0, 0, '', ''),
+     (1, 2, 2, 0, 0, '', ''),]
+
+    keys3 = [
+        (1, 2, 1, 0, 0, '', ''),
+       #(1, 2, 2, 0, 0, '', ''),
+        (1, 2, 1, 0, 0, '', 'RANDOM  103'),
+       #(1, 2, 2, 0, 0, '', 'RANDOM  103'),
+        (1, 5, 1, 0, 0, '', ''),
+       #(1, 5, 2, 0, 0, '', ''),
+        (1, 5, 1, 0, 0, '', 'RANDOM  103'),
+       #(1, 5, 2, 0, 0, '', 'RANDOM  103'),
+        (3, 2, 1, 0, 0, '', ''),
+       #(3, 2, 2, 0, 0, '', ''),
+        (3, 2, 1, 0, 0, '', 'RANDOM  103'),
+       #(3, 2, 2, 0, 0, '', 'RANDOM  103'),
+        (3, 5, 1, 0, 0, '', ''),
+       #(3, 5, 2, 0, 0, '', ''),
+        (3, 5, 1, 0, 0, '', 'RANDOM  103'),
+       #(3, 5, 2, 0, 0, '', 'RANDOM  103')]
+
+    """
+    if not filter_keys:
+        return keys
+
+    print(keys)
+    keys_out = []
+    flag_to_keys = defaultdict(list)
+
+    # fill keys_to_flag
+    for key in keys:
+        assert isinstance(key, tuple), key
+        (isubcase, analysis_code, sort_method, count, ogs,  # ints
+         superelement_adaptivity_index, pval_step) = key
+        flag = (isubcase, analysis_code, ogs, superelement_adaptivity_index, pval_step)
+        flag_to_keys[flag].append(key)
+
+    # reduce keys_to_flag
+    for flag, flagged_keys in flag_to_keys.items():
+        if len(flagged_keys) == 1:
+            key0 = flagged_keys[0]
+            keys_out.append(key0)
+        else:
+            flagged_keys_temp = defaultdict(list)
+            for key in flagged_keys:
+                (isubcase, analysis_code, sort_method, count, ogs,  # ints
+                 superelement_adaptivity_index, pval_step) = key
+                del isubcase, analysis_code, ogs, superelement_adaptivity_index, pval_step
+                # sort_method, count
+                flagged_keys_temp[count].append(key)
+            flagged_keys_temp = dict(flagged_keys_temp)
+            max_count = max(flagged_keys_temp)
+            key_out = flagged_keys_temp[max_count]
+            assert len(key_out) >= 1, key_out
+            keys_out.extend(key_out)
+    return keys_out
+
+
+def read_op2(op2_filename: Optional[PathLike]=None,
+             load_geometry: bool=False,
              combine: bool=True,
-             subcases: Optional[List[int]]=None,
-             exclude_results: Optional[List[str]]=None,
-             include_results: Optional[List[str]]=None,
+             subcases: Optional[list[int]]=None,
+             exclude_results: Optional[list[str]]=None,
+             include_results: Optional[list[str]]=None,
              log: Any=None,
-             debug: bool=True,
-             debug_file: Optional[str]=None,
-             build_dataframe: Optional[bool]=None,
+             debug: Optional[bool]=True,
+             build_dataframe: Optional[bool]=False,
              skip_undefined_matrices: bool=True,
              mode: Optional[str]=None,
-             encoding: Optional[str]=None) -> OP2:
+             encoding: Optional[str]=None) -> OP2 | OP2Geom:
     """
     Creates the OP2 object without calling the OP2 class.
 
@@ -1215,29 +1635,34 @@ def read_op2(op2_filename: Optional[str]=None,
     ----------
     op2_filename : str (default=None -> popup)
         the op2_filename
+    load_geometry: bool; default=False
+        False: load results and matrices
+        True: load geometry as well
     combine : bool; default=True
         True : objects are isubcase based
         False : objects are (isubcase, subtitle) based;
                 will be used for superelements regardless of the option
-    subcases : List[int, ...] / int; default=None->all subcases
+    subcases : list[int, ...] / int; default=None->all subcases
         list of [subcase1_ID,subcase2_ID]
-    exclude_results / include_results : List[str] / str; default=None
+    exclude_results / include_results : list[str] / str; default=None
         a list of result types to exclude/include
         one of these must be None
-    build_dataframe : bool (default=None -> True if in iPython, False otherwise)
-        builds a pandas DataFrame for op2 objects
+        build_dataframe : bool; default=False
+            builds a pandas DataFrame for op2 objects
+            None: True if in iPython, False otherwise
     skip_undefined_matrices : bool; default=False
          True : prevents matrix reading crashes
-    debug : bool; default=False
-        enables the debug log and sets the debug in the logger
+        debug : bool/None; default=True
+            used to set the logger if no logger is passed in
+                True:  logs debug/info/warning/error messages
+                False: logs info/warning/error messages
+                None:  logs warning/error messages
     log : Log()
         a logging object to write debug messages to
         (.. seealso:: import logging)
     mode : str; default=None -> 'msc'
         the version of the Nastran you're using
         {nx, msc, autodesk, optistruct}
-    debug_file : str; default=None (No debug)
-        sets the filename that will be written to
     encoding : str
         the unicode encoding (default=None; system default)
 
@@ -1252,14 +1677,28 @@ def read_op2(op2_filename: Optional[str]=None,
                does not have so many methods
 
     """
-    model = OP2(log=log, debug=debug, debug_file=debug_file, mode=mode)
-    model.set_subcases(subcases)
-    model.include_exclude_results(exclude_results=exclude_results,
-                                  include_results=include_results)
+    if op2_filename:
+        check_path(op2_filename, name='op2_filename')
 
-    model.read_op2(op2_filename=op2_filename, build_dataframe=build_dataframe,
-                   skip_undefined_matrices=skip_undefined_matrices, combine=combine,
-                   encoding=encoding)
+    if load_geometry:
+        from pyNastran.op2.op2_geom import read_op2_geom
+        model = read_op2_geom(
+            op2_filename=op2_filename, combine=combine, subcases=subcases,
+            exclude_results=exclude_results, include_results=include_results,
+            validate=True, xref=True,
+            build_dataframe=build_dataframe,
+            skip_undefined_matrices=skip_undefined_matrices,
+            mode=mode, log=log, debug=debug, encoding=encoding)
+    else:
+        model = OP2(log=log, debug=debug, mode=mode)
+        model.set_subcases(subcases)
+        model.include_exclude_results(exclude_results=exclude_results,
+                                      include_results=include_results)
+
+        model.read_op2(op2_filename=op2_filename, build_dataframe=build_dataframe,
+                       skip_undefined_matrices=skip_undefined_matrices, combine=combine,
+                       encoding=encoding)
+
     ## TODO: this will go away when OP2 is refactored
     ## TODO: many methods will be missing, but it's a start...
     ## doesn't support F06 writer
@@ -1272,7 +1711,7 @@ def read_op2(op2_filename: Optional[str]=None,
     return model
 
 
-def _create_hdf5_info(h5_file, op2_model):
+def _create_hdf5_info(h5_file: H5File, op2_model: OP2) -> None:
     """exports the h5 info group"""
     load_as_h5 = False
     if hasattr(op2_model, 'load_as_h5'):
@@ -1281,3 +1720,61 @@ def _create_hdf5_info(h5_file, op2_model):
         return
     from pyNastran.op2.op2_interface.hdf5_interface import create_info_group
     create_info_group(h5_file, op2_model)
+
+
+def _get_keys_to_skip(model: OP2) -> list[str]:
+    stress = model.op2_results.stress
+    strain = model.op2_results.strain
+    force = model.op2_results.force
+    strain_energy = model.op2_results.strain_energy
+    my_keys_to_skip = [
+        'object_methods', 'object_attributes',
+    ] + stress.get_table_types(include_class=False) + \
+        strain.get_table_types(include_class=False) + \
+        force.get_table_types(include_class=False) + \
+        strain_energy.get_table_types(include_class=False)
+    assert isinstance(my_keys_to_skip, list), my_keys_to_skip
+    return my_keys_to_skip
+
+
+def get_disp_like_dicts(model: OP2) -> list[dict]:
+    ato = model.op2_results.ato
+    crm = model.op2_results.crm
+    psd = model.op2_results.psd
+    rms = model.op2_results.rms
+    # no = model.op2_results.no
+    absi = model.op2_results.abs
+    nrl = model.op2_results.nrl
+    srss = model.op2_results.srss
+    disp_like_dicts = [
+        # should NO results be transformed?
+        # no.displacements, no.velocities, no.accelerations,
+        # no.spc_forces, no.mpc_forces,
+
+        model.displacements,
+        ato.displacements, crm.displacements, psd.displacements, rms.displacements,
+        # self.displacements_scaled,
+        absi.displacements, nrl.displacements, srss.displacements,
+
+        model.velocities,
+        ato.velocities, crm.velocities, psd.velocities, rms.velocities,
+        absi.velocities, nrl.velocities, srss.velocities,
+
+        model.accelerations,
+        ato.accelerations, crm.accelerations, psd.accelerations, rms.accelerations,
+        absi.accelerations, nrl.accelerations, srss.accelerations,
+
+        model.eigenvectors,
+        model.op2_results.RADCONS.eigenvectors, model.op2_results.RADEFFM.eigenvectors,
+        model.op2_results.RADEATC.eigenvectors, model.op2_results.ROUGV1.eigenvectors,
+
+        model.spc_forces, ato.spc_forces, crm.spc_forces, psd.spc_forces, rms.spc_forces,
+        absi.spc_forces, nrl.spc_forces, srss.spc_forces,
+
+        model.mpc_forces, ato.mpc_forces, crm.mpc_forces, psd.mpc_forces, rms.mpc_forces,
+        absi.mpc_forces, nrl.mpc_forces, srss.mpc_forces,
+
+        # self.applied_loads,
+        model.load_vectors,
+    ]
+    return disp_like_dicts

@@ -1,10 +1,22 @@
-from typing import List
-import numpy as np
-from numpy import zeros, allclose
+from struct import Struct, pack
+import inspect
 
-from pyNastran.utils.numpy_utils import integer_types
-from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
+import numpy as np
+
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
+from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
+    StressObject, StrainObject, OES_Object,
+    oes_real_data_code, set_element_case,
+    set_static_case, set_modal_case, set_transient_case, set_post_buckling_case)
 from pyNastran.f06.f06_formatting import _eigenvalue_header #, get_key0
+from pyNastran.op2.op2_interface.write_utils import to_column_bytes, view_dtype, view_idtype_as_fdtype
+from pyNastran.op2.writer.utils import fdtype_from_data
+
+
+ELEMENT_NAME_TO_ELEMENT_TYPE = {
+    'CSHEAR': 4,
+}
 
 
 class RealShearArray(OES_Object):
@@ -30,14 +42,11 @@ class RealShearArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
-        raise NotImplementedError()
-
-    def get_headers(self):
         raise NotImplementedError()
 
     def build(self):
@@ -53,17 +62,14 @@ class RealShearArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        _times = zeros(self.ntimes, dtype=dtype)
-        element = zeros(self.nelements, dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        _times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        element = np.zeros(self.nelements, dtype=idtype)
 
         # [max_shear, avg_shear, margin]
-        data = zeros((self.ntimes, self.ntotal, 3), dtype='float32')
+        data = np.zeros((self.ntimes, self.ntotal, 3), dtype=fdtype)
 
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
@@ -91,9 +97,9 @@ class RealShearArray(OES_Object):
             #22        max_shear  8.050749e-13  5.871460e-07  2.035239e-12
             #         avg_shear -8.050749e-13  5.871460e-07  2.035239e-12
             #         margin     1.401298e-45  1.401298e-45  1.401298e-45
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
         else:
             #Static     axial           SMa  torsion           SMt
@@ -104,6 +110,81 @@ class RealShearArray(OES_Object):
             data_frame.index.name = 'ElementID'
             data_frame.columns.names = ['Static']
         self.data_frame = data_frame
+
+    @classmethod
+    def _add_case(cls,
+                  table_name, element_name, isubcase,
+                  is_sort1, is_random, is_msc,
+                  random_code, title, subtitle, label):
+        num_wide = 4
+        is_strain = 'Strain' in cls.__name__
+        data_code = oes_real_data_code(table_name,
+                                       element_name, num_wide,
+                                       is_sort1=is_sort1, is_random=is_random,
+                                       random_code=random_code,
+                                       title=title, subtitle=subtitle, label=label,
+                                       is_msc=is_msc)
+
+        # I'm only sure about the 1s in the strains and the
+        # corresponding 0s in the stresses.
+        #stress / strain -> 1, 3
+        if is_strain:
+            stress_bits = [0, 1, 0, 1, 0]
+            s_code = 1
+        else:
+            stress_bits = [0, 0, 0, 0, 0]
+            s_code = 0
+            assert stress_bits[1] == 0, 'stress_bits=%s' % (stress_bits)
+
+        # stress
+        assert stress_bits[1] == stress_bits[3], 'stress_bits=%s' % (stress_bits)
+        data_code['stress_bits'] = stress_bits
+        data_code['s_code'] = s_code
+
+        element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name]
+        data_code['element_name'] = element_name
+        data_code['element_type'] = element_type
+        return data_code
+
+    @classmethod
+    def add_static_case(cls, table_name, element_name: str, element, data, isubcase,
+                        is_sort1=True, is_random=False, is_msc=True,
+                        random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_static_case(cls, is_sort1, isubcase, data_code,
+                              set_element_case, (element, data))
+        return obj
+
+    @classmethod
+    def add_modal_case(cls, table_name, element_name: str, element, data, isubcase,
+                       modes, eigns, cycles,
+                       is_sort1=True, is_random=False, is_msc=True,
+                       random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_modal_case(cls, is_sort1, isubcase, data_code,
+                             set_element_case, (element, data),
+                             modes, eigns, cycles)
+        return obj
+
+    @classmethod
+    def add_transient_case(cls, table_name, element_name, element, data, isubcase,
+                           times,
+                           is_sort1=True, is_random=False, is_msc=True,
+                           random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_transient_case(cls, is_sort1, isubcase, data_code,
+                                 set_element_case, (element, data),
+                                 times)
+        return obj
 
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
@@ -121,7 +202,7 @@ class RealShearArray(OES_Object):
                         t2 = table.data[itime, ieid, :]
                         (max_shear, avg_shear, margin) = t1
                         (max_shear2, avg_shear2, margin2) = t2
-                        if not allclose(t1, t2):
+                        if not np.allclose(t1, t2):
                         #if not np.array_equal(t1, t2):
                             msg += '%s\n  (%s, %s, %s)\n  (%s, %s, %s)\n' % (
                                 eid,
@@ -144,17 +225,18 @@ class RealShearArray(OES_Object):
           ID.             SHEAR          SHEAR       MARGIN           ID.             SHEAR          SHEAR       MARGIN
             328        1.721350E+03   1.570314E+03   7.2E+01
         """
+        assert self.sort_method == 1, self
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [max_shear, avg_shear, margin]
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -174,9 +256,9 @@ class RealShearArray(OES_Object):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nnodes, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -184,7 +266,7 @@ class RealShearArray(OES_Object):
         raise NotImplementedError('CSHEAR...')
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg_temp = self.get_f06_header()
@@ -223,13 +305,97 @@ class RealShearArray(OES_Object):
             page_num += 1
         return page_num - 1
 
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
+                  is_mag_phase=False, endian='>'):
+        """writes an OP2"""
+        frame = inspect.currentframe()
+        call_frame = inspect.getouterframes(frame, 2)
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
+
+        if itable == -1:
+            self._write_table_header(op2_file, op2_ascii, date)
+            itable = -3
+
+        #if isinstance(self.nonlinear_factor, float):
+            #op2_format = '%sif' % (7 * self.ntimes)
+            #raise NotImplementedError()
+        #else:
+            #op2_format = 'i21f'
+        #s = Struct(op2_format)
+
+        unused_eids = self.element
+
+        # table 4 info
+        #ntimes = self.data.shape[0]
+        #nnodes = self.data.shape[1]
+        nelements = self.data.shape[1]
+
+        # 21 = 1 node, 3 principal, 6 components, 9 vectors, 2 p/ovm
+        #ntotal = ((nnodes * 21) + 1) + (nelements * 4)
+
+        ntotali = self.num_wide
+        ntotal = ntotali * nelements
+
+        #print('shape = %s' % str(self.data.shape))
+        #assert self.ntimes == 1, self.ntimes
+
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
+
+        eids = self.element
+        eids_device = self.element * 10 + self.device_code
+
+        #fmt = '%2i %6f'
+        #print('ntotal=%s' % (ntotal))
+        #assert ntotal == 193, ntotal
+
+        if not self.is_sort1:
+            raise NotImplementedError('SORT2')
+        struct1 = Struct(endian + b'i 3f')
+
+        fdtype = fdtype_from_data(self.data, self.size)
+        # [eid, max_shear, avg_shear, margin]
+        data_out = np.empty((nelements, 4), dtype=fdtype)
+        data_out[:, 0] = view_idtype_as_fdtype(eids_device, fdtype)
+
+        op2_ascii.write(f'nelements={nelements:d}\n')
+
+        for itime in range(self.ntimes):
+            #print('3, %s' % itable)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
+
+            # record 4
+            #print('stress itable = %s' % itable)
+            itable -= 1
+            #print('4, %s' % itable)
+            header = [4, itable, 4,
+                      4, 1, 4,
+                      4, 0, 4,
+                      4, ntotal, 4,
+                      4 * ntotal]
+            op2_file.write(pack('%ii' % len(header), *header))
+            op2_ascii.write('r4 [4, 0, 4]\n')
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
+
+            # [eid, max_shear, avg_shear, margin]
+            data_out[:, 1:] = self.data[itime, :, :]
+            op2_file.write(data_out)
+
+            itable -= 1
+            header = [4 * ntotal,]
+            op2_file.write(pack('i', *header))
+            op2_ascii.write('footer = %s\n' % header)
+            new_result = False
+        return itable
+
 
 class RealShearStressArray(RealShearArray, StressObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         RealShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['max_shear', 'avg_shear', 'margin']
         return headers
 
@@ -248,11 +414,12 @@ class RealShearStrainArray(RealShearArray, StrainObject):
         RealShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['max_shear', 'avg_shear', 'margin']
         return headers
 
-    def get_f06_header(self):
+    def get_f06_header(self) -> list[str]:
         msg = [
             '                                     S T R A I N S   I N   S H E A R   P A N E L S      ( C S H E A R )\n'
             '      ELEMENT            MAX            AVG        SAFETY         ELEMENT            MAX            AVG        SAFETY\n'

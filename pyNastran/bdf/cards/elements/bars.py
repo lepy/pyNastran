@@ -9,7 +9,7 @@ defines:
 """
 # pylint: disable=R0904,R0902,E1101,E1103,C0111,C0302,C0103,W0101
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import cast, Optional, Any, TYPE_CHECKING
 
 import numpy as np
 from numpy.linalg import norm
@@ -23,14 +23,18 @@ from pyNastran.bdf.bdf_interface.assign_type import (
     double)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+from pyNastran.bdf.cards.coordinate_systems import CORD2R, Coord
 if TYPE_CHECKING:  # pragma: no cover
-    from pyNastran.bdf.bdf import BDF
+    from pyNastran.nptyping_interface import NDArray3float, NDArray33float
+    from cpylog import SimpleLogger
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
+    from pyNastran.bdf.bdf import BDF, GRID, CBEAM
 
 
 class LineElement(Element):  # CBAR, CBEAM, CBEAM3, CBEND
     def __init__(self):
         Element.__init__(self)
-        self.pid_ref = None  # type: Optional[Any]
+        self.pid_ref: Optional[Any] = None
         #self.nodes_ref = None
 
     def C(self):
@@ -102,33 +106,36 @@ class LineElement(Element):  # CBAR, CBEAM, CBEAM3, CBEND
                                'cross referenced.\n%s' % (self.eid, str(self)))
         return self.pid_ref.mid_ref.rho
 
-    def Nsm(self):
+    def Nsm(self) -> float:
         """Placeholder method for the non-structural mass, :math:`nsm`"""
         raise NotImplementedError('implement self.Area() for %s' % self.type)
 
-    def MassPerLength(self):
+    def MassPerLength(self) -> float:
         """Get the mass per unit length, :math:`\frac{m}{L}`"""
         if self.pid_ref is None:
             raise RuntimeError('Element eid=%i has not been '
                                'cross referenced.\n%s' % (self.eid, str(self)))
         return self.pid_ref.MassPerLength()
 
-    def Mass(self):
+    def Mass(self) -> float:
         r"""
         Get the mass of the element.
 
         .. math:: m = \left( \rho A + nsm \right) L
 
         """
-        L = self.Length()
-        mass = L * self.MassPerLength()
+        mpa = self.MassPerLength()
+        if mpa == 0.0:
+            return 0.
+        length = self.Length()
+        mass = length * mpa
+
         #try:
-            #mass = (self.Rho() * self.Area() + self.Nsm()) * L
+            #mass = (self.Rho() * self.Area() + self.Nsm()) * length
         #except TypeError:
             #msg = 'TypeError on eid=%s pid=%s:\n' % (self.eid, self.Pid())
-            #msg += 'rho = %s\narea = %s\nnsm = %s\nL = %s' % (self.Rho(),
-            #                                                  self.Area(),
-            #                                                  self.Nsm(), L)
+            #msg += 'rho = %s\narea = %s\nnsm = %s\nL = %s' % (
+            #    self.Rho(), self.Area(), self.Nsm(), length)
             #raise TypeError(msg)
 
         return mass
@@ -140,17 +147,17 @@ class LineElement(Element):  # CBAR, CBEAM, CBEAM3, CBEND
         self.nodes_ref = None
         self.pid_ref = None
 
-    def Length(self):
+    def Length(self) -> float:
         r"""
         Gets the length, :math:`L`, of the element.
 
         .. math:: L = \sqrt{  (n_{x2}-n_{x1})^2+(n_{y2}-n_{y1})^2+(n_{z2}-n_{z1})^2  }
 
         """
-        L = norm(self.nodes_ref[1].get_position() - self.nodes_ref[0].get_position())
-        return L
+        length = np.linalg.norm(self.nodes_ref[1].get_position() - self.nodes_ref[0].get_position())
+        return length
 
-    def get_edge_ids(self):
+    def get_edge_ids(self) -> list[tuple[int, ...]]:
         """
         Return the edge IDs
         """
@@ -179,7 +186,9 @@ class BAROR(BaseCard):
         x = None
         return BAROR(pid, is_g0, g0, x, offt='GGG', comment='')
 
-    def __init__(self, pid, is_g0, g0, x, offt='GGG', comment=''):
+    def __init__(self, pid: int,
+                 is_g0: bool, g0: int, x: Optional[list[float]],
+                 offt: str='GGG', comment: str=''):
         BaseCard.__init__(self)
         if comment:
             self.comment = comment
@@ -195,7 +204,7 @@ class BAROR(BaseCard):
             #raise NotImplementedError('the integer form of offt is not supported; offt=%s' % offt)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         pid = integer_or_blank(card, 2, 'pid')
 
         # x / g0
@@ -211,17 +220,19 @@ class BAROR(BaseCard):
                           double_or_blank(card, 6, 'x2', 0.),
                           double_or_blank(card, 7, 'x3', 0.)],
                          dtype='float64')
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError('BAROR field5 = %r' % field5)
         offt = integer_string_or_blank(card, 8, 'offt', 'GGG')
-        assert len(card) <= 9, 'len(BAROR card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 9, f'len(BAROR card) = {len(card):d}\ncard={card}'
         return BAROR(pid, is_g0, g0, x, offt=offt, comment=comment)
 
     def raw_fields(self):
         """
         Gets the fields of the card in their full form
         """
-        list_fields = ['BAROR', None, None] + self.x.tolist() + [self.offt]
+        #     |   1   | 2 |  3  | 4 | 5 |   6   |  7  |   8   |  9   |
+        #     | BAROR |   | PID |   |   | G0/X1 |  X2 |  X3   | OFFT |
+        list_fields = ['BAROR', None, self.pid, None, None] + self.x.tolist() + [self.offt]
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
@@ -229,6 +240,7 @@ class BAROR(BaseCard):
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
 
 class CBARAO(BaseCard):
     """
@@ -278,7 +290,7 @@ class CBARAO(BaseCard):
             defines what x means
             LE : x is in absolute coordinates along the bar
             FR : x is in fractional
-        x : List[float]
+        x : list[float]
             the additional output locations (doesn't include the end points)
             len(x) <= 6
         comment : str; default=''
@@ -326,10 +338,10 @@ class CBARAO(BaseCard):
                 double_or_blank(card, 8, 'x6'),
             ]
             x = [xi for xi in x if xi is not None]
-        assert len(card) <= 9, 'len(CBARAO card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 9, f'len(CBARAO card) = {len(card):d}\ncard={card}'
         return CBARAO(eid, scale, x, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         pass
 
     def raw_fields(self):
@@ -344,6 +356,7 @@ class CBARAO(BaseCard):
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
 
 class CBAR(LineElement):
     """
@@ -376,10 +389,11 @@ class CBAR(LineElement):
     """
     type = 'CBAR'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb',
-        8:'offt', 9:'pa', 10:'pb',
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb',
+        8: 'offt', 9: 'pa', 10: 'pb',
         #, 'W1A', 'W2A', 'W3A', 'W1B', 'W2B', 'W3B'
     }
+
     def update_by_cp_name(self, cp_name, value):
         if cp_name == 'W1A':
             self.wa[0] = value
@@ -484,21 +498,23 @@ class CBAR(LineElement):
         h5_file.create_dataset('wa', data=wa)
         h5_file.create_dataset('wb', data=wb)
 
-    def __init__(self, eid, pid, nids,
-                 x, g0, offt='GGG',
-                 pa=0, pb=0, wa=None, wb=None, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 x: Optional[list[float]], g0: Optional[int], offt: str='GGG',
+                 pa: int=0, pb: int=0,
+                 wa: Optional[list[float]]=None,
+                 wb: Optional[list[float]]=None, comment: str=''):
         """
         Adds a CBAR card
 
         Parameters
         ----------
+        eid : int
+            element id
         pid : int
             property id
-        mid : int
-            material id
-        nids : List[int, int]
+        nids : list[int, int]
             node ids; connected grid points at ends A and B
-        x : List[float, float, float]
+        x : list[float, float, float]
             Components of orientation vector, from GA, in the displacement
             coordinate system at GA (default), or in the basic coordinate system
         g0 : int
@@ -509,7 +525,7 @@ class CBAR(LineElement):
             Offset vector interpretation flag
         pa / pb : int; default=0
             Pin Flag at End A/B.  Releases the specified DOFs
-        wa / wb : List[float, float, float]
+        wa / wb : list[float, float, float]
             Components of offset vectors from the grid points to the end
             points of the axis of the shear center
         comment : str; default=''
@@ -586,7 +602,7 @@ class CBAR(LineElement):
         ----------
         card : BDFCard()
             a BDFCard object
-        beamor : BAROR() or None
+        baror : BAROR() or None
             defines the defaults
         comment : str; default=''
             a comment for the card
@@ -626,12 +642,12 @@ class CBAR(LineElement):
         wb = np.array([double_or_blank(card, 14, 'w1b', 0.0),
                        double_or_blank(card, 15, 'w2b', 0.0),
                        double_or_blank(card, 16, 'w3b', 0.0)], dtype='float64')
-        assert len(card) <= 17, 'len(CBAR card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 17, f'len(CBAR card) = {len(card):d}\ncard={card}'
         return CBAR(eid, pid, [ga, gb], x, g0,
                     offt, pa, pb, wa, wb, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         #: .. todo:: verify
         #data = [[eid,pid,ga,gb,pa,pb,w1a,w2a,w3a,w1b,w2b,w3b],[f,g0]]
         #data = [[eid,pid,ga,gb,pa,pb,w1a,w2a,w3a,w1b,w2b,w3b],[f,x1,x2,x3]]
@@ -661,33 +677,33 @@ class CBAR(LineElement):
         return CBAR(eid, pid, [ga, gb], x, g0,
                     offt, pa, pb, wa, wb, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         unused_pid = self.Pid()
         unused_edges = self.get_edge_ids()
         if xref:  # True
             assert self.pid_ref.type in ['PBAR', 'PBARL', 'PBRSECT'], '%s%s' % (self, self.pid_ref)
             mid = self.Mid()
-            A = self.Area()
+            area = self.Area()
             nsm = self.Nsm()
             mpl = self.MassPerLength()
-            L = self.Length()
+            length = self.Length()
             mass = self.Mass()
             assert isinstance(mid, int), 'mid=%r' % mid
             assert isinstance(nsm, float), 'nsm=%r' % nsm
-            assert isinstance(A, float), 'eid=%s A=%r' % (eid, A)
-            assert isinstance(L, float), 'eid=%s L=%r' % (eid, L)
+            assert isinstance(area, float), 'eid=%s A=%r' % (eid, area)
+            assert isinstance(length, float), 'eid=%s L=%r' % (eid, length)
             assert isinstance(mpl, float), 'eid=%s mass_per_length=%r' % (eid, mpl)
             assert isinstance(mass, float), 'eid=%s mass=%r' % (eid, mass)
-            assert L > 0.0, 'eid=%s L=%s' % (eid, L)
+            assert length > 0.0, 'eid=%s L=%s' % (eid, length)
 
-    def Mid(self):
+    def Mid(self) -> int:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
         return self.pid_ref.Mid()
 
-    def Area(self):
+    def Area(self) -> float:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
@@ -695,7 +711,7 @@ class CBAR(LineElement):
         assert isinstance(A, float)
         return A
 
-    def J(self):
+    def J(self) -> float:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
@@ -706,13 +722,13 @@ class CBAR(LineElement):
             raise TypeError(msg)
         return j
 
-    def Length(self):
+    def Length(self) -> float:
         # TODO: consider w1a and w1b in the length formulation
-        L = norm(self.gb_ref.get_position() - self.ga_ref.get_position())
+        L = np.linalg.norm(self.gb_ref.get_position() - self.ga_ref.get_position())
         assert isinstance(L, float)
         return L
 
-    def Nsm(self):
+    def Nsm(self) -> float:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
@@ -720,25 +736,25 @@ class CBAR(LineElement):
         assert isinstance(nsm, float)
         return nsm
 
-    def I1(self):
+    def I1(self) -> float:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
         return self.pid_ref.I1()
 
-    def I2(self):
+    def I2(self) -> float:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
         return self.pid_ref.I2()
 
-    def Centroid(self):
+    def Centroid(self) -> np.ndarray:
         if self.pid_ref is None:
             msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
             raise RuntimeError(msg)
         return (self.ga_ref.get_position() + self.gb_ref.get_position()) / 2.
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         return self.Centroid()
 
     def cross_reference(self, model: BDF) -> None:
@@ -752,7 +768,7 @@ class CBAR(LineElement):
         """
         #if self.g0:
         #    self.x = nodes[self.g0].get_position() - nodes[self.ga].get_position()
-        msg = ', which is required by CBAR eid=%s' % (self.eid)
+        msg = f', which is required by CBAR eid={self.eid:d}'
         self.ga_ref = model.Node(self.ga, msg=msg)
         self.gb_ref = model.Node(self.gb, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
@@ -764,9 +780,10 @@ class CBAR(LineElement):
             self.g0_vector = self.g0_ref.get_position() - self.ga_ref.get_position()
         else:
             self.g0_vector = self.x
+        #self.get_axes(model)
 
-    def safe_cross_reference(self, model, xref_errors):
-        msg = ', which is required by CBAR eid=%s' % (self.eid)
+    def safe_cross_reference(self, model: BDF, xref_errors):
+        msg = f', which is required by CBAR eid={self.eid}'
         self.ga_ref = model.Node(self.ga, msg=msg)
         self.gb_ref = model.Node(self.gb, msg=msg)
         self.nodes_ref = [self.ga_ref, self.gb_ref]
@@ -818,8 +835,8 @@ class CBAR(LineElement):
         Returns
         -------
         x_g0 : varies
-            g0 : List[int, None, None]
-            x : List[float, float, float]
+            g0 : list[int, None, None]
+            x : list[float, float, float]
 
         Notes
         -----
@@ -835,7 +852,7 @@ class CBAR(LineElement):
         #x3 = set_blank_if_default(self.x[2], 0.0)
         return list(self.x)
 
-    def get_axes(self, model):
+    def get_axes(self, model: BDF) -> tuple[bool, Any]:
         """
         Gets the axes of a CBAR/CBEAM, while respecting the OFFT flag.
 
@@ -844,16 +861,17 @@ class CBAR(LineElement):
         :func:`pyNastran.bdf.cards.elements.bars.rotate_v_wa_wb` for a
         description of the OFFT flag.
 
+        Returns
+        -------
         is_passed: bool
-        out: (wa, wb, ihat, jhat, khat)
+            flag
+        out: (v, ihat, jhat, khat, wa, wb)
+            data
         """
         is_failed = True
 
         check_offt(self)
         is_failed = True
-        ihat = None
-        yhat = None
-        zhat = None
 
         eid = self.eid
         (nid1, nid2) = self.node_ids
@@ -862,17 +880,14 @@ class CBAR(LineElement):
         xyz1 = node1.get_position()
         xyz2 = node2.get_position()
 
-        elem = model.elements[eid]
-        pid_ref = elem.pid_ref
-        if pid_ref is None:
-            pid_ref = model.Property(elem.pid)
-        assert not isinstance(pid_ref, integer_types), elem
+        is_failed, (v, ihat, yhat, zhat, wa, wb) = self.get_axes_by_nodes(
+            model, node1, node2, xyz1, xyz2, model.log)
+        return is_failed, (v, ihat, yhat, zhat, wa, wb)
 
-        is_failed, (wa, wb, ihat, yhat, zhat) = self.get_axes_by_nodes(
-            model, pid_ref, node1, node2, xyz1, xyz2, model.log)
-        return is_failed, (wa, wb, ihat, yhat, zhat)
-
-    def get_axes_by_nodes(self, model, pid_ref, node1, node2, xyz1, xyz2, log):
+    def get_axes_by_nodes(self, model: BDF,
+                          node1: GRID, node2: GRID,
+                          xyz1: np.ndarray, xyz2: np.ndarray,
+                          log: SimpleLogger) -> tuple[bool, Any]:
         """
         Gets the axes of a CBAR/CBEAM, while respecting the OFFT flag.
 
@@ -888,7 +903,7 @@ class CBAR(LineElement):
         eid = self.eid
         #centroid = (n1 + n2) / 2.
         #i = n2 - n1
-        #Li = norm(i)
+        #Li = np.linalg.norm(i)
         #ihat = i / Li
 
         elem = self
@@ -901,60 +916,79 @@ class CBAR(LineElement):
         # wa/wb are not considered in i_offset
         # they are considered in ihat
         i = xyz2 - xyz1
-        Li = norm(i)
+        Li: float = np.linalg.norm(i)
         if Li == 0.:
             msg = 'xyz1=%s xyz2=%s\n%s' % (xyz1, xyz2, self)
             raise ValueError(msg)
         i_offset = i / Li
 
-        unused_v, wa, wb, xform = rotate_v_wa_wb(
+        v, wa, wb, xform = rotate_v_wa_wb(
             model, elem,
             xyz1, xyz2, node1, node2,
             i_offset, i, eid, Li, log)
+
         if wb is None:
             # one or more of v, wa, wb are bad
-
+            #
             # xform is xform_offset...assuming None
             ihat = None
             yhat = None
             zhat = None
-            return is_failed, (wa, wb, ihat, yhat, zhat)
+            return is_failed, (v, ihat, yhat, zhat, wa, wb)
 
         ihat = xform[0, :]
         yhat = xform[1, :]
         zhat = xform[2, :]
 
         is_failed = False
-        return is_failed, (wa, wb, ihat, yhat, zhat)
+        #print('wa =', wa)
+        #print('wb =', wb)
+        return is_failed, (v, ihat, yhat, zhat, wa, wb)
 
-    def get_orientation_vector(self, xyz):
+    def get_orientation_vector(self, model: BDF):
         """
-        Element offsets are defined in a Cartesian system located at the
-        connecting grid point. The components of the offsets are always
-        defined in units of translation, even if the displacement
-        coordinate system is cylindrical or spherical.
+        Gets the axes of a CBAR/CBEAM, while respecting the OFFT flag.
 
-        For example, in Figure 11-11, the grid point displacement
-        coordinate system is cylindrical, and the offset vector is
-        defined using Cartesian coordinates u1, u2, and u3 in units of
-        translation.
+        Notes
+        -----
+        :func:`pyNastran.bdf.cards.elements.bars.rotate_v_wa_wb` for a
+        description of the OFFT flag.
+
         """
-        if self.g0:
-            v = xyz[self.g0] - xyz[self.Ga()]
-        else:
-            v = self.x
-        assert self.offt == 'GGG', self.offt
+        #TODO: not integrated with CBAR yet...
+
+        eid = self.eid
+
+        elem = self
+        node1 = self.nodes_ref[0]
+        node2 = self.nodes_ref[1]
+        xyz1 = node1.get_position()
+        xyz2 = node2.get_position()
+
+        # wa/wb are not considered in i_offset
+        # they are considered in ihat
+        i = xyz2 - xyz1
+        ihat_norm = np.linalg.norm(i)
+        if ihat_norm == 0.0:
+            msg = 'xyz1=%s xyz2=%s\n%s' % (xyz1, xyz2, self)
+            raise ValueError(msg)
+        i_offset = i / ihat_norm
+
+        v, unused_wa, unused_wb, unused_xform = rotate_v_wa_wb(
+            model, elem,
+            xyz1, xyz2, node1, node2,
+            i_offset, i, eid, ihat_norm, model.log)
         return v
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.Ga(), self.Gb()]
 
-    def get_edge_ids(self):
+    def get_edge_ids(self) -> list[int, ...]:
         return [tuple(sorted(self.node_ids))]
 
     @property
-    def nodes(self):
+    def nodes(self) -> list[int]:
         return [self.ga, self.gb]
 
     @nodes.setter
@@ -963,16 +997,16 @@ class CBAR(LineElement):
         self.gb = values[1]
 
     @property
-    def nodes_ref(self):
+    def nodes_ref(self) -> list[GRID]:
         return [self.ga_ref, self.gb_ref]
 
     @nodes_ref.setter
-    def nodes_ref(self, values):
+    def nodes_ref(self, values) -> None:
         assert values is not None, values
         self.ga_ref = values[0]
         self.gb_ref = values[1]
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         """Gets the fields of the card in their full form"""
         (x1, x2, x3) = self.get_x_g0_defaults()
 
@@ -983,7 +1017,7 @@ class CBAR(LineElement):
                        x3, offt, self.pa, self.pb] + list(self.wa) + list(self.wb)
         return list_fields
 
-    def repr_fields(self):
+    def repr_fields(self) -> list:
         """Gets the fields of the card in their reduced form"""
         pa = set_blank_if_default(self.pa, 0)
         pb = set_blank_if_default(self.pb, 0)
@@ -1010,7 +1044,7 @@ class CBAR(LineElement):
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
-    def write_card_16(self, is_double=False):
+    def write_card_16(self, is_double=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_16(card)
 
@@ -1033,8 +1067,14 @@ class CBEAM3(LineElement):  # was CBAR
                       tw=None, s=None, comment='')
 
     type = 'CBEAM3'
-    def __init__(self, eid, pid, nids, x, g0,
-                 wa=None, wb=None, wc=None, tw=None, s=None, comment=''):
+
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 x: Optional[list[float]], g0: Optional[int],
+                 wa: Optional[np.ndarray]=None,
+                 wb: Optional[np.ndarray]=None,
+                 wc: Optional[np.ndarray]=None,
+                 tw: Optional[np.ndarray]=None,
+                 s: Optional[np.ndarray]=None, comment: str=''):
         LineElement.__init__(self)
 
         if wa is None:
@@ -1082,34 +1122,34 @@ class CBEAM3(LineElement):  # was CBAR
 
         """
         eid = integer(card, 1, 'eid')
-        pid = integer_or_blank(card, 2, 'pid', eid)
+        pid = integer_or_blank(card, 2, 'pid', default=eid)
         ga = integer(card, 3, 'ga')
         gb = integer(card, 4, 'gb')
         gc = integer_or_blank(card, 5, 'gc')
 
         # card, eid, x1_default, x2_default, x3_default
         x, g0 = init_x_g0_cbeam3(card, eid, 0., 0., 0.)
-        wa = np.array([double_or_blank(card, 9, 'w1a', 0.0),
-                       double_or_blank(card, 10, 'w2a', 0.0),
-                       double_or_blank(card, 11, 'w3a', 0.0)], dtype='float64')
+        wa = np.array([double_or_blank(card, 9, 'w1a', default=0.0),
+                       double_or_blank(card, 10, 'w2a', default=0.0),
+                       double_or_blank(card, 11, 'w3a', default=0.0)], dtype='float64')
 
-        wb = np.array([double_or_blank(card, 12, 'w1b', 0.0),
-                       double_or_blank(card, 13, 'w2b', 0.0),
-                       double_or_blank(card, 14, 'w3b', 0.0)], dtype='float64')
+        wb = np.array([double_or_blank(card, 12, 'w1b', default=0.0),
+                       double_or_blank(card, 13, 'w2b', default=0.0),
+                       double_or_blank(card, 14, 'w3b', default=0.0)], dtype='float64')
 
-        wc = np.array([double_or_blank(card, 15, 'w1c', 0.0),
-                       double_or_blank(card, 16, 'w2c', 0.0),
-                       double_or_blank(card, 17, 'w3c', 0.0)], dtype='float64')
+        wc = np.array([double_or_blank(card, 15, 'w1c', default=0.0),
+                       double_or_blank(card, 16, 'w2c', default=0.0),
+                       double_or_blank(card, 17, 'w3c', default=0.0)], dtype='float64')
 
         tw = np.array([double_or_blank(card, 18, 'twa', 0.),
                        double_or_blank(card, 19, 'twb', 0.),
                        double_or_blank(card, 20, 'twc', 0.)], dtype='float64')
 
         # TODO: what are the defaults?
-        s = np.array([integer_or_blank(card, 21, 'sa', -1),
-                      integer_or_blank(card, 22, 'sb', -1),
-                      integer_or_blank(card, 23, 'sc', -1)], dtype='int32')
-        assert len(card) <= 24, 'len(CBEAM3 card) = %i\ncard=%s' % (len(card), card)
+        s = np.array([integer_or_blank(card, 21, 'sa', default=-1),
+                      integer_or_blank(card, 22, 'sb', default=-1),
+                      integer_or_blank(card, 23, 'sc', default=-1)], dtype='int32')
+        assert len(card) <= 24, f'len(CBEAM3 card) = {len(card):d}\ncard={card}'
         return CBEAM3(eid, pid, [ga, gb, gc], x, g0,
                       wa=wa, wb=wb, wc=wc, tw=tw, s=s, comment=comment)
 
@@ -1123,7 +1163,7 @@ class CBEAM3(LineElement):  # was CBAR
             the BDF object
 
         """
-        msg = ', which is required by CBEAM3 eid=%s' % (self.eid)
+        msg = f', which is required by CBEAM3 ={self.eid:d}'
         self.ga_ref = model.Node(self.ga, msg=msg)
         self.gb_ref = model.Node(self.gb, msg=msg)
         if self.gc is not None:
@@ -1132,8 +1172,8 @@ class CBEAM3(LineElement):  # was CBAR
         if self.g0:
             self.g0_ref = model.Node(self.g0, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
-        msg = ', which is required by CBEAM3 eid=%s' % (self.eid)
+    def safe_cross_reference(self, model: BDF, xref_errors):
+        msg = f', which is required by CBEAM3 eid={self.eid:d}'
         self.ga_ref = model.Node(self.ga, msg=msg)
         self.gb_ref = model.Node(self.gb, msg=msg)
         if self.gc is not None:
@@ -1156,14 +1196,16 @@ class CBEAM3(LineElement):  # was CBAR
         self.gc_ref = None
         self.pid_ref = None
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         return np.zeros(3)
-    def Centroid(self):
+
+    def Centroid(self) -> np.ndarray:
         return np.zeros(3)
-    def MassPerLength(self):
+
+    def MassPerLength(self) -> float:
         return 0.
 
-    def Length(self):
+    def Length(self) -> float:
         r"""
         We'll fit a 2nd order polynomial to the x, y, and z coefficients.
         We know GA (t=0), GB(t=1), and GC (t=0.5 assumed).
@@ -1259,11 +1301,11 @@ class CBEAM3(LineElement):  # was CBAR
             #print('dx=', dx, length)
         else:
             t = 1.
-            at2btc = a * t **2 + b * t + c
+            at2btc = a * t ** 2 + b * t + c
             length = (
                 (b + 2 * a * t) / (4 * a) * np.sqrt(at2btc) +
                 (4 * a * c - b ** 2) / (8 * a ** 1.5) * np.log(
-                    2*a*t + b + 2*np.sqrt(a*(at2btc)))
+                    2*a*t + b + 2*np.sqrt(a*at2btc))
             )
         return length
 
@@ -1275,7 +1317,7 @@ class CBEAM3(LineElement):  # was CBAR
 
         xyza = self.ga_ref.get_position() + self.wa
         xyzb = self.gb_ref.get_position() + self.wb
-        Aa, Ab, Ac = A # self.pid_ref.area
+        Aa, Ab, Ac = A  # self.pid_ref.area
         L = self.Length()
         if self.gc is not None:
             xa, ya, za = xyza
@@ -1299,7 +1341,7 @@ class CBEAM3(LineElement):  # was CBAR
 
         xyza = self.ga_ref.get_position() + self.wa
         xyzb = self.gb_ref.get_position() + self.wb
-        Aa, Ab, Ac = A # self.pid_ref.area
+        Aa, Ab, Ac = A  # self.pid_ref.area
         if self.gc is not None:
             xa, ya, za = xyza
             xb, yb, zb = xyzb
@@ -1311,14 +1353,15 @@ class CBEAM3(LineElement):  # was CBAR
             )
         else:
             volume = np.linalg.norm(xyzb*Ab - xyza*Aa)
-        assert isinstance(volume, float), volume
+            assert isinstance(volume, float) and volume > 0, f'Volume={volume} must be >0;\n{str(self)}'
         return volume
 
     def Nsm(self):
-        if isinstance(self.pid_ref, integer_types):
-            msg = 'Element eid=%i has not been cross referenced.\n%s' % (self.eid, str(self))
+        pid_ref = self.pid_ref
+        if pid_ref is None:
+            msg = f'Element eid={self.eid} has not been cross referenced.\n{self}'
             raise RuntimeError(msg)
-        nsm = self.pid_ref.Nsm()
+        nsm = pid_ref.Nsm()
         assert isinstance(nsm, float), nsm
 
         xyza = self.ga_ref.get_position() + self.wa
@@ -1327,7 +1370,7 @@ class CBEAM3(LineElement):  # was CBAR
             xa, ya, za = xyza
             xb, yb, zb = xyzb
             xc, yc, zc = self.gc_ref.get_position() + self.wc
-            nsma, nsmb, nsmc = self.pid_ref.nsm
+            nsma, nsmb, nsmc = pid_ref.nsm
             L = self.Length()
             nsm = self._integrate(
                 np.array([nsma * xa, nsmb * xb, nsmc * xc]) / L,
@@ -1335,6 +1378,8 @@ class CBEAM3(LineElement):  # was CBAR
                 np.array([nsma * za, nsmb * zb, nsmc * zc]) / L,
             )
         else:
+            L = self.Length()
+            nsma, nsmb = pid_ref.nsm
             nsm = np.linalg.norm(xyzb*nsmb - xyza*nsmb) / L
         assert isinstance(nsm, float), nsm
         return nsm
@@ -1368,11 +1413,10 @@ class CBEAM3(LineElement):  # was CBAR
         return [self.ga, self.gb, self.gc]
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.Ga(), self.Gb(), self.Gc()]
 
-
-    def get_edge_ids(self):
+    def get_edge_ids(self) -> list[int, ...]:
         nids = [self.Ga(), self.Gb()]
         return [tuple(sorted(nids))]
 
@@ -1384,8 +1428,8 @@ class CBEAM3(LineElement):  # was CBAR
         Returns
         -------
         x_g0 : varies
-            g0 : List[int, None, None]
-            x : List[float, float, float]
+            g0 : list[int, None, None]
+            x : list[float, float, float]
 
         Notes
         -----
@@ -1400,7 +1444,7 @@ class CBEAM3(LineElement):  # was CBAR
         x1, x2, x3 = self.get_x_g0_defaults()
         ga, gb, gc = self.node_ids
         list_fields = ['CBEAM3', self.eid, self.Pid(), ga, gb, gc, x1, x2, x3] + \
-                  list(self.wa) + list(self.wb) + list(self.wc) + list(self.tw) + list(self.s)
+            list(self.wa) + list(self.wb) + list(self.wc) + list(self.tw) + list(self.s)
         return list_fields
 
     def repr_fields(self):
@@ -1431,8 +1475,9 @@ class CBEAM3(LineElement):  # was CBAR
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         unused_edges = self.get_edge_ids()
+
 
 def init_x_g0_cbeam3(card, eid, x1_default, x2_default, x3_default):
     """reads the x/g0 field for the CBEAM3"""
@@ -1446,7 +1491,7 @@ def init_x_g0_cbeam3(card, eid, x1_default, x2_default, x3_default):
         x = np.array([field6,
                       double_or_blank(card, 7, 'x2', x2_default),
                       double_or_blank(card, 8, 'x3', x3_default)], dtype='float64')
-        if norm(x) == 0.0:
+        if np.linalg.norm(x) == 0.0:
             msg = 'G0 vector defining plane 1 is not defined.\n'
             msg += 'G0 = %s\n' % g0
             msg += 'X  = %s\n' % x
@@ -1461,7 +1506,7 @@ def init_x_g0_cbeam3(card, eid, x1_default, x2_default, x3_default):
 class CBEND(LineElement):
     type = 'CBEND'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb', 8:'geom',
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb', 8: 'geom',
     }
     _properties = ['node_ids']
 
@@ -1491,7 +1536,8 @@ class CBEND(LineElement):
         geom = 1
         return CBEND(eid, pid, nids, g0, x, geom, comment='')
 
-    def __init__(self, eid, pid, nids, g0, x, geom, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 g0, x, geom: int, comment: str=''):
         """
         Creates a CBEND card
 
@@ -1501,11 +1547,11 @@ class CBEND(LineElement):
             element id
         pid : int
             property id (PBEND)
-        nids : List[int, int]
+        nids : list[int, int]
             node ids; connected grid points at ends A and B
         g0 : int
             ???
-        x : List[float, float, float]
+        x : list[float, float, float]
             ???
         geom : int
             1 : The center of curvature lies on the line AO (or its extension) or vector v.
@@ -1539,12 +1585,13 @@ class CBEND(LineElement):
         assert self.geom in [1, 2, 3, 4], 'geom is invalid geom=%r' % self.geom
         self.ga_ref = None
         self.gb_ref = None
+        self.g0_ref = None
         self.pid_ref = None
         if self.g0 is not None:
             assert isinstance(self.g0, integer_types), self.get_stats()
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CBEND card from ``BDF.add_card(...)``
 
@@ -1569,7 +1616,7 @@ class CBEND(LineElement):
             x = np.array([double_or_blank(card, 5, 'x1', 0.0),
                           double_or_blank(card, 6, 'x2', 0.0),
                           double_or_blank(card, 7, 'x3', 0.0)], dtype='float64')
-            if norm(x) == 0.0:
+            if np.linalg.norm(x) == 0.0:
                 msg = 'G0 vector defining plane 1 is not defined.\n'
                 msg += 'G0 = %s\n' % g0
                 msg += 'X  = %s\n' % x
@@ -1578,11 +1625,11 @@ class CBEND(LineElement):
             raise ValueError('invalid x1Go=%r on CBEND' % x1_g0)
         geom = integer(card, 8, 'geom')
 
-        assert len(card) == 9, 'len(CBEND card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 9, f'len(CBEND card) = {len(card):d}\ncard={card}'
         return CBEND(eid, pid, [ga, gb], g0, x, geom, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         #data = [[eid, pid, ga, gb, geom], [f, x1, x2, x3]]
         #data = [[eid, pid, ga, gb, geom], [f, g0]]
 
@@ -1614,9 +1661,221 @@ class CBEND(LineElement):
         #x3 = set_blank_if_default(self.x[2], 0.0)
         return list(self.x)
 
+    def make_circle(self, origin, R: float, theta1, theta: float):
+        ntheta = 11
+        dtheta = theta
+        theta2 = theta1 - dtheta
+        theta0 = min(theta1, theta2)  # start
+        theta0d = theta0 + dtheta
+        #thetas = np.linspace(0., theta, ntheta)
+        #thetas = np.linspace(theta1, theta2, ntheta)
+        thetas = np.linspace(theta0, theta0d, ntheta)
+        #x0 = 0. #origin[0]
+        #y0 = 0. #origin[1]
+        x0 = origin[0]
+        y0 = origin[1]
+        #z0 = origin[2]
+        #zero = np.zeros(ntheta)
+        xy = np.column_stack([
+            x0 + R * np.sin(thetas),
+            y0 + R * np.cos(thetas), ])
+        return xy
+
+    def make_circle2(self, origin: np.ndarray,
+                     xform: np.ndarray,
+                     R: float,
+                     theta1: float, theta2: float,
+                     ntheta: int=11):
+        assert xform.shape == (3, 3), xform.shape
+        print(theta1, theta2)
+        thetas = np.linspace(theta1, theta2, num=ntheta)
+        thetas.sort()
+        print(f'thetas = {thetas}')
+        #x0 = 0. #origin[0]
+        #y0 = 0. #origin[1]
+        x0 = origin[0]
+        y0 = origin[1]
+        #z0 = origin[2]
+        #zero = np.zeros(ntheta)
+        xyz = np.column_stack([
+            R * np.cos(thetas),
+            R * np.sin(thetas),
+            np.zeros(ntheta),
+        ])
+        print('xform')
+        print(xform)
+        print(xyz.shape, xform.shape)
+        xyz_xform = xyz @ xform
+        print(xyz_xform.shape)
+        xyz_out = origin[np.newaxis, :] + xyz_xform
+        return xyz_out
+
+    def plot(self, ifig: int=1):
+        """
+        L = R*theta
+        m = rho*A*L = rho*A*R*theta
+        dm = rho*A*R * dtheta
+
+        ycg = int( R*sin(theta)*dm ) / m
+            = R^2*rho*A* int(sin(theta)*theta) / rho*A*R*theta
+            = R* int(sin(theta)*theta) / theta
+            Int = -theta* cos(theta) + sin(theta)
+            Int|pi = pi
+            = R* (-theta* cos(theta) + sin(theta)) / theta
+            = R* (sin(theta) -theta* cos(theta)) / theta
+            = R* (sin(theta)/theta -cos(theta))
+        """
+        import matplotlib.pyplot as plt
+        fig = plt.figure(ifig)
+        ax = fig.gca()
+        A = self.nodes_ref[0].get_position()
+        B = self.nodes_ref[1].get_position()
+        O = self.g0_ref.get_position()
+        half_point = (A + B) / 2
+        print(f'half_point = {half_point}')
+        print(f'geom = {self.geom}')
+        if self.geom == 2:
+            ba = B - A
+            oa = O - A
+            ob = O - B
+            n = np.cross(oa, ba)
+            v = np.cross(n, ba)
+            v /= np.linalg.norm(v)
+            print(f'n = {n}')
+            print(f'v = {v}')
+
+            denom = np.linalg.norm(ba) * np.linalg.norm(oa)
+            cos_theta = np.dot(ba, oa) / denom
+            print(f'cos_theta = {cos_theta:g}')
+            theta = np.arccos(cos_theta)
+            print(f'theta = {theta:g}')
+
+            crossa = half_point - A
+            y = np.linalg.norm(crossa)
+            h = y / np.tan(theta)
+            radius = np.sqrt(h**2 + y**2)
+            C = half_point + v * h
+            print(f'y = {y:g}')
+            print(f'h = {h:g}')
+            print(f'R = {radius:g}')
+            print(f'C,origin1 = {C}')
+            #(x-x0)^2 + (y-y0)^2 = r^2
+            #(x-x0)^2 + (y-y0)^2 = r^2
+            #(x-1)^2 + (y-2)^2 = R**2
+            #x0,y0 + Rs
+            ca = C - A
+            cb = C - B
+            ca_mag = np.linalg.norm(ca)
+            cb_mag = np.linalg.norm(cb)
+            cos_theta_inner = np.dot(ca, cb) / (ca_mag * cb_mag)
+            theta_inner = np.arccos(cos_theta_inner)
+            theta1 = np.arctan2(ob[1], ob[0])
+        elif self.geom == 3:
+            radius = self.pid_ref.rb
+            ao = O - A
+            ab = B - A
+            bo = O - B
+            ab_mag = np.linalg.norm(ab)
+            iaxis = ab / ab_mag
+            ab_mag_2 = ab_mag / 2
+            normal = np.cross(ao, ab)
+            normal /= np.linalg.norm(normal)
+
+            jaxis = np.cross(normal, ab)
+            jaxis /= np.linalg.norm(jaxis)
+            cos_theta = ab_mag_2 / radius
+            theta = np.arccos(cos_theta)
+            height = radius * np.sin(theta)
+            halfwidth = ab_mag_2
+            C = half_point + jaxis * height
+            #ac = C - A
+            #bc = C - B
+            # good but too obvious
+            # -height is very specific
+            # -> need an xform
+            # theta1 = np.arctan2(-height, halfwidth)
+            # theta2 = np.arctan2(-height, -halfwidth)
+            # about x
+            theta1 = np.arctan2(halfwidth, height)
+            theta2 = np.arctan2(-halfwidth, height)
+            #theta2 = -theta1
+            thetas = np.array([theta1, theta2])
+
+            # thetas = [ -70.52877937 -109.47122063]
+            #print('thetas', np.degrees(thetas))
+        else:  # pragma: no cover
+            raise RuntimeError(self.geom)
+        origin = C
+
+        #print(f'theta1 = {theta1}')
+        ax.plot(A[0], A[1], marker='o', label='A')
+        ax.plot(B[0], B[1], marker='o', label='B')
+        ax.plot(O[0], O[1], marker='o', label='O')
+        ax.plot(origin[0], origin[1], marker='o', label='C,origin')
+        # R cos(theta1) = h
+
+        #print('ijk')
+        #print(iaxis, jaxis, normal)
+        xform_out = np.column_stack([iaxis, jaxis, normal])
+        #ct = np.cos(theta1)
+        #st = np.sin(theta1)
+        # xform_cyl = np.column_stack([
+        #     [ct, st, 0.],
+        #     [-st, ct, 0.],
+        #     [0., 0., 1.]])
+        #
+        # kaxis = np.cross(jaxis, -iaxis)
+        # xform_cyl = np.column_stack([
+        #     jaxis, -iaxis, kaxis,])
+        xform_cyl = np.array([
+            [0., -1., 0.],
+            [1.,  0., 0.],
+            [0.,  0., 1.],
+        ])
+        # print('xform_cyl')
+        # print(xform_cyl)
+        xform = xform_out @ xform_cyl
+        ixform = np.where(np.abs(xform) < 0.0001)
+        xform[ixform] = 0.
+        xyz = self.make_circle2(origin, xform,
+                                radius, 0., 2*np.pi-0.0001, ntheta=41)
+        assert xyz.shape == (41, 3), xyz.shape
+        ax.plot(xyz[:, 0], xyz[:, 1], label='circle')
+        dxyz = xyz[1:, :] - xyz[:-1, :]
+        assert len(xyz) == len(dxyz) + 1
+        length = np.linalg.norm(dxyz, axis=1)
+        assert len(dxyz) == len(length), (len(dxyz), len(length))
+        length2 = 2 * np.pi * radius
+        print(f'length={length.sum()} length2={length2}')
+
+        xyz = self.make_circle2(origin, xform,
+                                radius, theta1, theta2, ntheta=51)
+        dxyz = xyz[1:, :] - xyz[:-1, :]
+        xyzi_cg = (xyz[1:, :] + xyz[:-1, :]) / 2
+        length = np.linalg.norm(dxyz, axis=1)
+        rho = 1.
+        area = 1.
+        nsm = 0.
+        mass = (rho * area + nsm) * length
+        xyz_cg = (mass[:, np.newaxis] * xyzi_cg).sum(axis=0) / mass.sum()
+        print(f'xyz_cg = {xyz_cg}')
+        ax.plot(xyz[:, 0], xyz[:, 1], label='theta', linewidth=7)
+
+        #xy = self.make_circle(origin, radius, theta1, theta_inner)
+        ax.plot(xyz[:, 0], xyz[:, 1], label='circle')
+        ax.plot(xyz_cg[0], xyz_cg[1],
+                marker='o', markersize=20,
+                label='CG')
+        ax.grid(True)
+        # ax.set_aspect('equal', adjustable='box')
+        ax.legend()
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        plt.show()
+
     def Length(self):
         # TODO: consider w1a and w1b in the length formulation
-        L = norm(self.gb_ref.get_position() - self.ga_ref.get_position())
+        L = np.linalg.norm(self.gb_ref.get_position() - self.ga_ref.get_position())
         assert isinstance(L, float)
         return L
 
@@ -1710,7 +1969,7 @@ class CBEND(LineElement):
             raise RuntimeError(msg)
         return self.pid_ref.Area()
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         unused_edges = self.get_edge_ids()
 
     def cross_reference(self, model: BDF) -> None:
@@ -1723,16 +1982,20 @@ class CBEND(LineElement):
             the BDF object
 
         """
-        msg = ', which is required by CBEND eid=%s' % (self.eid)
+        msg = f', which is required by CBEND eid={self.eid:d}'
         #self.g0 = model.nodes[self.g0]
         self.ga_ref = model.Node(self.ga, msg=msg)
         self.gb_ref = model.Node(self.gb, msg=msg)
+        if self.g0 is not None:
+            self.g0_ref = model.Node(self.g0, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
-        msg = ', which is required by CBEND eid=%s' % (self.eid)
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        self.gb_ref = model.Node(self.gb, msg=msg)
+    def safe_cross_reference(self, model: BDF, xref_errors):
+        msg = f', which is required by CBEND ={self.eid:d}'
+        self.ga_ref = model.safe_node(self.ga, self.eid, xref_errors, msg=msg)
+        self.gb_ref = model.safe_node(self.gb, self.eid, xref_errors, msg=msg)
+        if self.g0 is not None:
+            self.g0_ref = model.safe_node(self.g0, self.eid, xref_errors, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 
     def uncross_reference(self) -> None:
@@ -1740,9 +2003,11 @@ class CBEND(LineElement):
         node_ids = self.node_ids
         self.ga = node_ids[0]
         self.gb = node_ids[1]
+        #self.g0 = node_ids[1]
         self.pid = self.Pid()
         self.ga_ref = None
         self.gb_ref = None
+        self.g0_ref = None
         self.pid_ref = None
 
     def Centroid(self):
@@ -1769,6 +2034,7 @@ class CBEND(LineElement):
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
+
 def init_x_g0(card, eid, x1_default, x2_default, x3_default):
     """common method to read the x/g0 field for the CBAR, CBEAM, CBEAM3"""
     field5 = integer_double_or_blank(card, 5, 'g0_x1', x1_default)
@@ -1781,7 +2047,7 @@ def init_x_g0(card, eid, x1_default, x2_default, x3_default):
         x = np.array([field5,
                       double_or_blank(card, 6, 'x2', x2_default),
                       double_or_blank(card, 7, 'x3', x3_default)], dtype='float64')
-        if norm(x) == 0.0:
+        if np.linalg.norm(x) == 0.0:
             msg = 'G0 vector defining plane 1 is not defined.\n'
             msg += 'G0 = %s\n' % g0
             msg += 'X  = %s\n' % x
@@ -1792,7 +2058,12 @@ def init_x_g0(card, eid, x1_default, x2_default, x3_default):
         raise RuntimeError(msg)
     return x, g0
 
-def get_bar_vector(model, elem, node1, node2, xyz1):
+
+def get_bar_vector(model: BDF, elem: CBAR | CBEAM,
+                   node1: GRID, node2: GRID,
+                   xyz1: np.ndarray) -> tuple[np.ndarray,
+                                              int, Coord,
+                                              int, Coord]:
     """helper method for ``rotate_v_wa_wb``"""
     cd1 = node1.Cd()
     cd2 = node2.Cd()
@@ -1826,11 +2097,16 @@ def get_bar_vector(model, elem, node1, node2, xyz1):
             v = cd1_ref.transform_node_to_global(elem.x)
             cd1_ref = model.Coord(cd1)
             cd2_ref = model.Coord(cd2)
-
     return v, cd1, cd1_ref, cd2, cd2_ref
 
-def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset, eid,
-                   Li_offset, log):
+
+def rotate_v_wa_wb(model: BDF, elem: CBAR | CBEAM,
+                   xyz1: np.ndarray, xyz2: np.ndarray,
+                   node1: GRID, node2: GRID,
+                   ihat_offset: np.ndarray, i_offset: np.ndarray,
+                   eid: int,
+                   Li_offset: float,
+                   log: SimpleLogger) -> tuple[NDArray3float, NDArray3float, NDArray3float, NDArray33float]:
     """
     Rotates v, wa, wb
 
@@ -1858,11 +2134,11 @@ def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset,
 
     Returns
     -------
-    v : List[float, float, float]
+    v : list[float, float, float]
         the projection vector that defines the y-axis (jhat)
-    wa : List[float, float, float]
+    wa : list[float, float, float]
        the offset vector at A
-    wb : List[float, float, float]
+    wb : list[float, float, float]
        the offset vector at B
     xform : (3, 3) float ndarray
         a vstack of the [ihat, jhat, khat] axes
@@ -1905,6 +2181,7 @@ def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset,
         # end A
         # global - cid != 0
         if cd1 != 0:
+            cd1_ref = cast(CORD2R, cd1_ref)
             v = cd1_ref.transform_node_to_global_assuming_rectangular(v)
     elif offt_vector == 'B':
         # basic - cid = 0
@@ -1916,9 +2193,9 @@ def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset,
     yhat_offset, zhat_offset = get_bar_yz_transform(
         v, ihat_offset, eid, xyz1, xyz2, node1.nid, node2.nid,
         i_offset, Li_offset)
-    xform_offset = np.vstack([ihat_offset, yhat_offset, zhat_offset]) # 3x3 unit matrix
+    xform_offset = np.vstack([ihat_offset, yhat_offset, zhat_offset])  # 3x3 unit matrix
 
-    #--------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # rotate wa
     # wa defines the offset at end A
     wa = elem.wa
@@ -1933,7 +2210,7 @@ def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset,
         wa = wa @ xform_offset
         #ia = n1 + wa
     else:
-        msg = 'offt_end_a=%r is not supported; offt=%s' % (offt_end_a, elem.offt)
+        msg = f'offt_end_a={offt_end_a!r} is not supported; offt={elem.offt}'
         log.error(msg)
         return v, None, None, xform_offset
 
@@ -1953,7 +2230,7 @@ def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset,
         wb = wb @ xform_offset
         #ib = n2 + wb
     else:
-        msg = 'offt_end_b=%r is not supported; offt=%s' % (offt_end_b, elem.offt)
+        msg = f'offt_end_b={offt_end_b!r} is not supported; offt={elem.offt}'
         model.log.error(msg)
         return v, wa, None, xform_offset
 
@@ -1961,30 +2238,38 @@ def rotate_v_wa_wb(model, elem, xyz1, xyz2, node1, node2, ihat_offset, i_offset,
     #i = ib - ia # (xyz2 + wb) - (xyz1 + wa)
     #i = (xyz2 + wb) - (xyz1 + wa)
     i = i_offset
-    Li = norm(i)
+    Li: float = np.linalg.norm(i)
     ihat = i / Li
-    yhat, zhat = get_bar_yz_transform(v, ihat, eid, xyz1, xyz2, node1.nid, node2.nid, i, Li)
+    #msg = f'eid={eid} xyz1={xyz1} xyz2={xyz2}\nv={v} ihat={ihat} L={Li}\n{elem}'
+    #model.log.error(msg)
 
+    yhat, zhat = get_bar_yz_transform(v, ihat, eid, xyz1, xyz2, node1.nid, node2.nid, i, Li)
     #print('  n1=%s n2=%s' % (n1, n2))
     #print('  ib=%s ia=%s' % (ib, ia))
     #print('  wa=%s wb=%s' % (wa, wb))
     #print('  ioffset=%s i=%s' % (i_offset, i))
-    #print('  ihat=%s' % (ihat))
-    #print('  yhat=%s' % (yhat))
-    #print('  zhat=%s' % (zhat))
+    #print(f'ihat = {ihat}')
+    #print(f'yhat = {yhat}')
+    #print(f'zhat = {zhat}')
+
+    xform = np.vstack([ihat, yhat, zhat])  # 3x3 unit matrix
+    #print('xform:')
+    #print(xform)
     #print("")
-
-    xform = np.vstack([ihat, yhat, zhat]) # 3x3 unit matrix
-
     return v, wa, wb, xform
 
-def get_bar_yz_transform(v, ihat, eid, xyz1, xyz2, nid1, nid2, i, Li):
+
+def get_bar_yz_transform(v: np.ndarray, ihat: np.ndarray,
+                         eid: int,
+                         xyz1: np.ndarray, xyz2: np.ndarray,
+                         nid1: int, nid2: int,
+                         i: np.ndarray, Li: float) -> tuple[np.ndarray, np.ndarray]:
     """
     helper method for ``_get_bar_yz_arrays``
 
     Parameters
     ----------
-    v : List[float, float, float]
+    v : list[float, float, float]
         the projection vector that defines the y-axis (jhat)
     ihat : (3, ) float ndarray
         the normalized x-axis (not including the CBEAM offset)
@@ -2007,46 +2292,83 @@ def get_bar_yz_transform(v, ihat, eid, xyz1, xyz2, nid1, nid2, i, Li):
        the CBAR/CBEAM's z-axis
 
     """
-    vhat = v / norm(v) # j
+    vhat = v / np.linalg.norm(v)  # j
     try:
-        z = np.cross(ihat, vhat) # k
+        z = np.cross(ihat, vhat)  # k
     except ValueError:
-        msg = 'Invalid vector length\n'
-        msg += 'xyz1=%s\n' % str(xyz1)
-        msg += 'xyz2=%s\n' % str(xyz2)
-        msg += 'nid1=%s\n' % str(nid1)
-        msg += 'nid2=%s\n' % str(nid2)
-        msg += 'i   =%s\n' % str(i)
-        msg += 'Li  =%s\n' % str(Li)
-        msg += 'ihat=%s\n' % str(ihat)
-        msg += 'v   =%s\n' % str(v)
-        msg += 'vhat=%s\n' % str(vhat)
-        msg += 'z=cross(ihat, vhat)'
+        msg = (
+            'Invalid vector length\n'
+            f'xyz1={xyz1}\n'
+            f'xyz2={xyz2}\n'
+            f'nid1={nid1}\n'
+            f'nid2={nid2}\n'
+            f'i   ={i}\n'
+            f'Li  ={Li}\n'
+            f'ihat={ihat}\n'
+            f'v   ={v}\n'
+            f'vhat={vhat}\n'
+            f'z=cross(ihat, vhat)')
         print(msg)
         raise ValueError(msg)
 
-    zhat = z / norm(z)
-    yhat = np.cross(zhat, ihat) # j
+    norm_z = np.linalg.norm(z)
+    #if norm_i == 0.0 or norm_z == 0.0:
+        #print('  invalid_orientation - eid=%s v=%s i=%s n%s=%s n%s=%s' % (
+            #eid, v, i, nid1, xyz1, nid2, xyz2))
 
-    if norm(ihat) == 0.0 or norm(yhat) == 0.0 or norm(z) == 0.0:
+    try:
+        zhat = z / norm_z
+    except FloatingPointError:
+        msg = (f'  invalid_orientation.  The norm(z)={norm_z} and mus be greater than 0.0\n'
+               f'eid={eid} v={v} i={i} -> z={z}; norm(z)={norm_z}\nn{nid1}={xyz1} n{nid2}={xyz2}')
+        raise FloatingPointError(msg)
+
+    yhat = np.cross(zhat, ihat)  # j
+
+    norm_i = np.linalg.norm(ihat)
+    if norm_i == 0.0 or np.linalg.norm(yhat) == 0.0 or norm_z == 0.0:
         print('  invalid_orientation - eid=%s yhat=%s zhat=%s v=%s i=%s n%s=%s n%s=%s' % (
             eid, yhat, zhat, v, i, nid1, xyz1, nid2, xyz2))
-    elif not np.allclose(norm(yhat), 1.0) or not np.allclose(norm(zhat), 1.0) or Li == 0.0:
+    if not np.allclose(norm(yhat), 1.0) or not np.allclose(np.linalg.norm(zhat), 1.0) or Li == 0.0:
         print('  length_error        - eid=%s Li=%s Lyhat=%s Lzhat=%s'
               ' v=%s i=%s n%s=%s n%s=%s' % (
-                  eid, Li, norm(yhat), norm(zhat), v, i, nid1, xyz1, nid2, xyz2))
+                  eid, Li, np.linalg.norm(yhat), np.linalg.norm(zhat), v, i, nid1, xyz1, nid2, xyz2))
     return yhat, zhat
+
 
 def check_offt(element):
     """
     B,G,O
     Note: The character 'O' in the table replaces the obsolete character 'E'
-
+    allowed = 'GGG,BGG,GGO,BGO,GOG,BOG,GOO,BOO,GGE,BGE,GEG,BEG,GEE,BEE,GGB,BGB,GBG,BBG,GBB,BBB,B'
     """
     if isinstance(element.offt, integer_types):
         raise SyntaxError('invalid offt expected a string of length 3; '
                           'offt=%r; Type=%s\n%s' % (element.offt, type(element.offt), str(element)))
-    msg = 'invalid offt parameter of %s...offt=%s' % (element.type, element.offt)
-    assert element.offt[0] in ['G', 'B'], msg
-    assert element.offt[1] in ['G', 'O', 'E'], msg
-    assert element.offt[2] in ['G', 'O', 'E'], msg
+
+    allowed = 'GGG,BGG,GGO,BGO,GOG,BOG,GOO,BOO,GGE,BGE,GEG,BEG,GEE,BEE,GGB,BGB,GBG,BBG,GBB,BBB,B'
+    msg = f'invalid offt parameter of {element.type}...offt={element.offt}\nallowed={allowed}'
+    #assert element.offt[0] in ['G', 'B'], msg
+    #assert element.offt[1] in ['G', 'O', 'E'], msg
+    #assert element.offt[2] in ['G', 'O', 'E'], msg
+
+    # GGG Global Global Global
+    # BGG Basic Global Global
+    #
+    # GGO Global Global Offset
+    # BGO Basic Global Offset
+    #
+    # GOG Global Offset Global
+    # BOG Basic Offset Global
+    #
+    # GOO Global Offset Offset
+    # BOO Basic Offset Offset
+    #GGE, BGE,
+    #GEG, BEG,
+    #
+    #GEE, BEE,
+    #GGB, BGB,
+    #
+    #GBG, BBG,
+    #GBB, BBB,
+    #B

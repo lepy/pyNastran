@@ -24,7 +24,7 @@ class Intersect:
 
         a = p2 - p1
         b = p3 - p1
-        n = cross(a, b)
+        n = np.cross(a, b)
         assert len(n) == ne, 'len(n)=%s ne=%s' % (len(n), ne)
 
         print(n)
@@ -99,7 +99,7 @@ class Intersect:
         n2 = n[e2]
         #print("nodes.shape =", nodes.shape)
         pt = nodes[element2[0], :]
-        d2 = -dot(n2, pt)  # vo2 - node 0 on element 2
+        d2 = -dot(n2 @ pt)  # vo2 - node 0 on element 2
         #dvi = []
         #for i in range(3):
             #ei = element1[i]
@@ -107,11 +107,11 @@ class Intersect:
             #dvi.append(dvii)
         #print("    dvi = %s" % dvi)
         #e1 = elements1
-        dvi2 = dot(n2, nodes[element1, :].T) + d2
+        dvi2 = (n2 @ nodes[element1, :].T) + d2
 
         sdvi = sign(dvi2)
         sign_range = sdvi.max() - sdvi.min()
-        if allclose(dvi2.min(), 0.) or sign_range == 2.:
+        if np.allclose(dvi2.min(), 0.) or sign_range == 2.:
             print("     element2 = ", element2[0])
             print("     ", pt)
             print("     d2", d2)

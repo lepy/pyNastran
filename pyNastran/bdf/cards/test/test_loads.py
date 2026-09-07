@@ -2,9 +2,8 @@
 import os
 import unittest
 import numpy as np
-from numpy import array, allclose, array_equal, set_printoptions
-from cpylog import get_logger
-set_printoptions(suppress=True, precision=3)
+from cpylog import SimpleLogger
+np.set_printoptions(suppress=True, precision=3)
 
 import pyNastran
 from pyNastran.bdf.bdf import BDF, BDFCard, DAREA, PLOAD4, read_bdf, CaseControlDeck
@@ -12,6 +11,7 @@ from pyNastran.bdf.cards.base_card import expand_thru_by
 from pyNastran.bdf.cards.collpase_card import collapse_thru_by
 from pyNastran.bdf.cards.test.utils import save_load_deck
 from pyNastran.bdf.mesh_utils.loads import sum_forces_moments, sum_forces_moments_elements
+from pyNastran.bdf.mesh_utils.skin_solid_elements import write_skin_solid_faces
 #from pyNastran.bdf.errors import DuplicateIDsError
 
 from pyNastran.op2.op2 import read_op2 # OP2,
@@ -19,7 +19,7 @@ from pyNastran.op2.op2 import read_op2 # OP2,
 bdf = BDF(debug=False)
 TEST_PATH = pyNastran.__path__[0]
 MODEL_PATH = os.path.join(TEST_PATH, '..', 'models')
-log = get_logger(level='warning')
+log = SimpleLogger(level='warning')
 
 
 class TestLoads(unittest.TestCase):
@@ -248,30 +248,24 @@ class TestLoads(unittest.TestCase):
         assert np.array_equal(forces1, forces2)
         assert np.array_equal(moments1, moments2)
 
-        forces1, moments1 = model.sum_forces_moments(p0, loadcase_id,
-                                                     include_grav=True, xyz_cid0=None)
+        forces1, moments1 = sum_forces_moments(model, p0, loadcase_id,
+                                               include_grav=True, xyz_cid0=None)
         forces2, moments2 = sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                                                         include_grav=True, xyz_cid0=None)
         assert np.array_equal(forces1, forces2)
         assert np.array_equal(moments1, moments2)
         save_load_deck(model)
 
-    def test_gmload(self):
-        """tests GMLOAD"""
+    def test_pload2(self):
+        """tests a PLOAD4"""
+        log = SimpleLogger(level='debug')
         model = BDF(log=log)
         sid = 1
-        normal = [1., 2., 3.]
-        entity = 'cat'
-        entity_id = 37
-        method = 'frog'
-        load_magnitudes = [31.]
-        gmload = model.add_gmload(sid, normal, entity, entity_id, method,
-                                  load_magnitudes, cid=0,
-                                  comment='gmload')
-        gmload.raw_fields()
-        model.validate()
-        model.cross_reference()
-        save_load_deck(model, run_convert=False)
+        pressure = 2.
+        eids = 3
+        pload2 = model.add_pload2(sid, pressure, eids)
+        assert 'THRU' not in str(pload2), str(pload2)
+        # print(pload2)
 
     def test_pload4_01(self):
         """tests a PLOAD4"""
@@ -294,6 +288,28 @@ class TestLoads(unittest.TestCase):
         card = PLOAD4.add_card(cardi)
         card.write_card(size, 'dummy')
         card.raw_fields()
+
+    def test_pload4_raw(self):
+        model = BDF()
+        sid = 1
+        eid = 2
+        p = 3.14
+        eids = eid
+        pressures = p
+        load = model.add_pload4(
+            sid, eids, pressures,
+            g1=None, g34=None, cid=0,
+            nvector=None, surf_or_line='SURF',
+            line_load_dir='NORM',
+        )
+        # print(load.raw_fields())
+        # print(load.get_stats())
+        expected = [
+            'PLOAD4', sid, eid, p, p, p, p,
+            None, None, 0,
+            0., 0., 0., 'SURF',
+        ]
+        assert load.raw_fields() == expected, load.raw_fields()
 
     def test_pload4_line(self):
         """tests a PLOAD4 LINE option"""
@@ -432,7 +448,7 @@ class TestLoads(unittest.TestCase):
                 continue
             #if isubcase != 17:
                 #continue
-            loadcase_id = subcase.get_parameter('LOAD')[0]
+            loadcase_id = subcase.get_int_parameter('LOAD')
             load = model.Load(loadcase_id, consider_load_combinations=True)[0]
             elem = load.eids_ref[0]
             g1 = load.g1_ref.nid
@@ -443,12 +459,12 @@ class TestLoads(unittest.TestCase):
                 assert area == 0.5, area
                 if g1 in [21, 22, 23]:
                     assert face == (2, 1, 0), 'g1=%s face=%s' % (g1, face)
-                    assert array_equal(centroid, array([2/3., 1/3., 0.])), 'fore g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
-                    assert array_equal(normal, array([0., 0., 1.])), 'fore g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                    assert np.array_equal(centroid, np.array([2/3., 1/3., 0.])), 'fore g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
+                    assert np.array_equal(normal, np.array([0., 0., 1.])), 'fore g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
                 else:
                     assert face == (3, 4, 5), 'g1=%s face=%s' % (g1, face)
-                    assert array_equal(centroid, array([2/3., 1/3., 2.])), 'aft g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
-                    assert array_equal(normal, array([0., 0., -1.])), 'aft g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                    assert np.array_equal(centroid, np.array([2/3., 1/3., 2.])), 'aft g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
+                    assert np.array_equal(normal, np.array([0., 0., -1.])), 'aft g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
             else:
                 g34 = load.g34_ref.nid
                 face, area, centroid, normal = elem.get_face_area_centroid_normal(g1, g34)
@@ -458,14 +474,14 @@ class TestLoads(unittest.TestCase):
                     self.assertEqual(area, 2.0, 'area=%s' % area)
                     msg = '%s%s%s%s\n' % (
                         elem.nodes[face[0]], elem.nodes[face[1]], elem.nodes[face[2]], elem.nodes[face[3]])
-                    assert array_equal(centroid, array([1., .5, 1.])), 'Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                    assert array_equal(normal, array([-1., 0., 0.])), 'Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
+                    assert np.array_equal(centroid, np.array([1., .5, 1.])), 'Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                    assert np.array_equal(normal, np.array([-1., 0., 0.])), 'Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
                 else:
                     msg = '%s%s%s%s\n' % (
                         elem.nodes[face[0]], elem.nodes[face[1]], elem.nodes[face[2]], elem.nodes[face[3]])
 
-                    assert array_equal(centroid, array([0.5, .0, 1.])), 'Ny g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
-                    assert array_equal(normal, array([0., 1., 0.])), 'Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                    assert np.array_equal(centroid, np.array([0.5, .0, 1.])), 'Ny g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
+                    assert np.array_equal(normal, np.array([0., 1., 0.])), 'Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
                     self.assertEqual(area, 2.0, 'area=%s' % area)
 
             forces1, moments1 = sum_forces_moments(model, p0, loadcase_id, include_grav=False)
@@ -473,26 +489,26 @@ class TestLoads(unittest.TestCase):
             nids = None
             forces2, moments2 = sum_forces_moments_elements(
                 model, p0, loadcase_id, eids, nids, include_grav=False)
-            assert allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
-            assert allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
+            assert np.allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
+            assert np.allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
 
             case = op2.spc_forces[isubcase]
             fm = -case.data[0, :3, :].sum(axis=0)
             assert len(fm) == 6, fm
-            if not allclose(forces1[0], fm[0]):
+            if not np.allclose(forces1[0], fm[0]):
                 model.log.error('subcase=%-2i Fx f=%s fexpected=%s face=%s' % (
                     isubcase, forces1.tolist(), fm.tolist(), face))
-            if not allclose(forces1[1], fm[1]):
+            if not np.allclose(forces1[1], fm[1]):
                 model.log.error('subcase=%-2i Fy f=%s fexpected=%s face=%s' % (
                     isubcase, forces1.tolist(), fm.tolist(), face))
-            if not allclose(forces1[2], fm[2]):
+            if not np.allclose(forces1[2], fm[2]):
                 model.log.error('subcase=%-2i Fz f=%s fexpected=%s face=%s' % (
                     isubcase, forces1.tolist(), fm.tolist(), face))
-            # if not allclose(moments1[0], fm[3]):
+            # if not np.allclose(moments1[0], fm[3]):
                 # print('%i Mx m=%s fexpected=%s' % (isubcase, moments1, fm))
-            # if not allclose(moments1[1], fm[4]):
+            # if not np.allclose(moments1[1], fm[4]):
                 # print('%i My m=%s fexpected=%s' % (isubcase, moments1, fm))
-            # if not allclose(moments1[2], fm[5]):
+            # if np.not np.allclose(moments1[2], fm[5]):
                 # print('%i Mz m=%s fexpected=%s' % (isubcase, moments1, fm))
 
             #self.assertEqual(forces1[0], fm[0], 'f=%s fexpected=%s' % (forces1, fm[:3]))
@@ -501,7 +517,7 @@ class TestLoads(unittest.TestCase):
             #self.assertEqual(moments1[0], fm[3], 'm=%s mexpected=%s' % (moments1, fm[3:]))
             #self.assertEqual(moments1[1], fm[4], 'm=%s mexpected=%s' % (moments1, fm[3:]))
             #self.assertEqual(moments1[2], fm[5], 'm=%s mexpected=%s' % (moments1, fm[3:]))
-        save_load_deck(model, run_loads=False)
+        save_load_deck(model, run_loads=False, punch=False)
 
     def test_pload4_ctria3(self):
         """tests a PLOAD4 with a CTRIA3"""
@@ -516,7 +532,7 @@ class TestLoads(unittest.TestCase):
         subcase_ids = [1, 2, 4, 5, 6] #  no 3, 7, 8
         for isubcase in subcase_ids:
             subcase = model.subcases[isubcase]
-            loadcase_id = subcase.get_parameter('LOAD')[0]
+            loadcase_id = subcase.get_int_parameter('LOAD')
             loads = model.get_reduced_loads(loadcase_id, consider_load_combinations=True)[0]
             load = loads[0]
             assert len(loads) == 1, 'subcase:\n%s\nloads=\n%s' % (subcase, loads)
@@ -528,27 +544,27 @@ class TestLoads(unittest.TestCase):
             msg = '%s%s%s\n' % (
                 elem.nodes[0], elem.nodes[1], elem.nodes[2])
 
-            assert array_equal(centroid, array([2/3., 1/3., 0.])), 'centroid=%s\n%s' % (centroid, msg)
-            assert array_equal(normal, array([0., 0., 1.])), 'normal=%s\n%s' % (normal, msg)
+            assert np.array_equal(centroid, np.array([2/3., 1/3., 0.])), 'centroid=%s\n%s' % (centroid, msg)
+            assert np.array_equal(normal, np.array([0., 0., 1.])), 'normal=%s\n%s' % (normal, msg)
 
             forces1, moments1 = sum_forces_moments(model, p0, loadcase_id, include_grav=False)
             eids = None
             nids = None
             forces2, moments2 = sum_forces_moments_elements(
                 model, p0, loadcase_id, eids, nids, include_grav=False)
-            assert allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
-            assert allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
+            assert np.allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
+            assert np.allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
 
             case = op2.spc_forces[isubcase]
             fm = -case.data[0, :, :].sum(axis=0)
             assert len(fm) == 6, fm
-            if not allclose(forces1[0], fm[0]):
+            if not np.allclose(forces1[0], fm[0]):
                 model.log.error('subcase=%-2i Fx f=%s fm_expected=%s' % (
                     isubcase, forces1.tolist(), fm.tolist()))
-            if not allclose(forces1[1], fm[1]):
+            if not np.allclose(forces1[1], fm[1]):
                 model.log.error('subcase=%-2i Fy f=%s fm_expected=%s' % (
                     isubcase, forces1.tolist(), fm.tolist()))
-            if not allclose(forces1[2], fm[2]):
+            if not np.allclose(forces1[2], fm[2]):
                 model.log.error('subcase=%-2i Fz f=%s fm_expected=%s' % (
                     isubcase, forces1.tolist(), fm.tolist()))
         save_load_deck(model, punch=False)
@@ -569,7 +585,7 @@ class TestLoads(unittest.TestCase):
         for isubcase in subcase_ids:
             subcase = model.subcases[isubcase]
 
-            loadcase_id = subcase.get_parameter('LOAD')[0]
+            loadcase_id = subcase.get_int_parameter('LOAD')
             load = model.Load(loadcase_id)
             loadi = load[0]
             if loadi.type == 'PLOAD4':
@@ -582,26 +598,26 @@ class TestLoads(unittest.TestCase):
                 #print('centroid=%s normal=%s' % (centroid, normal))
                 msg = '%s%s%s\n' % (elem.nodes[0], elem.nodes[1], elem.nodes[2])
 
-                assert array_equal(centroid, array([0.5, 0.5, 0.])), 'centroid=%s\n%s' % (centroid, msg)
-                assert array_equal(normal, array([0., 0., 1.])), 'normal=%s\n%s' % (normal, msg)
+                assert np.array_equal(centroid, np.array([0.5, 0.5, 0.])), 'centroid=%s\n%s' % (centroid, msg)
+                assert np.array_equal(normal, np.array([0., 0., 1.])), 'normal=%s\n%s' % (normal, msg)
 
             f1, m1 = sum_forces_moments(model, p0, loadcase_id, include_grav=False)
             f2, m2 = sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                                                  include_grav=False)
-            assert allclose(f1, f2), 'f1=%s f2=%s' % (f1, f2)
-            assert allclose(m1, m2), 'm1=%s m2=%s' % (m1, m2)
+            assert np.allclose(f1, f2), 'f1=%s f2=%s' % (f1, f2)
+            assert np.allclose(m1, m2), 'm1=%s m2=%s' % (m1, m2)
 
             case = op2.spc_forces[isubcase]
             fm = -case.data[0, :, :].sum(axis=0)
             assert len(fm) == 6, fm
             force = fm[:3]
-            if not allclose(f1[0], force[0]):
+            if not np.allclose(f1[0], force[0]):
                 model.log.error('subcase=%-2i Fx f=%s force_expected=%s' % (
                     isubcase, f1.tolist(), force.tolist()))
-            if not allclose(f1[1], force[1]):
+            if not np.allclose(f1[1], force[1]):
                 model.log.error('subcase=%-2i Fy f=%s force_expected=%s' % (
                     isubcase, f1.tolist(), force.tolist()))
-            if not allclose(f1[2], force[2]):
+            if not np.allclose(f1[2], force[2]):
                 model.log.error('subcase=%-2i Fz f=%s force_expected=%s' % (
                     isubcase, f1.tolist(), force.tolist()))
         save_load_deck(model, punch=False)
@@ -631,12 +647,12 @@ class TestLoads(unittest.TestCase):
         for isubcase, subcase in sorted(model.subcases.items()):
             if isubcase == 0:
                 continue
-            loadcase_id = subcase.get_parameter('LOAD')[0]
+            loadcase_id = subcase.get_int_parameter('LOAD')
             load = model.loads[loadcase_id][0]
             elem = load.eids_ref[0]
             g1 = load.g1_ref.nid
 
-            # f, m = model.sum_forces_moments(p0, loadcase_id, include_grav=False)
+            # f, m = sum_forces_moments(model, p0, loadcase_id, include_grav=False)
             # case = op2.spc_forces[isubcase]
             # fm = case.data[0, 0, :]#.ravel()
             # if f[0] != fm[0]:
@@ -650,25 +666,25 @@ class TestLoads(unittest.TestCase):
 
             if (g1, g34) in nx_plus:
                 self.assertEqual(area, 0.5, '+Nx area=%s\n%s' % (area, msg))
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([1., 0., 0.])), '+Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([1., 0., 0.])), '+Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
 
             elif (g1, g34) in ny_plus:
                 self.assertEqual(area, 0.5, '+Ny area=%s\n%s' % (area, msg))
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([0., 1., 0.])), '+Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([0., 1., 0.])), '+Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
             elif (g1, g34) in nz_plus:
                 self.assertEqual(area, 0.5, '+Nz area=%s\n%s' % (area, msg))
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([0., 0., 1.])), '+Nz g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
-                #assert array_equal(centroid, array([1., .5, 1.])),  'Nx g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
-                #assert array_equal(normal, array([-1., 0., 0.])),  'Nx g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([0., 0., 1.])), '+Nz g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, varray([1., .5, 1.])),  'Nx g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
+                #assert np.array_equal(normal, np.array([-1., 0., 0.])),  'Nx g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
             else:
                 self.assertEqual(area, 0.75**0.5, 'slant g1=%s g34=%s face=%s area=%s\n%s' % (g1, g34, face, area, msg))
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                normal_expected = array([-0.57735027, -0.57735027, -0.57735027])
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                normal_expected = np.array([-0.57735027, -0.57735027, -0.57735027])
                 diff = normal - normal_expected
-                assert allclose(normal, normal_expected), 'slant g1=%s g34=%s face=%s normal=%s\ndiff=%s\n%s' % (g1, g34, face, normal, diff, msg)
+                assert np.allclose(normal, normal_expected), 'slant g1=%s g34=%s face=%s normal=%s\ndiff=%s\n%s' % (g1, g34, face, normal, diff, msg)
                 #raise RuntimeError('??? g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg))
             #self.assertEqual(f[0], fm[0], 'f=%s fexpected=%s' % (f, fm[:3]))
             #self.assertEqual(f[1], fm[1], 'f=%s fexpected=%s' % (f, fm[:3]))
@@ -681,21 +697,21 @@ class TestLoads(unittest.TestCase):
             nids = None
             forces2, moments2 = sum_forces_moments_elements(
                 model, p0, loadcase_id, eids, nids, include_grav=False)
-            assert allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
-            assert allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
+            assert np.allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
+            assert np.allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
 
             case = op2.spc_forces[isubcase]
             fm = -case.data[0, :, :].sum(axis=0)
             assert len(fm) == 6, fm
-            if not allclose(forces1[0], fm[0]):
+            if not np.allclose(forces1[0], fm[0]):
                 model.log.error('subcase=%-2i Fx g=(%s,%s) forces1=%s fexpected=%s '
                                 'face=%s normal=%s' % (
                                     isubcase, g1, g34, forces1, fm, face, normal))
-            if not allclose(forces1[1], fm[1]):
+            if not np.allclose(forces1[1], fm[1]):
                 model.log.error('subcase=%-2i Fy g=(%s,%s) forces1=%s fexpected=%s '
                                 'face=%s normal=%s' % (
                                     isubcase, g1, g34, forces1, fm, face, normal))
-            if not allclose(forces1[2], fm[2]):
+            if not np.allclose(forces1[2], fm[2]):
                 model.log.error('subcase=%-2i Fz g=(%s,%s) forces1=%s fexpected=%s '
                                 'face=%s normal=%s' % (
                                     isubcase, g1, g34, forces1, fm, face, normal))
@@ -741,12 +757,12 @@ class TestLoads(unittest.TestCase):
         for isubcase, subcase in sorted(model.subcases.items()):
             if isubcase == 0:
                 continue
-            loadcase_id = subcase.get_parameter('LOAD')[0]
+            loadcase_id = subcase.get_int_parameter('LOAD')
             load = model.loads[loadcase_id][0]
             elem = load.eids_ref[0]
             g1 = load.g1_ref.nid
 
-            # f, m = model.sum_forces_moments(p0, loadcase_id, include_grav=False)
+            # f, m = sum_forces_moments(model, p0, loadcase_id, include_grav=False)
             # case = op2.spc_forces[isubcase]
             # fm = case.data[0, 0, :]#.ravel()
             # if f[0] != fm[0]:
@@ -760,32 +776,32 @@ class TestLoads(unittest.TestCase):
 
             if (g1, g34) in nx_plus:
                 self.assertEqual(area, 2.0, '+Nx area=%s' % area)
-                #assert array_equal(centroid, array([1., .5, 1.])), '+Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([1., 0., 0.])), '+Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '+Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([1., 0., 0.])), '+Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
             elif (g1, g34) in nx_minus:
                 self.assertEqual(area, 2.0, '-Nx area=%s' % area)
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([-1., 0., 0.])), '-Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nx g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([-1., 0., 0.])), '-Nx g1=%s g34=%s face=%s normal=%g\n%s' % (g1, g34, face, normal, msg)
 
             elif (g1, g34) in ny_plus:
                 self.assertEqual(area, 2.0, '+Ny area=%s' % area)
-                #assert array_equal(centroid, array([1., .5, 1.])), '+Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([0., 1., 0.])), '+Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '+Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([0., 1., 0.])), '+Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
             elif (g1, g34) in ny_minus:
                 self.assertEqual(area, 2.0, '-Ny area=%s' % area)
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([0., -1., 0.])), '-Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([0., -1., 0.])), '-Ny g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
 
             elif (g1, g34) in nz_plus:
                 self.assertEqual(area, 1.0, '+Nz area=%s' % area)
-                #assert array_equal(centroid, array([1., .5, 1.])), '+Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([0., 0., 1.])), '+Nz g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '+Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([0., 0., 1.])), '+Nz g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
             elif (g1, g34) in nz_minus:
                 self.assertEqual(area, 1.0, '-Nz area=%s' % area)
-                #assert array_equal(centroid, array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
-                assert array_equal(normal, array([0., 0., -1.])), '-Nz g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
-                #assert array_equal(centroid, array([1., .5, 1.])),  'Nx g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
-                #assert array_equal(normal, array([-1., 0., 0.])),  'Nx g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])), '-Nz g1=%s g34=%s face=%s centroid=%g\n%s' % (g1, g34, face, centroid, msg)
+                assert np.array_equal(normal, np.array([0., 0., -1.])), '-Nz g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
+                #assert np.array_equal(centroid, np.array([1., .5, 1.])),  'Nx g1=%s g34=%s face=%s centroid=%s\n%s' % (g1, g34, face, centroid, msg)
+                #assert np.array_equal(normal, np.array([-1., 0., 0.])),  'Nx g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
             else:
                 msg = '??? g1=%s g34=%s face=%s normal=%s\n%s' % (g1, g34, face, normal, msg)
                 raise RuntimeError(msg)
@@ -800,19 +816,19 @@ class TestLoads(unittest.TestCase):
             nids = None
             forces2, moments2 = sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                                                             include_grav=False)
-            assert allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
-            assert allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
+            assert np.allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
+            assert np.allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
 
             case = op2.spc_forces[isubcase]
             fm = -case.data[0, :4, :].sum(axis=0)
             assert len(fm) == 6, fm
-            if not allclose(forces1[0], fm[0]):
+            if not np.allclose(forces1[0], fm[0]):
                 model.log.error('subcase=%-2i Fx forces1=%s fexpected=%s face=%s' % (
                     isubcase, forces1.tolist(), fm.tolist(), face))
-            if not allclose(forces1[1], fm[1]):
+            if not np.allclose(forces1[1], fm[1]):
                 model.log.error('subcase=%-2i Fy forces1=%s fexpected=%s face=%s' % (
                     isubcase, forces1.tolist(), fm.tolist(), face))
-            if not allclose(forces1[2], fm[2]):
+            if not np.allclose(forces1[2], fm[2]):
                 model.log.error('subcase=%-2i Fz forces1=%s fexpected=%s face=%s' % (
                     isubcase, forces1.tolist(), fm.tolist(), face))
 
@@ -834,7 +850,7 @@ class TestLoads(unittest.TestCase):
                 #continue
             ##if isubcase != 17:
                 ##continue
-            #loadcase_id = subcase.get_parameter('LOAD')[0]
+            #loadcase_id = subcase.get_int_parameter('LOAD')
             #load = model.loads[loadcase_id][0]
             #elem = load.eid
 
@@ -845,34 +861,34 @@ class TestLoads(unittest.TestCase):
             #nids = None
             #f2, m2 = sum_forces_moments_elements(
                 #model, p0, loadcase_id, eids, nids, include_grav=False)
-            #assert allclose(f, f2), 'f=%s f2=%s' % (f, f2)
-            #assert allclose(m, m2), 'm=%s m2=%s' % (m, m2)
+            #assert np.allclose(f, f2), 'f=%s f2=%s' % (f, f2)
+            #assert np.allclose(m, m2), 'm=%s m2=%s' % (m, m2)
 
             #case = op2.spc_forces[isubcase]
             #fm = -case.data[0, :, :].sum(axis=0)
             #assert len(fm) == 6, fm
-            #if not allclose(f[0], fm[0]):
+            #if not np.allclose(f[0], fm[0]):
                 #model.log.error('subcase=%-2i Fx f=%s fexpected=%s' % (
                     #isubcase, f.tolist(), fm.tolist()))
                 #fail = True
-            #if not allclose(f[1], fm[1]):
+            #if not np.allclose(f[1], fm[1]):
                 #model.log.error('subcase=%-2i Fy f=%s fexpected=%s' % (
                     #isubcase, f.tolist(), fm.tolist()))
                 #fail = True
-            #if not allclose(f[2], fm[2]):
+            #if not np.allclose(f[2], fm[2]):
                 #model.log.error('subcase=%-2i Fz f=%s fexpected=%s' % (
                     #isubcase, f.tolist(), fm.tolist()))
                 #fail = True
 
-            #if not allclose(m[0], fm[3]):
+            #if not np.allclose(m[0], fm[3]):
                 #model.log.error('subcase=%-2i Mx m=%s fexpected=%s' % (
                     #isubcase, m.tolist(), fm.tolist()))
                 #fail = True
-            #if not allclose(m[1], fm[4]):
+            #if not np.allclose(m[1], fm[4]):
                 #model.log.error('subcase=%-2i My m=%s fexpected=%s' % (
                     #isubcase, m.tolist(), fm.tolist()))
                 #fail = True
-            #if not allclose(m[2], fm[5]):
+            #if not np.allclose(m[2], fm[5]):
                 #model.log.error('subcase=%-2i Mz m=%s fexpected=%s' % (
                     #isubcase, m.tolist(), fm.tolist()))
                 #fail = True
@@ -952,6 +968,31 @@ class TestLoads(unittest.TestCase):
         os.remove('ploadx1.temp')
         save_load_deck(model2, run_convert=False, run_mass_properties=False)
 
+    def test_cpyram_load(self):
+        pid = 41
+        mid = 42
+        model = BDF(debug=False, log=log)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+        model.add_grid(5, [0., 0., 1.])
+
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu, rho=0.2, a=0.0, tref=0.0, ge=0.0,
+                       St=0.0, Sc=0.0, Ss=0.0, mcsid=0,
+                       comment='')
+        eid = 6
+        nids = [1, 2, 3, 4, 5]
+        model.add_cpyram(eid, pid, nids, comment='cpyram')
+        model.add_cpyram(eid+1, pid, nids)
+        model.add_psolid(pid, mid)
+
+        model.cross_reference()
+        save_load_deck(model)
+
     def test_loads_combo(self):
         r"""
         tests CONROD, CTRIA3-PSHELL, CQUAD4-PCOMP,
@@ -969,7 +1010,8 @@ class TestLoads(unittest.TestCase):
         +-----+--+--+---S  -> x
         1     2  9  10  11
         """
-        model = BDF(debug=False)
+        log = SimpleLogger(level='debug')
+        model = BDF(debug=False, log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
         model.add_grid(3, [1., 1., 0.])
@@ -1025,7 +1067,6 @@ class TestLoads(unittest.TestCase):
                          nsm=0.3, z1=None, z2=None,
                          mid4=None, comment='')
 
-
         eid = 4
         pid = 4
         nids = [1, 2, 3, 4]
@@ -1075,7 +1116,6 @@ class TestLoads(unittest.TestCase):
         unused_psolid = model.add_psolid(pid, mid, cordm=0, integ=None, stress=None,
                                          isop=None, fctn='SMECH', comment='psolid')
 
-
         conid = 42
         nodes = [
             2, 2, 2, 2, 2, 2,
@@ -1108,23 +1148,26 @@ class TestLoads(unittest.TestCase):
         node = 7
         mag = 1.0
         unused_force = model.add_force(sid, node, mag, xyz, cid=0, comment='force')
+        sid = 13
         unused_moment = model.add_moment(sid, node, mag, xyz, comment='moment')
 
+        sid = 14
         node = 6
         mag = 1.0
         g1 = 2
         g2 = 3
         unused_force1 = model.add_force1(sid, node, mag, g1, g2, comment='force1')
+        sid = 15
         unused_moment1 = model.add_moment1(sid, node, mag, g1, g2, comment='moment1')
 
+        sid = 16
         g1 = 1
         g2 = 3
         g3 = 2
         g4 = 4
         unused_force2 = model.add_force2(sid, node, mag, g1, g2, g3, g4, comment='force2')
+        sid = 17
         unused_moment2 = model.add_moment2(sid, node, mag, g1, g2, g3, g4, comment='moment2')
-        #g2, g3 = g3, g2
-        #force2 = model.add_force2(sid, node, mag, g1, g2, g3, g4, comment='force2')
 
         load_id = 120
         scale = 1.
@@ -1178,10 +1221,9 @@ class TestLoads(unittest.TestCase):
         model._verify_bdf(xref=False)
         model.write_bdf('loads.temp')
         model.cross_reference()
-        assert allclose(conrod.Mass(), 1.4)
-        assert allclose(ctria3.Mass(), 0.2)
-        assert allclose(chexa.Mass(), 0.2)
-
+        assert np.allclose(conrod.Mass(), 1.4)
+        assert np.allclose(ctria3.Mass(), 0.2)
+        assert np.allclose(chexa.Mass(), 0.2)
 
         model.write_bdf('loads.temp')
         model._verify_bdf(xref=True)
@@ -1205,8 +1247,8 @@ class TestLoads(unittest.TestCase):
                                                         include_grav=False, xyz_cid0=None)
         forces2, moments2 = sum_forces_moments(model2, p0, loadcase_id, include_grav=False,
                                                xyz_cid0=None)
-        assert allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
-        assert allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
+        assert np.allclose(forces1, forces2), 'forces1=%s forces2=%s' % (forces1, forces2)
+        assert np.allclose(moments1, moments2), 'moments1=%s moments2=%s' % (moments1, moments2)
 
         model2.get_area_breakdown()
         model2.get_volume_breakdown()
@@ -1221,9 +1263,8 @@ class TestLoads(unittest.TestCase):
         #assert np.array_equal(forces1, forces2)
         #assert np.array_equal(moments1, moments2)
 
-
-        model2.write_skin_solid_faces('skin.bdf', write_solids=False,
-                                      write_shells=True)
+        write_skin_solid_faces(model2, 'skin.bdf', write_solids=False,
+                               write_shells=True)
         os.remove('skin.bdf')
         save_load_deck(model2)
 
@@ -1253,7 +1294,7 @@ class TestLoads(unittest.TestCase):
 
     def test_sload(self):
         """tests SLOAD"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_spoint([11, 12])
         sid = 14
@@ -1502,7 +1543,7 @@ class TestLoads(unittest.TestCase):
         #nid = 4
         eids = [eid]
         q0 = 2.0
-        model.add_qvect(qvect_id, q0, eids, t_source=None, ce=0, vector_tableds=None, control_id=0, comment='qvect')
+        model.add_qvect(qvect_id, q0, eids, t_source=None, ce=0, vector_tableds=None, control_node=0, comment='qvect')
         lines = [
             'SUBCASE 1',
             '  DLOAD = %s' % tload_id,

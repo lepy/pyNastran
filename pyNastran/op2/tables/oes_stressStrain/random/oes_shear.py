@@ -1,9 +1,9 @@
-from typing import List
 import numpy as np
 from numpy import zeros, allclose
 
-from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header
 from pyNastran.f06.f06_formatting import _eigenvalue_header #, get_key0
 
 
@@ -19,21 +19,22 @@ class RandomShearArray(OES_Object):
             #raise NotImplementedError('SORT2')
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
-    def _reset_indices(self):
+    @property
+    def nnodes_per_element(self) -> int:
+        return 1
+
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
-        raise NotImplementedError()
-
-    def get_headers(self):
         raise NotImplementedError()
 
     def build(self):
@@ -49,29 +50,35 @@ class RandomShearArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.nelements, dtype='int32')
+        if self.is_sort1:
+            ntimes = self.ntimes
+            nelements = self.nelements
+        else:
+            ntimes = self.nelements
+            nelements = self.ntimes
+
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(nelements, dtype=idtype)
 
         # [max_shear, avg_shear]
-        self.data = zeros((self.ntimes, self.ntotal, 2), dtype='float32')
+        self.data = np.zeros((ntimes, nelements, 2), dtype=fdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
         import pandas as pd
         headers = self.get_headers()
         if self.nonlinear_factor not in (None, np.nan):
-            column_names, column_values = self._build_dataframe_transient_header()
+            column_names, column_values = build_dataframe_transient_header(self)
+            raise RuntimeError('replace pd.Panel')
             self.data_frame = pd.Panel(self.data, items=column_values,
                                        major_axis=self.element, minor_axis=headers).to_frame()
             self.data_frame.columns.names = column_names
             self.data_frame.index.names = ['ElementID', 'Item']
         else:
+            raise RuntimeError('replace pd.Panel')
             self.data_frame = pd.Panel(self.data, major_axis=self.element, minor_axis=headers).to_frame()
             self.data_frame.columns.names = ['Static']
             self.data_frame.index.names = ['ElementID', 'Item']
@@ -92,7 +99,7 @@ class RandomShearArray(OES_Object):
                         t2 = table.data[itime, ieid, :]
                         (max_shear1, avg_shear1) = t1
                         (max_shear2, avg_shear2) = t2
-                        if not allclose(t1, t2):
+                        if not np.allclose(t1, t2):
                         #if not np.array_equal(t1, t2):
                             msg += '%s\n  (%s, %s)\n  (%s, %s)\n' % (
                                 eid,
@@ -115,17 +122,33 @@ class RandomShearArray(OES_Object):
           ID.             SHEAR          SHEAR        ID.             SHEAR          SHEAR
             328        1.721350E+03   1.570314E+03
         """
+        assert self.sort_method == 1, self
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [max_shear, avg_shear]
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_sort2(self, dt, eid, max_shear, avg_shear):
+        """
+        ELEMENT            MAX            AVG       ELEMENT            MAX            AVG
+          ID.             SHEAR          SHEAR        ID.             SHEAR          SHEAR
+            328        1.721350E+03   1.570314E+03
+        """
+        assert self.is_sort2, self
+        itime = self.itotal
+        ielement = self.itime
+        #print(f'dt={dt:g} eid={eid} itime={itime} ielement={ielement}')
+        self._times[itime] = dt
+        self.element[ielement] = eid
+        self.data[itime, ielement, :] = [max_shear, avg_shear]
+        self.itotal += 1
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -145,9 +168,9 @@ class RandomShearArray(OES_Object):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nnodes, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -155,7 +178,7 @@ class RandomShearArray(OES_Object):
         raise NotImplementedError('CSHEAR...')
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg_temp = self.get_f06_header()
@@ -199,7 +222,8 @@ class RandomShearStressArray(RandomShearArray, StressObject):
         RandomShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['max_shear', 'avg_shear']
         return headers
 
@@ -218,11 +242,13 @@ class RandomShearStrainArray(RandomShearArray, StrainObject):
         RandomShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['max_shear', 'avg_shear']
         return headers
 
     def get_f06_header(self):
+        assert self.table_name in [], self.table_name
         msg = [
             '                                     S T R A I N S   I N   S H E A R   P A N E L S      ( C S H E A R )\n'
             '      ELEMENT            MAX            AVG        ELEMENT            MAX            AVG \n'

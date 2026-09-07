@@ -3,22 +3,23 @@
 All ungrouped elements are defined in this file.  This includes:
 
  * CFAST
+ * CWELD
  * CGAP
  * CRAC2D
  * CRAC3D
- * PLOTEL
  * GENEL
 
 All ungrouped elements are Element objects.
 
 """
 from __future__ import annotations
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.base_card import (
     Element, BaseCard, break_word_by_trailing_integer, _node_ids)
+from pyNastran.bdf.bdf_interface.internal_get import node_id, coord_id
 from pyNastran.bdf.bdf_interface.assign_type import (
     fields, integer, integer_or_blank, integer_double_or_blank,
     double, double_or_blank, string)
@@ -26,6 +27,7 @@ from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.cards.base_card import BDFCard
 
 
 class CFAST(Element):
@@ -33,8 +35,9 @@ class CFAST(Element):
     type = 'CFAST'
     _properties = ['node_ids', 'nodes']
     _field_map = {
-        1: 'eid', 2:'pid', 3:'Type', 4:'ida', 5:'idb', 6:'gs', 7:'ga', 8:'gb',
-        9:'xs', 10:'ys', 11:'zs',
+        1: 'eid', 2: 'pid', 3: 'Type', 4: 'ida', 5: 'idb',
+        6: 'gs', 7: 'ga', 8: 'gb',
+        9: 'xs', 10: 'ys', 11: 'zs',
     }
     cp_name_map = {
     }
@@ -74,7 +77,7 @@ class CFAST(Element):
 
     def validate(self):
         if self.Type not in ['PROP', 'ELEM']:
-            msg = 'CFAST; eid=%s Type=%r must be in [PROP, ELEM]' % (self.eid, self.Type)
+            msg = f'CFAST; eid={self.eid} Type={self.Type!r} must be in [PROP, ELEM]'
             raise TypeError(msg)
 
         gab_is_none = self.ga is None or self.gb is None
@@ -110,7 +113,7 @@ class CFAST(Element):
         xs = double_or_blank(card, 9, 'xs')
         ys = double_or_blank(card, 10, 'ys')
         zs = double_or_blank(card, 11, 'zs')
-        assert len(card) <= 12, 'len(CFAST card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 12, f'len(CFAST card) = {len(card):d}\ncard={card}'
         #if self.Type=='PROP': # PSHELL/PCOMP  ida & idb
         return CFAST(eid, pid, Type, ida, idb, gs=gs, ga=ga, gb=gb,
                      xs=xs, ys=ys, zs=zs, comment=comment)
@@ -134,7 +137,7 @@ class CFAST(Element):
         if self.gb:
             self.gb_ref = model.Node(self.Gb(), msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -183,7 +186,7 @@ class CFAST(Element):
     def get_edge_ids(self):
         return [tuple(sorted(self.node_ids))]
 
-    def _gs_xyz(self) -> Tuple[Optional[int], Optional[float], Optional[float], Optional[float]]:
+    def _gs_xyz(self) -> tuple[Optional[int], Optional[float], Optional[float], Optional[float]]:
         if self.gs is None:
             out = (self.gs, self.xs, self.ys, self.zs)
         else:
@@ -211,7 +214,7 @@ class CFAST(Element):
             return self.gb
         return self.gb_ref.nid
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         """
         Verifies all methods for this object work
 
@@ -230,6 +233,280 @@ class CFAST(Element):
 
     def repr_fields(self):
         return self.raw_fields()
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        card = self.repr_fields()
+        return self.comment + print_card_8(card)
+
+
+class CWELD(Element):
+    """
+    There are five different formats of the CWELD card as
+    GRIDid, ELEMID, ELPAT and PARTPAT.
+
+    ELEMID format:
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    |   1   |  2  |  3  |  4  |  5     |  6  |  7  |  8  |  9  |
+    +=======+=====+=====+=====+========+=====+=====+=====+=====+
+    | CWELD | EWID| PWID| GS  |"ELEMID"| GA  | GB  |     | MCID|
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    |       |SHIDA|SHIDB|     |        |     |     |     |     |
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    or PARTPAT format:
+    +-------+------+------+-----+---------+-----+-----+------+-----+
+    |   1   |  2   |  3   |  4  |  5      |  6  |  7  |  8   |  9  |
+    +=======+=============+=====+=========+=====+=====+======+=====+
+    | CWELD | EWID | PWID | GS  |"PARTPAT"| GA  | GB  |      |MCID |
+    +-------+------+------+-----+---------+-----+-----+------+-----+
+    |       | PIDA | PIDB |     |         |     |     |      |     |
+    +-------+------+------+-----+---------+-----+-----+------+-----+
+    |       |  XS  |  YS  |  ZS |         |     |     |      |     |
+    +-------+------+------+-----+---------+-----+-----+------+-----+
+    or ELPAT:
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    |   1   |  2  |  3  |  4  |  5     |  6  |  7  |  8  |  9  |
+    +=======+=====+=====+=====+========+=====+======+=====+=====+
+    | CWELD | EWID| PWID| GS  |"ELPAT" | GA  | GB  |     | MCID|
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    |       |SHIDA|SHIDB|     |        |     |     |     |     |
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    |       | XS  |   YS|  ZS |        |     |     |     |     |
+    +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+    "ELEMID" string indicating that the connectivity of
+    surface patch A to surface patch B is defined with
+    two shell element identification numbers, SHIDA and SHIDB,
+    respectively.
+
+    Parameters
+    ----------
+    x : list[float]; [xs, ys, zs]
+        applies to ELPAT, PARTPAT
+    """
+    type = 'CWELD'
+    _properties = ['node_ids', 'nodes']
+    _field_map = {
+        1: 'eid', 2: 'pid', 3: 'gs', 4: 'connectype',
+        5: 'ga', 6: 'gb', 8: 'mcid',
+    }
+    cp_name_map = {}
+
+    @classmethod
+    def _init_from_empty(cls):
+        eid = 1
+        pid = 1
+        connectype = 'ELEMID'
+        obj = CWELD(eid, pid, gs=None, connectype=connectype,
+                    ga=None, gb=None, mcid=-1, shida=None, shidb=None, comment='')
+        return obj
+
+    def __init__(self, eid: int, pid: int, gs: Optional[int],
+                 connectype: str, ga: int, gb: int,
+                 mcid: int=-1,
+                 shida: Optional[int]=None, shidb: Optional[int]=None,
+                 pida: Optional[int]=None, pidb: Optional[int]=None,
+                 x: Optional[list[float]]=None, comment: str=''):
+        Element.__init__(self)
+        if comment:
+            self.comment = comment
+        if pid is None:
+            pid = eid
+        if x is not None:
+            x = np.asarray(x, dtype='float64')
+        self.eid = eid
+        self.pid = pid
+        self.gs = gs
+        self.connectype = connectype
+        self.ga = ga
+        self.gb = gb
+        self.mcid = mcid
+        self.pida = pida
+        self.pidb = pidb
+        self.x = x
+        self.shida = shida
+        self.shidb = shidb
+        self.pid_ref = None
+        self.gs_ref = None
+        self.ga_ref = None
+        self.gb_ref = None
+        self.mcid_ref = None
+        assert connectype in ['ELEMID', 'ELPAT', 'PARTPAT'], connectype
+
+    def validate(self):
+        if self.connectype in ['GRIDID', 'ALIGN']:
+            msg = f'Format "GRIDID" or "ALIGN" of CWELD of element eid={self.eid} is not supported'
+            raise TypeError(msg)
+
+        if self.gs is None and self.ga is None:
+            msg = f'The definition of CWELD; eid={self.eid} is not correct, either GS or GA must be defined'
+            raise ValueError(msg)
+
+        if self.connectype == 'ELEMID':
+            assert self.gs is None, self.get_stats()
+            assert self.pida is None, self.get_stats()
+            assert self.pidb is None, self.get_stats()
+            assert self.shida is not None, self.get_stats()
+            assert self.shidb is not None, self.get_stats()
+        elif self.connectype == 'ELPAT':
+            assert self.x is not None, self.get_stats()
+            #assert gs is None
+            assert self.shida is not None, self.get_stats()
+            assert self.shidb is not None, self.get_stats()
+            pass
+        elif self.connectype == 'PARTPAT':
+            assert self.pida is not None, self.get_stats()
+            assert self.pidb is not None, self.get_stats()
+            assert self.shida is None, self.get_stats()
+            assert self.shidb is None, self.get_stats()
+            #assert self.gs is None, self.get_stats()
+        else:  # pragma: no cover
+            raise NotImplementedError(self.connectype)
+
+    @classmethod
+    def add_card(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a CWELD card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        eid = integer(card, 1, 'eid')
+        pid = integer_or_blank(card, 2, 'pid', default=eid)
+        gs = integer_or_blank(card, 3, 'gs')
+        connect_type = string(card, 4, 'connectype')
+
+        ga = integer(card, 5, 'ga')
+        gb = integer(card, 6, 'gb')
+        mcid = integer_or_blank(card, 8, 'mcid', default=-1)
+        shida_pida = integer_or_blank(card, 9, 'shida_pida')
+        shidb_pidb = integer_or_blank(card, 10, 'shidb_pidb')
+
+        if connect_type == 'ELEMID':
+            x = None
+            assert len(card) <= 11, f'len(CWELD card) = {len(card):d}\ncard={card}'
+        elif connect_type == 'ELPAT':
+            x = [double_or_blank(card, 18, 'xs', default=0.0),
+                 double_or_blank(card, 19, 'ys', default=0.0),
+                 double_or_blank(card, 20, 'zs', default=0.0)]
+            assert len(card) <= 21, f'len(CWELD card) = {len(card):d}\ncard={card}'
+        elif connect_type == 'PARTPAT':
+            x = [double_or_blank(card, 18, 'xs', default=0.0),
+                 double_or_blank(card, 19, 'ys', default=0.0),
+                 double_or_blank(card, 20, 'zs', default=0.0)]
+            assert len(card) <= 21, f'len(CWELD card) = {len(card):d}\ncard={card}'
+        #elif connect_type == 'GRIDID':
+        #elif connect_type == 'ALIGN':
+        else:  # pragma: no cover
+            raise NotImplementedError(f'connect_type={connect_type!r} is not supported')
+        return CWELD(eid, pid, gs, connect_type, ga, gb, mcid=mcid, shida=shida_pida, shidb=shidb_pidb, x=x, comment=comment)
+
+    def cross_reference(self, model: BDF) -> None:
+        """
+        Cross links the card so referenced cards can be
+        extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = f', which is required by CWELD eid={self.eid:d}'
+        self.pid_ref = model.Property(self.Pid(), msg=msg)
+        if self.mcid != -1:
+            self.mcid_ref = model.Coord(self.Mcid(), msg=msg)
+        if self.gs:
+            self.gs_ref = model.Node(self.Gs(), msg=msg)
+        if self.ga:
+            self.ga_ref = model.Node(self.Ga(), msg=msg)
+        if self.gb:
+            self.gb_ref = model.Node(self.Gb(), msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        self.pid = self.Pid()
+        self.mcid = self.Mcid()
+        self.gs = self.Gs()
+        self.ga = self.Ga()
+        self.gb = self.Gb()
+        self.mcid_ref = None
+        self.pid_ref = None
+        self.gs_ref = None
+        self.ga_ref = None
+        self.gb_ref = None
+
+    def raw_fields(self):
+        pid = self.Pid()
+        ga = self.Ga()
+        gb = self.Gb()
+        gs = self.Gs()
+        mcid = self.Mcid()
+        if self.connectype == 'ELEMID':
+            #     | CWELD | EWID| PWID| GS  |"ELEMID"| GA  | GB  |     | MCID|
+            #     +-------+-----+-----+-----+--------+-----+-----+-----+-----+
+            #     |       |SHIDA|SHIDB|     |        |     |     |     |     |
+            list_fields = ['CWELD', self.eid, pid, gs, self.connectype, ga, gb,
+                           None, mcid, self.shida, self.shidb]
+        elif self.connectype == 'ELPAT':
+            assert self.x is not None
+            list_fields = ['CWELD', self.eid, pid, gs, self.connectype, ga, gb,
+                           None, mcid, self.shida, self.shidb] + list(self.x)
+        elif self.connectype == 'PARTPAT':
+            #     | CWELD | EWID| PWID| GS  |"PARTPAT"| GA  | GB |      |MCID |
+            #     +-------+-----+-----+-----+---------+-----+----+------+-----+
+            #     |       | PIDA|PIDB |     |         |     |    |      |     |
+            #     +-------+-----+-----+-----+---------+-----+----+------+-----+
+            #     |       | XS  | YS  |  ZS |         |     |    |      |     |
+            assert self.x is not None
+            list_fields = ['CWELD', self.eid, pid, gs, self.connectype, ga, gb, None, mcid,
+                           self.pida, self.pidb, None, None, None, None, None, None,
+                           ] + list(self.x)
+        else:  # pragma: no cover
+            raise NotImplementedError(f'connectype={self.connectype!r} is not supported')
+        return list_fields
+
+    @property
+    def node_ids(self):
+        """gets all the node ids used on the CFAST (Gs, Ga, Gb)"""
+        gs = self.Gs()
+        gs = gs if gs is not None else 0
+        return [gs, self.Ga(), self.Gb()]
+
+    def Ga(self) -> int:
+        return node_id(self.ga_ref, self.ga)
+
+    def Gb(self) -> int:
+        return node_id(self.gb_ref, self.gb)
+
+    def Gs(self) -> int:
+        """Gets the GS node"""
+        if self.gs_ref is not None:
+            return self.gs_ref.nid
+        elif isinstance(self.gs, integer_types):
+            return self.gs
+        #else:
+            # TODO: check this block; return ga_ref seems wrong...
+            #if self.ga is None:
+            #    # If neither GS nor GA is specified, then (XS, YS, ZS) in basic must be specified.
+            #    raise RuntimeError(f'Neither Gs nor GA was not returned from CWELD\n{self.get_stats()}')
+            #else:
+            #    return self.ga_ref.nid
+
+    def _get_gs(self) -> Optional[int]:
+        if self.gs is None:
+            out = self.gs
+        else:
+            out = self.Gs()
+        return out
+
+    def Mcid(self) -> int:
+        if self.mcid_ref is None:
+            return self.mcid
+        return self.mcid_ref.cid
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
@@ -259,8 +536,9 @@ class CGAP(Element):
     """
     type = 'CGAP'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb',
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb',
     }
+
     def update_by_cp_name(self, cp_name, value):
         if isinstance(cp_name, int):
             #self._update_field_helper(cp_name, value)
@@ -285,7 +563,9 @@ class CGAP(Element):
             raise NotImplementedError('element_type=%r has not implemented %r in cp_name_map' % (
                 self.type, cp_name))
 
-    def __init__(self, eid, pid, nids, x, g0, cid=None, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 x: Optional[list[float]], g0: Optional[int],
+                 cid: Optional[int]=None, comment: str=''):
         """
         Creates a CGAP card
 
@@ -295,9 +575,9 @@ class CGAP(Element):
             Element ID
         pid : int
             Property ID (PGAP)
-        nids : List[int, int]
+        nids : list[int, int]
             node ids; connected grid points at ends A and B
-        x : List[float, float, float]
+        x : list[float, float, float]
             Components of the orientation vector,
             from GA, in the displacement coordinate system at GA
         g0 : int
@@ -399,7 +679,7 @@ class CGAP(Element):
             a comment for the card
         """
         eid = integer(card, 1, 'eid')
-        pid = integer_or_blank(card, 2, 'pid', eid)
+        pid = integer_or_blank(card, 2, 'pid', default=eid)
         ga = integer_or_blank(card, 3, 'ga')
         gb = integer_or_blank(card, 4, 'gb')
         x1_g0 = integer_double_or_blank(card, 5, 'x1_g0')
@@ -410,24 +690,24 @@ class CGAP(Element):
         elif isinstance(x1_g0, float):
             g0 = None
             x1 = x1_g0
-            x2 = double_or_blank(card, 6, 'x2', 0.0)
-            x3 = double_or_blank(card, 7, 'x3', 0.0)
+            x2 = double_or_blank(card, 6, 'x2', default=0.0)
+            x3 = double_or_blank(card, 7, 'x3', default=0.0)
             x = [x1, x2, x3]
         else:
             #raise RuntimeError('invalid CGAP...x1/g0 = %r' %(x1_g0))
             g0 = None
             x = [None, None, None]
-        assert len(card) <= 9, 'len(CGAP card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 9, f'len(CGAP card) = {len(card):d}\ncard={card}'
         return CGAP(eid, pid, [ga, gb], x, g0, cid=cid, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CGAP card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -447,7 +727,7 @@ class CGAP(Element):
             cid = None
         return CGAP(eid, pid, [ga, gb], x, g0, cid=cid, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         """
         Verifies all methods for this object work
 
@@ -469,11 +749,10 @@ class CGAP(Element):
             assert isinstance(nid, integer_types), 'nid%i is not an integer; nid=%s' %(i, nid)
 
         if xref:
-            assert self.pid_ref.type in ['PGAP'], 'pid=%i self.pid_ref.type=%s' % (pid, self.pid_ref.type)
+            assert self.pid_ref.type in ['PGAP'], f'pid={pid} self.pid_ref.type={self.pid_ref.type}'
             if self.cid is not None and self.cid != 0:
                 assert self.cid_ref.type in ['CORD1R', 'CORD1C', 'CORD1S', 'CORD2R', 'CORD2C',
-                                             'CORD2S'], 'cid=%i self.cid.type=%s' % (
-                                                 cid, self.cid_ref.type)
+                                             'CORD2S'], f'cid={cid:d} self.cid.type={self.cid_ref.type}'
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -495,7 +774,7 @@ class CGAP(Element):
         if self.cid:
             self.cid_ref = model.Coord(self.cid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -537,25 +816,17 @@ class CGAP(Element):
     def node_ids(self):
         return [self.Ga(), self.Gb()]
 
-    def Cid(self):
-        if self.cid_ref is None:
-            return self.cid
-        return self.cid_ref.cid
+    def Cid(self) -> int:
+        return coord_id(self.cid_ref, self.cid)
 
-    def Ga(self):
-        if self.ga_ref is None:
-            return self.ga
-        return self.ga_ref.nid
+    def Ga(self) -> int:
+        return node_id(self.ga_ref, self.ga)
 
-    def Gb(self):
-        if self.gb_ref is None:
-            return self.gb
-        return self.gb_ref.nid
+    def Gb(self) -> int:
+        return node_id(self.gb_ref, self.gb)
 
-    def G0(self):
-        if isinstance(self.g0, integer_types):
-            return self.g0
-        return self.g0_ref.nid
+    def G0(self) -> int:
+        return node_id(self.g0_ref, self.g0)
 
     def raw_fields(self):
         if self.g0 is not None:
@@ -577,6 +848,7 @@ class CrackElement(Element):
     def __init__(self):
         Element.__init__(self)
         self.eid = 0
+        self.nodes: list = []
         self.nodes_ref = None
         self.pid_ref = None
 
@@ -593,7 +865,7 @@ class CrackElement(Element):
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -680,17 +952,17 @@ class CRAC2D(CrackElement):
             integer_or_blank(card, 19, 'n17'),
             integer_or_blank(card, 20, 'n18')
         ]
-        assert len(card) <= 21, 'len(CRAC2D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 21, f'len(CRAC2D card) = {len(card):d}\ncard={card}'
         return CRAC2D(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CRAC2D card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -701,7 +973,7 @@ class CRAC2D(CrackElement):
         nids = data[2:]
         return CRAC2D(eid, pid, nids, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         pid = self.Pid()
         unused_nids = self.node_ids
@@ -778,17 +1050,17 @@ class CRAC3D(CrackElement):
         # optional 11-18, 29-36, 37-64
         # all/none 37-46
         nids = fields(integer_or_blank, card, 'nid', 3, 67)  # cap at +3 = 67
-        assert len(card) <= 67, 'len(CRAC3D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 67, f'len(CRAC3D card) = {len(card):d}\ncard={card}'
         return CRAC3D(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CRAC3D card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -798,7 +1070,7 @@ class CRAC3D(CrackElement):
         nids = data[2:]
         return CRAC3D(eid, pid, nids, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         pid = self.Pid()
         unused_nids = self.node_ids
@@ -819,165 +1091,6 @@ class CRAC3D(CrackElement):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_8(card)
-
-
-class PLOTEL(BaseCard):
-    """
-    Defines a 1D dummy element used for plotting.
-
-    This element is not used in the model during any of the solution
-    phases of a problem. It is used to simplify plotting of
-    structures with large numbers of colinear grid points, where the
-    plotting of each grid point along with the elements connecting
-    them would result in a confusing plot.
-
-    +--------+-----+-----+-----+
-    |   1    |  2  |  3  |  4  |
-    +========+=====+=====+=====+
-    | PLOTEL | EID | G1  | G2  |
-    +--------+-----+-----+-----+
-
-    """
-    type = 'PLOTEL'
-    _field_map = {
-        1: 'eid', 3:'g1', 4:'g2',
-    }
-    _properties = ['node_ids']
-
-    @classmethod
-    def _init_from_empty(cls):
-        eid = 1
-        nodes = [1, 2]
-        return PLOTEL(eid, nodes, comment='')
-
-    @classmethod
-    def export_to_hdf5(cls, h5_file, model, encoding):
-        """exports the elements in a vectorized way"""
-        #comments = []
-        nodes = []
-        eids = list(model.plotels.keys())
-        for eid in eids:
-            element = model.plotels[eid]
-            #comments.append(element.comment)
-            nodes.append(element.nodes)
-        #h5_file.create_dataset('_comment', data=comments)
-        h5_file.create_dataset('eid', data=eids)
-        h5_file.create_dataset('nodes', data=nodes)
-
-    def __init__(self, eid, nodes, comment=''):
-        """
-        Adds a PLOTEL card
-
-        Parameters
-        ----------
-        eid : int
-            Element ID
-        nodes : List[int, int]
-            Unique GRID point IDs
-
-        """
-        BaseCard.__init__(self)
-        if comment:
-            self.comment = comment
-        self.eid = eid
-        self.nodes = nodes
-        self.nodes_ref = None
-
-    @classmethod
-    def add_card(cls, card, comment=''):
-        """
-        Adds a PLOTEL card from ``BDF.add_card(...)``
-
-        Parameters
-        ----------
-        card : BDFCard()
-            a BDFCard object
-        comment : str; default=''
-            a comment for the card
-
-        """
-        eid = integer(card, 1, 'eid')
-        nodes = [
-            integer(card, 2, 'g1'),
-            integer(card, 3, 'g2'),
-        ]
-        assert len(card) <= 4, 'len(PLOTEL card) = %i\ncard=%s' % (len(card), card)
-        return PLOTEL(eid, nodes, comment=comment)
-
-    @classmethod
-    def add_op2_data(cls, data, comment=''):
-        """
-        Adds a PLOTEL card from the OP2
-
-        Parameters
-        ----------
-        data : List[varies]
-            a list of fields defined in OP2 format
-        comment : str; default=''
-            a comment for the card
-
-        """
-        eid = data[0]
-        nodes = [data[1], data[2]]
-        return PLOTEL(eid, nodes, comment=comment)
-
-    def _verify(self, xref):
-        pass
-
-    def cross_reference(self, model: BDF) -> None:
-        """
-        Cross links the card so referenced cards can be extracted directly
-
-        Parameters
-        ----------
-        model : BDF()
-            the BDF object
-
-        """
-        msg = ', which is required by PLOTEL eid=%s' % self.eid
-        self.nodes_ref = [
-            model.Node(self.nodes[0], msg=msg),
-            model.Node(self.nodes[1], msg=msg),
-        ]
-
-    def safe_cross_reference(self, model, xref_errors):
-        """
-        Cross links the card so referenced cards can be extracted directly
-
-        Parameters
-        ----------
-        model : BDF()
-            the BDF object
-
-        """
-        self.cross_reference(model)
-
-    def uncross_reference(self) -> None:
-        """Removes cross-reference links"""
-        self.nodes = self.node_ids
-        self.nodes_ref = None
-
-    @property
-    def node_ids(self):
-        node_idsi = self.nodes
-        n1, n2 = node_idsi
-        if not isinstance(n1, integer_types):
-            node_idsi[0] = n1.Nid()
-        if not isinstance(n2, integer_types):
-            node_idsi[1] = n2.Nid()
-        return node_idsi
-
-    def get_edge_ids(self):
-        return [tuple(sorted(self.node_ids))]
-
-    def raw_fields(self):
-        list_fields = ['PLOTEL', self.eid] + self.node_ids
-        return list_fields
-
-    def write_card(self, size: int=8, is_double: bool=False) -> str:
-        nodes = self.node_ids
-        msg = 'PLOTEL  %8i%8i%8i\n' % (self.eid, nodes[0], nodes[1])
-        return self.comment + msg
 
 
 class GENEL(BaseCard):
@@ -1018,6 +1131,7 @@ class GENEL(BaseCard):
     type = 'GENEL'
     #pid = 0
     _properties = ['node_ids', 'ul_nodes', 'ud_nodes', 'nodes']
+
     @classmethod
     def _init_from_empty(cls):
         eid = 1
@@ -1027,7 +1141,8 @@ class GENEL(BaseCard):
         z = None
         return GENEL(eid, ul, ud, k, z, s=None, comment='')
 
-    def __init__(self, eid, ul, ud, k, z, s=None, comment=''):
+    def __init__(self, eid: int, ul, ud, k, z,
+                 s=None, comment: str=''):
         """creates a GENEL card
 
         The required input is the {UL} list and the lower triangular
@@ -1056,9 +1171,13 @@ class GENEL(BaseCard):
         self.ul_nodes_ref = None
         self.ud_nodes_ref = None
 
-    def _finalize_hdf5(self, encoding):
-        self.ul = np.array(self.ul, dtype='int32')#.reshape(len(self.ul) // 2, 2)
-        self.ud = np.array(self.ud, dtype='int32')#.reshape(len(self.ud) // 2, 2)
+    def _finalize_hdf5(self, encoding: str):
+        try:
+            self.ul = np.array(self.ul, dtype='int32')#.reshape(len(self.ul) // 2, 2)
+            self.ud = np.array(self.ud, dtype='int32')#.reshape(len(self.ud) // 2, 2)
+        except OverflowError:
+            self.ul = np.array(self.ul, dtype='int64')#.reshape(len(self.ul) // 2, 2)
+            self.ud = np.array(self.ud, dtype='int64')#.reshape(len(self.ud) // 2, 2)
 
         if self.k is None or (isinstance(self.k, list) and len(self.k) == 0):
             self.k = None
@@ -1076,7 +1195,7 @@ class GENEL(BaseCard):
             self.s = np.array(self.s)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         eid = integer(card, 1, 'eid')
         card_fields = card.fields()
         ucard_fields = [field.upper() if field is not None else None
@@ -1166,7 +1285,7 @@ class GENEL(BaseCard):
         if len(self.ud):
             self.ud_nodes_ref = model.Nodes(self.ud[:, 0], msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1206,7 +1325,6 @@ class GENEL(BaseCard):
         # K/Z has a +1 instead of +2 because there is no blank after K/Z
         n_kz = len(kz) + 1
         kz_nones = _get_genel_offset(n_kz) * [None]
-
 
         ud_line = []
         if self.ud_nodes_ref is None:
@@ -1276,6 +1394,7 @@ class GENEL(BaseCard):
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
 
 def _get_genel_offset(n_ul):
     """we add to to represent the GENEL,eid fields"""

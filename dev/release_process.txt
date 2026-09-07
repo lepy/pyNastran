@@ -1,18 +1,34 @@
->>> python setup_no_reqs.py develop
->>> python all_tests.py
+1. Update docs (docs are on RTD and auto-build)
 
-build docs
->>>make html
-upload docs
+2. python all_tests.py
 
-build gui
->>> pyinstaller pyNastran.spec
-test docs
+3. build docs
+   >>> make html
 
-build egg
->>> python setup_no_reqs.py bdist_egg
+4. build gui & upload:
+   >>> pyinstaller pyNastran.spec
 
-per https://pypi.org/project/twine/
- >>> twine upload *.whl
+5.  build wheel:
+  a) Update pyNastran/../dev/test_files.txt
+  b) Manually remove test files and gui/images (it's large)
+    >>> python remove_test_files.py
+  c) build wheel
+    --no-deps just speeds this up
+    >>> pip wheel . --no-deps
 
-fix website version
+6. test the package
+>>> twine upload --repository testpypi pyNastran-1.4.0-py3-none-any.whl
+
+7. per https://pypi.org/project/twine/
+>>> twine upload --repository pypi pyNastran-1.4.0-py3-none-any.whl
+ a. Enter your API token:
+    - the api token should be found in the recovery_codes folder
+    - works; reset the pypi code if you can't find it
+
+AI:
+>>> twine upload dist/* -u __token__ -p pypi-AgENdGVzdC5weXBp... 
+
+guess:
+>>> twine upload -u __token__ --repository pypi pyNastran-1.4.0-py3-none-any.whl
+
+8. fix website version

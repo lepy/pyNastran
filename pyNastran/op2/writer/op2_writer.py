@@ -1,204 +1,407 @@
 #pylint: disable=W0201,C0301,C0111
 from __future__ import annotations
+import datetime
+import socket
 from collections import defaultdict
 from struct import pack, Struct
-from typing import TYPE_CHECKING
-from cpylog import get_logger2
+from typing import BinaryIO, TextIO, Optional, Any, TYPE_CHECKING
+from cpylog import get_logger, SimpleLogger
 
 #import pyNastran
 from pyNastran.op2.op2_interface.op2_f06_common import OP2_F06_Common
 from pyNastran.op2.op2_interface.write_utils import _write_markers
 #from pyNastran.op2.errors import FatalError
+from .case_writer import write_casecc
 from .geom1_writer import write_geom1
 from .geom2_writer import write_geom2
 from .geom3_writer import write_geom3
 from .geom4_writer import write_geom4
 from .ept_writer import write_ept
 from .mpt_writer import write_mpt
+from .edt_writer import write_edt
+from .edom_writer import write_edom
+from .dynamic_writer import write_dynamic
+from .dit_writer import write_dit
+#from .dynamic_writer import write_dynamic
+from .h5_writer import get_h5_elemental_nodal, write_h5_results
+from pyNastran.utils import PathLike, PurePath
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.op2.op2 import OP2
+
 
 class TrashWriter:
     def __init__(self, *args, **kwargs):
         pass
+
     def write(self, data):
         pass
+
     def close(self):
         pass
 
 
+def apply_default_keys(op2_flags: dict[str, dict[str, bool]],
+                       op2_flags_default: dict[str, dict[str, bool]]) -> None:
+    assert op2_flags is not None, op2_flags
+    assert op2_flags_default is not None, op2_flags_default
+    for key, defaults in op2_flags_default.items():
+        if key not in op2_flags:
+            op2_flags[key] = defaults
+            continue
+        for keyi, default in defaults.items():
+            if keyi not in op2_flags[key]:
+                op2_flags[key][keyi] = default
+    return op2_flags
+
+
 class OP2Writer(OP2_F06_Common):
     def __init__(self, log=None, debug: bool=False):
-        self.log = get_logger2(log, debug)
+        self.log = get_logger(log, debug)
         OP2_F06_Common.__init__(self)
         self.card_count = {}
 
-    def write_op2(self, op2_outname: str,
-                  post: int=-1, endian: bytes=b'<', skips=None, nastran_format='nx') -> int:
+    def write_h5(self, h5_filename: PathLike,
+                 include_geometry: bool=True,
+                 op2_flags: dict[str, dict[str, bool]]=None,
+                 sol: int=101,
+                 version: str='msc20200') -> None:
+        from tables import File
+        elemental_dicts, nodal_dicts, se_dicts, key_to_id_map = get_h5_elemental_nodal(self)
+
+        hostname = socket.gethostname()
+
+        # might change this to the run date vs. the conversion date
+        local_now = datetime.datetime.now().astimezone()
+        offset_hours = local_now.utcoffset().total_seconds() / 3600
+        local_time_str = local_now.strftime("%a %b %d %H:%M:%S %Y") + ' (UTC%+d)' % offset_hours  #  (UTC-8)
+
+        #print(utc_now.strftime("%a %b %d %H:%M:%S %Y (UTC-8)"))
+        with File(h5_filename, 'w') as h5file:
+            nastran_group = h5file.create_group('/', 'NASTRAN')
+            h5file.set_node_attr(nastran_group, "ARCH", 'win64i8')
+            h5file.set_node_attr(nastran_group, "HOSTNAME", hostname)
+            h5file.set_node_attr(nastran_group, "IFPSTAR", 'YES')  # yes=strict parser
+            h5file.set_node_attr(nastran_group, "INPUT", 'A1') # TODO: what is this???
+            h5file.set_node_attr(nastran_group, "SOL", str(sol))
+            h5file.set_node_attr(nastran_group, "TIME", local_time_str)  # Tue Dec 29 13:07:22 2020 (UTC-8)
+            h5file.set_node_attr(nastran_group, "VERSION", version)
+            # if include_geometry:
+            #     print(self)
+            #     self.model.writer.write_h5(h5file, nastran_group)
+            write_h5_results(self, h5file, nastran_group, key_to_id_map,
+                             elemental_dicts, nodal_dicts, se_dicts, root='/')
+
+    def write_op2(self, op2_out_filename: PathLike,
+                  post: int=-1,
+                  endian: bytes=b'<',
+                  op2_flags: Optional[dict[str, dict[str, bool]]]=None,
+                  includes: Optional[list[str]]=None,
+                  skips: Optional[list[str]]=None,
+                  nastran_format: Optional[str]=None,
+                  nastran_revision: Optional[str]=None) -> int:
         """
         Writes an OP2 file based on the data we have stored in the object
 
         Parameters
         ----------
-        op2_outname : str
+        op2_out_filename : str
             the name of the F06 file to write
-        obj : OP2(); default=None -> self
-            the OP2 object if you didn't inherit the class
+        post : int; default=-1
+            the PARAM,POST flag
+        endian : bytes; default=b'<'
+            little endian is strongly recommended
+        includes : list[str]; default=None
+            skips=None -> all included
+            list of results to include; exclusive with skips; default for both includes
+        skips : list[str]; default=None
+            list of results to skip; exclusive with includes
+        nastran_format : str; default=None -> 'msc'
+            supported formats: ['msc', 'nx', 'optistruct']
+        nastran_revision : str; default=None -> self._nastran_revision or 'XXXXXXXX'
+            FEMAP won't read in specific results if your OP2 version is too old.
+            Lagely this is automatic, but it might be needed.
         #is_mag_phase : bool; default=False
             #should complex data be written using Magnitude/Phase
             #instead of Real/Imaginary (default=False; Real/Imag)
             #Real objects don't use this parameter.
 
         """
-        if skips is None:
-            skips = set([])
-        else:
-            skips = set(skips)
+        if nastran_format is None:
+            nastran_format = self._nastran_format
+        if nastran_revision is not None:
+            self._nastran_revision = nastran_revision
+        if op2_flags is None:
+            op2_flags = {}
+        assert nastran_format in {'msc', 'nx', 'optistruct'}, nastran_format
+        skips = _set_skips(self, includes, skips)
+
+        op2_flags_default = {
+            'MAT10': {'include_alpha': False,},
+            'RBAR': {'include_tref': False,},
+        }
+        op2_flags = apply_default_keys(op2_flags, op2_flags_default)
 
         #print('writing %s' % op2_outname)
 
-        if isinstance(op2_outname, str):
-            fop2 = open(op2_outname, 'wb')
-            #fop2_ascii = open(op2_outname + '.txt', 'w')
-            fop2_ascii = TrashWriter()
+        if isinstance(op2_out_filename, (str, PurePath)):
+            op2_file = open(op2_out_filename, 'wb')
+            if 0:  # pragma: no cover
+                import os
+                op2_outname = os.path.splitext(op2_out_filename)[0]
+                print(f'op2_outname = {op2_outname}')
+                fop2_ascii = open(op2_outname + '.txt', 'w')
+            else:
+                fop2_ascii = TrashWriter()
             #print('op2 out = %r' % op2_outname)
             close = True
         else:
-            assert isinstance(op2_outname, file), 'type(op2_outname)= %s' % op2_outname
-            fop2 = op2_outname
-            op2_outname = op2_outname.name
+            assert isinstance(op2_out_filename, file), f'op2_out_filename = {op2_out_filename}'
+            op2_file = op2_out_filename
+            op2_outname = op2_out_filename.name
             close = False
             #print('op2_outname =', op2_outname)
 
+        assert op2_flags is not None, op2_flags
         try:
-            total_case_count = _write_op2(
-                fop2, fop2_ascii, self,
-                post=post, endian=endian, skips=skips,
-                nastran_format=nastran_format)
-        except:  # NotImplementedError
+            total_case_count, table_names = _write_op2(
+                op2_file, fop2_ascii, self,
+                skips, op2_flags,
+                post=post, endian=endian,
+                nastran_format=nastran_format,
+                nastran_revision=self._nastran_revision,
+            )
+        except Exception:  # NotImplementedError
             if close:
-                fop2.close()
+                op2_file.close()
                 fop2_ascii.close()
             raise
+        assert total_case_count > 0, (table_names, total_case_count)
+        assert len(table_names) > 0, table_names
+        # print(f'table_names = {table_names}')
         return total_case_count
 
-def _write_op2(fop2, fop2_ascii, obj: OP2,
-               post: int=-1, endian: bytes=b'<', skips=None,
-               nastran_format='nx') -> int:
+
+def _set_skips(model: OP2Writer,
+               includes: Optional[list[str]],
+               skips: Optional[list[str]]):
+    """
+    Helper method for ``write_op2``
+
+    Parameters
+    ----------
+    includes : list[str]; default=None
+        list of results to include; exclusive with skips
+        default for both includes/skips=None -> all included
+    skips : list[str]; default=None
+        list of results to skip; exclusive with includes
+
+    """
+    if skips is not None and includes is not None:
+        raise RuntimeError('Neither skips nor includes is None')
+    elif skips is None and includes is None:
+        skips = set()
+    elif skips is not None:
+        skips = set(skips)
+    elif includes is not None:
+        includes = set(includes)
+
+        all_tables = {
+            'GEOM1', 'GEOM2', 'GEOM3', 'GEOM4', 'EPT', 'MPT', 'EDT', 'EDOM', 'DIT', 'DYNAMIC',
+            'params', 'grid_point_weight',
+            'eigenvalues', 'eigenvalues_fluid',
+
+            'displacements', 'mpc_forces', 'spc_forces', 'load_vectors',
+            'cbeam_force', 'cbeam_stress',
+            'grid_point_forces',
+        }
+        bad_tables = includes - all_tables
+        if bad_tables:
+            model.log.error(f'The following tables are not part of "all_tables"\n{bad_tables}')
+        skips = all_tables - includes
+        #model.log.warning("includes is poorly supported!")
+    else:
+        print(f'skips={skips}')
+        print(f'includes={includes}')
+        raise RuntimeError('Can this happen?')
+
+    #if skips is None and includes is None:
+        #skips = set([])
+    #if skips is None:
+        #skips = set([])
+    #else:
+        #skips = set(skips)
+    skips.add('params')
+    return skips
+
+
+def _write_op2(op2_file, fop2_ascii, obj: OP2,
+               skips: set[str],
+               op2_flags: dict[str, dict[str, bool]],
+               post: int=-1, endian: bytes=b'<',
+               nastran_format: str='nx',
+               nastran_revision: str='') -> tuple[int, list[str]]:
     """actually writes the op2"""
     date = obj.date
     #op2_ascii.write('writing [3, 7, 0] header\n')
 
     struct_3i = Struct(endian + b'3i')
-    write_op2_header(obj, fop2, fop2_ascii, struct_3i, post=post, endian=endian)
+    write_op2_header(obj, op2_file, fop2_ascii, struct_3i,
+                     nastran_revision=nastran_revision,
+                     post=post, endian=endian)
+    #if 'CASECC' not in skips:
+        #write_casecc(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+    obj.log.debug(f'nastran_format={nastran_format}')
 
-    if 'GEOM1' not in skips:
-        write_geom1(fop2, fop2_ascii, obj, endian=endian)
-    if 'GEOM2' not in skips:
-        write_geom2(fop2, fop2_ascii, obj, endian=endian)
-    if 'GEOM3' not in skips:
-        write_geom3(fop2, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
-    if 'GEOM4' not in skips:
-        write_geom4(fop2, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
-    if 'EPT' not in skips:
-        write_ept(fop2, fop2_ascii, obj, endian=endian)
-    if 'MPT' not in skips:
-        write_mpt(fop2, fop2_ascii, obj, endian=endian)
-    #if 'DIT' not in skips:
-        #write_dit(fop2, fop2_ascii, obj)
-    #if 'DYNAMIC' not in skips:
-        #write_dynamic(fop2, fop2_ascii, obj)
+    # <class 'pyNastran.op2.op2.OP2'>
+    obj_type = str(type(obj))
+
+    if not obj_type.endswith("OP2'>"):
+        if 'GEOM1' not in skips:  # nodes
+            write_geom1(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        if 'GEOM2' not in skips:  # elements
+            write_geom2(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        if 'GEOM3' not in skips:  # constraints
+            write_geom3(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        if 'GEOM4' not in skips:  # loads
+            write_geom4(op2_file, fop2_ascii, obj, op2_flags,
+            endian=endian, nastran_format=nastran_format)
+        if 'EPT' not in skips:    # properties
+            write_ept(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        if 'MPT' not in skips:    # materials
+            write_mpt(op2_file, fop2_ascii, obj, op2_flags,
+            endian=endian, nastran_format=nastran_format)
+        if 'DYNAMIC' not in skips:    # dynamics
+            write_dynamic(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+
+        if 'EDT' not in skips:  # aero
+            write_edt(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        if 'EDOM' not in skips:  # optimization
+            write_edom(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        if 'DIT' not in skips:  # tables
+            write_dit(op2_file, fop2_ascii, obj, endian=endian, nastran_format=nastran_format)
+        #if 'DYNAMIC' not in skips:
+            #write_dynamic(op2_file, fop2_ascii, obj)
     if 'grid_point_weight' not in skips:
         for key, weight in obj.grid_point_weight.items():
-            weight.write_op2(fop2, fop2_ascii, date, endian=endian)
+            weight.write_op2(op2_file, fop2_ascii, date, endian=endian)
 
     #is_mag_phase = False
     # we write all the other tables
     # nastran puts the tables in order of the Case Control deck,
     # but we're lazy so we just hardcode the order
 
-    case_count = _write_result_tables(obj, fop2, fop2_ascii, struct_3i, endian, skips)
-    return case_count
+    case_count, table_names = _write_result_tables(
+        obj, op2_file, fop2_ascii, struct_3i, endian, skips)
+    return case_count, table_names
 
-def _write_result_tables(obj: OP2, fop2, fop2_ascii, struct_3i, endian, skips):
+
+def _write_result_tables(obj: OP2, op2_file, fop2_ascii,
+                         struct_3i,
+                         endian, skips: set[str]) -> tuple[int, list[str]]:
     """writes the op2 result tables"""
+    table_names_found = []
     date = obj.date
-    res_categories2 = defaultdict(list)
+    log = obj.log
     table_order = [
-        'OUGV1', 'OPHIG',
-        'BOUGV1', 'BOPHIG', 'BOPHIGF',
-        'OUPV1', 'OUXY1', 'OUXY2', 'OPHSA',
-        'TOUGV1', 'OTEMP1',
-        'OUG1',
-        'OUGV1PAT',
-        'BOPG1',
+        'OUGV1', 'BOUGV1',
+        'OUGF1', 'OUG1F', 'BOUGF1',
+        'TOUGV1', 'OTEMP1', 'OUG1S',
 
+        'OAG1', 'OVG1', 'OUG1', 'OUGV1PAT',
+
+        # eigenvectors, basic eigenvectors, basic fluid eigenvectors
+        'OPHIG', 'BOPHIG', 'BOPHIGF',
+        # eigenvectors in SOL 401 - NX
+        'OUXY1', 'OUXY2', 'OPHSA',
+
+        # spc/mpc forces
         'OQG1',
         'OQGV1',
         'OQP1',
         'OQMG1',
-        'OPGV1', 'OPG1', 'OPNL1',
+        # contact/glue forces
+        'OQGCF1', 'OQGGF1',
+        'OBC1',
+        # load vectors
+        'OPG1', 'BOPG1', 'OPGV1', 'OPNL1',
 
         # ---------------
         # random displacement-style tables
-        'OUGATO1', 'OUGCRM1', 'OUGNO1', 'OUGPSD1', 'OUGRMS1', # disp/vel/acc/eigenvector
+        'OUGATO1', 'OUGCRM1', 'OUGNO1', 'OUGPSD1', 'OUGRMS1',  # disp/vel/acc/eigenvector
         'OUGATO2', 'OUGCRM2', 'OUGNO2', 'OUGPSD2', 'OUGRMS2',
 
-        'OVGATO1', 'OVGCRM1', 'OVGNO1', 'OVGPSD1', 'OVGRMS1', # velocity
+        'OVGATO1', 'OVGCRM1', 'OVGNO1', 'OVGPSD1', 'OVGRMS1',  # velocity
         'OVGATO2', 'OVGCRM2', 'OVGNO2', 'OVGPSD2', 'OVGRMS2',
 
-        'OAGATO1', 'OAGCRM1', 'OAGNO1', 'OAGPSD1', 'OAGRMS1', # acceleration
+        'OAGATO1', 'OAGCRM1', 'OAGNO1', 'OAGPSD1', 'OAGRMS1',  # acceleration
         'OAGATO2', 'OAGCRM2', 'OAGNO2', 'OAGPSD2', 'OAGRMS2',
 
-        'OQGATO1', 'OQGCRM1', 'OQGNO1', 'OQGPSD1', 'OQGRMS1', # spc/mpc forces
+        'OQGATO1', 'OQGCRM1', 'OQGNO1', 'OQGPSD1', 'OQGRMS1',  # spc/mpc forces
         'OQGATO2', 'OQGCRM2', 'OQGNO2', 'OQGPSD2', 'OQGRMS2',
 
-        'OQMATO1', 'OQMCRM1', 'OQMNO1', 'OQMPSD1', 'OQMRMS1', # mpc forces
+        'OQMATO1', 'OQMCRM1', 'OQMNO1', 'OQMPSD1', 'OQMRMS1',  # mpc forces
         'OQMATO2', 'OQMCRM2', 'OQMNO2', 'OQMPSD2', 'OQMRMS2',
 
-        'OPGATO1', 'OPGCRM1', 'OPGNO1', 'OPGPSD1', 'OPGRMS1', # load vector
+        'OPGATO1', 'OPGCRM1', 'OPGNO1', 'OPGPSD1', 'OPGRMS1',  # load vector
         'OPGATO2', 'OPGCRM2', 'OPGNO2', 'OPGPSD2', 'OPGRMS2',
+
+        'OPRATO1', 'OPRCRM1', 'OPRNO1', 'OPRPSD1', # pressure
 
         'RADCONS', 'RADEATC', 'RADEFFM',
 
         # ---------------
         # force/heat flux
-        'DOEF1', 'HOEF1',
-        'OEF1', 'OEF1X',
+        'HOEF1',
+        'OEF1', 'OEF1X', 'OEF2',
         'OEFATO1', 'OEFCRM1', 'OEFNO1', 'OEFPSD1', 'OEFRMS1',
         'OEFATO2', 'OEFCRM2', 'OEFNO2', 'OEFPSD2', 'OEFRMS2',
 
         # ---------------
         # stress
         'OESNLXD', 'OESNLXR', 'OESNL1X',
-        'OES1', 'OES1X', 'OES1X1', 'OES1C', 'OESVM1',
+        'OES1', 'OES1X', 'OES1X1', 'OES1C', 'OESVM1', 'OESVM1C',
+        'OSTR1EL',
+        'OES1A',
         'OES2', 'OESVM2',
         'OESCP',
+        'OESNL1',
 
         'OCRPG', 'OCRUG',
-        'OESATO1', 'OESCRM1', 'OESNO1', 'OESPSD1', 'OESRMS1',
+        'OESATO1', 'OESCRM1', 'OESNO1', 'OESPSD1', 'OESRMS1', 'OESXNO1', 'OESXRMS1',
         'OESATO2', 'OESCRM2', 'OESNO2', 'OESPSD2', 'OESRMS2',
-        'OESXRMS1',
 
         # ---------------
         #strain
-
-        'OSTR1', 'OSTR1X', 'OSTR1C', 'OSTRVM1',
+        'OSTR1', 'OSTR1X', 'OSTR1C', 'OSTRVM1', 'OSTRVM1C',
         'OSTR2',
         'OESTRCP',
 
         'OSTRATO1', 'OSTRCRM1', 'OSTRNO1', 'OSTRPSD1', 'OSTRRMS1',
         'OSTRATO2', 'OSTRCRM2', 'OSTRNO2', 'OSTRPSD2', 'OSTRRMS2',
         'OSTRVM2',
+        # ---------------
+        # shock response spectra
+        'OUPV1',  # displacment
+        'DOEF1',  # force
+        'DOES1',  # stress
 
         # ---------------
-
         'OGPFB1',
-        'ONRGY1',
-        'OGS1',
-        'OEFIT',
+        'ONRGY', 'ONRGY1',
+        'OGS1', 'OGSTR1',
+        'OEFIT', 'OESRT',
+        'OSPDS1', 'OSPDSI1',
+        'OSLIDE1', 'OSLIDEG1',
+        'OBOLT1',
+        'RAFCONS', 'RAFEATC',
+        'RAGCONS', 'RAGEATC',
+        'RANCONS', 'RANEATC',
     ]
-    skip_results = ['gpdt', 'bgpdt', 'eqexin', 'psds']
+    skip_results = {'gpdt', 'bgpdt', 'eqexin', 'psds', 'monitor1', 'monitor3', 'cstm'}
+
+    sort_subcases = True
+    subcases_set = set([])
+    res_categories2 = defaultdict(list)
     for table_type in obj.get_table_types():
         if table_type in skip_results or table_type in skips or table_type.startswith('responses.'):
             continue
@@ -207,119 +410,261 @@ def _write_result_tables(obj: OP2, fop2, fop2_ascii, struct_3i, endian, skips):
         if not isinstance(res_dict, dict):
             raise TypeError(table_type)
 
-        for unused_key, res in res_dict.items():
-            if hasattr(res, 'table_name_str'): # params
+        for subcase_key, res in res_dict.items():
+            #print(subcase_key)
+            #print(res)
+            subcase_id = _fix_subcase_id(subcase_key, res)
+            if hasattr(res, 'table_name_str') and res.table_name_str not in {'LAMA'}: # params
                 #print(table_type)
-                res_categories2[res.table_name_str].append(res)
+                subcases_set.add(subcase_id)
+                if sort_subcases:
+                    res_categories2[(subcase_id, res.table_name_str)].append(res)
+                else:  # pragma: no cover
+                    res_categories2[res.table_name_str].append(res)
+            else:
+                # grid_point
+                #print(table_type, unused_key)
+                #print(res)
+                class_name = res.__class__.__name__
+                log.debug(class_name)
+                if class_name not in ['GridPointWeight', 'PARAM',
+                                     'RealEigenvalues', 'ComplexEigenvalues']:
+                    log.warning(class_name)
+            del subcase_id
 
-    for table_name, results in sorted(res_categories2.items()):
-        assert table_name in table_order, table_name
+    subcases_list = list(subcases_set)
+    if not sort_subcases:
+        for table_name, results in sorted(res_categories2.items()):
+            assert table_name in table_order, table_name
 
     total_case_count = 0
-    pretables = ['LAMA', 'BLAMA', ] # 'CLAMA'
+    pretables = ['LAMA', 'BLAMA', ]  # 'CLAMA'
+    eigenvalues_list = ['eigenvalues', 'eigenvalues_fluid']
+    if sort_subcases:
+        for key in eigenvalues_list:
+            if key in skips:
+                continue
+            slot_dict = getattr(obj, key)  # obj.eigenvalues
+            for unused_title, eigenvalue in slot_dict.items():
+                subcase_id = eigenvalue.isubcase  # TODO: not 100%
+                subcases_set.add(subcase_id)
+                res_categories2[(subcase_id, eigenvalue.table_name)].append(eigenvalue)
+    else:  # pragma: no cover
+        for key in eigenvalues_list:
+            if key in skips:
+                continue
+            slot_dict = getattr(obj, key)  # obj.eigenvalues
+            for unused_title, eigenvalue in slot_dict.items():
+                res_categories2[eigenvalue.table_name].append(eigenvalue)
+        # if 'eigenvalues_structure' not in skips:
+        #     for unused_title, eigenvalue in obj.eigenvalues_structure.items():
+        #         res_categories2[eigenvalue.table_name].append(eigenvalue)
+    # res_categories2 is a dictionary:
+    #  - key: table_name
+    #  - value:  displacment/stress/etc.
 
-    if 'eigenvalues' not in skips:
-        for unused_title, eigenvalue in obj.eigenvalues.items():
-            res_categories2[eigenvalue.table_name].append(eigenvalue)
-    if 'eigenvalues_fluid' not in skips:
-        for unused_title, eigenvalue in obj.eigenvalues_fluid.items():
-            res_categories2[eigenvalue.table_name].append(eigenvalue)
+    skip_tables = [
+        'LAMA', 'BLAMA',
+        #'OGPFB1',
+        #'OESVM1', 'OESVM1C',
+        #'OSTRVM1',
+        #'OEF1X',
+        #'OPG1',
+        #'OQG1',
+        #'OUGV1',
+    ]
 
-    for table_name in pretables + table_order:
-        if table_name not in res_categories2:
-            continue
-        results = res_categories2[table_name]
-        itable = -1
-        case_count = 0
-        for result in results:
-            element_name = ''
-            new_result = True
-            if hasattr(result, 'element_name'):
-                element_name = ' - ' + result.element_name
-                #print(element_name)
+    footer = [4, 0, 4]
+    footer_bytes = struct_3i.pack(*footer)
 
-            if hasattr(result, 'write_op2'):
-                fop2_ascii.write('-' * 60 + '\n')
-                #if hasattr(result, 'is_bilinear') and result.is_bilinear():
-                    #obj.log.warning("  *op2 - %s (%s) not written" % (
-                        #result.__class__.__name__, result.element_name))
-                    #continue
-                isubcase = ''
-                if hasattr(result, 'isubcase'): # no for eigenvalues
-                    isubcase = result.isubcase
-                try:
-                    #print(' %-6s - %s - isubcase=%s%s; itable=%s %s' % (
-                        #table_name, result.__class__.__name__,
-                        #isubcase, element_name, itable, new_result))
-                    itable = result.write_op2(fop2, fop2_ascii, itable, new_result,
-                                              date, is_mag_phase=False, endian=endian)
-                except:
-                    print(' %s - isubcase=%s%s' % (result.__class__.__name__,
-                                                   isubcase, element_name))
-                    raise
-            elif hasattr(result, 'element_name'):
-                if result.element_name in ['CBAR', 'CBEND']:
-                    obj.log.warning('skipping:\n%s' % result)
+    struct_9i = Struct(endian + b'9i')
+    # print(res_categories2)
+    if sort_subcases:
+        for subcase in subcases_list:
+            for table_name in pretables + table_order:
+                subcase_table_name = (subcase, table_name)
+                if subcase_table_name not in res_categories2:
+                    # no LAMA table in a static run
                     continue
-            else:
-                raise NotImplementedError("  *op2 - %s not written" % (
-                    result.__class__.__name__))
-                #obj.log.warning("  *op2 - %s not written" % result.__class__.__name__)
-                #continue
+                if table_name in skip_tables:
+                    log.warning(f'skipping table={table_name}')
+                    continue
+                results = res_categories2[subcase_table_name]
+                case_count = _write_results_for_table(
+                    op2_file, fop2_ascii,
+                    table_name, results,
+                    table_names_found, endian, log,
+                    struct_9i, date)
+                #print(f'op2_writer close? case_count={case_count} table_name={table_name}')
+                if case_count:
+                    #print(f'closing table_name={table_name}')
+                    # print(result.table_name, itable)
+                    # print('res_category_name=%s case_count=%s'  % (res_category_name, case_count))
+                    # close off the result - [4, 0, 4]
+                    op2_file.write(footer_bytes)
+                    fop2_ascii.write('close_a = %s\n' % footer)
+                    fop2_ascii.write('---------------\n')
+                    total_case_count += case_count
 
-            case_count += 1
-            header = [
-                4, itable, 4,
-                4, 1, 4,
-                4, 0, 4,
-            ]
-            #print('writing itable=%s' % itable)
-            assert itable is not None, '%s itable is None' % result.__class__.__name__
-            fop2.write(pack(b'9i', *header))
-            fop2_ascii.write('footer2 = %s\n' % header)
-            new_result = False
-
-        #assert case_count > 0, case_count
-        if case_count:
-            #print(result.table_name, itable)
-            #print('res_category_name=%s case_count=%s'  % (res_category_name, case_count))
-            # close off the result
-            footer = [4, 0, 4]
-            fop2.write(struct_3i.pack(*footer))
-            fop2_ascii.write('close_a = %s\n' % footer)
-            fop2_ascii.write('---------------\n')
-            total_case_count += case_count
-        total_case_count += case_count
+    else:  # pragma: no cover
+        for table_name in pretables + table_order:
+            if table_name not in res_categories2:
+                # no LAMA table in a static run
+                continue
+            if table_name in skip_tables:
+                log.warning(f'skipping table={table_name}')
+                continue
+            results = res_categories2[table_name]
+            case_count = _write_results_for_table(
+                op2_file, fop2_ascii,
+                table_name, results,
+                table_names_found, endian, log,
+                struct_9i, date)
+            # print(f'op2_writer close? case_count={case_count} table_name={table_name}')
+            if case_count:
+                # print(f'closing table_name={table_name}')
+                # print(result.table_name, itable)
+                # print('res_category_name=%s case_count=%s'  % (res_category_name, case_count))
+                # close off the result - [4, 0, 4]
+                op2_file.write(footer_bytes)
+                fop2_ascii.write('close_a = %s\n' % footer)
+                fop2_ascii.write('---------------\n')
+                total_case_count += case_count
 
     #if total_case_count == 0:
         #raise FatalError('total_case_count = 0')
-    # close off the op2
-    footer = [4, 0, 4]
-    fop2.write(struct_3i.pack(*footer))
+
+    # close off the op2 - [4, 0, 4]
+    op2_file.write(footer_bytes)
     fop2_ascii.write('close_b = %s\n' % footer)
-    fop2.close()
+    op2_file.close()
     fop2_ascii.close()
-    return total_case_count
+    return total_case_count, table_names_found
 
-def write_op2_header(obj, fop2, fop2_ascii, struct_3i, post: int=-1, endian: bytes=b'<'):
+
+def _write_results_for_table(op2_file: BinaryIO, fop2_ascii: TextIO,
+                             table_name: str, results: list,
+                             table_names_found: list[str],
+                             endian: bytes, log: SimpleLogger,
+                             struct_9i,
+                             date: tuple[int, int, int]) -> int:
+    # print(f'op2_writer: nresults = {len(results)}')
+    itable = -1
+    case_count = 0
+    for result in results:
+        # print('  ', result.class_name)
+        element_name = ''
+        new_result = True
+        if hasattr(result, 'element_name'):
+            element_name = ' - ' + result.element_name
+            #print(element_name)
+
+        #print(result.class_name)
+        if hasattr(result, 'write_op2'):
+            if result.table_name not in table_names_found:
+                table_names_found.append(result.table_name)
+
+            fop2_ascii.write('-' * 60 + '\n')
+            #if hasattr(result, 'is_bilinear') and result.is_bilinear():
+                #obj.log.warning("  *op2 - %s (%s) not written" % (
+                    #result.__class__.__name__, result.element_name))
+                #continue
+            isubcase = ''
+            if hasattr(result, 'isubcase'):  # no for eigenvalues
+                isubcase = result.isubcase
+                #print(f' {result.__class__.__name__} - isubcase={isubcase}')
+
+            try:
+                #print(' %-6s - %s - isubcase=%s%s; itable=%s %s' % (
+                    #table_name, result.__class__.__name__,
+                    #isubcase, element_name, itable, new_result))
+                itable = result.write_op2(op2_file, fop2_ascii, itable, new_result,
+                                          date, is_mag_phase=False, endian=endian)
+            except Exception:
+                print(f' {result.__class__.__name__} - isubcase={isubcase}{element_name}')
+                raise
+        elif hasattr(result, 'element_name'):
+            if result.element_name in ['CBAR', 'CBEND']:
+                log.warning('skipping:\n%s' % result)
+                continue
+            #log.warning('????:\n%s' % result)
+        else:
+            raise NotImplementedError(f'  *op2 - {result.__class__.__name__} not written')
+            log.warning(f'  *op2 - {result.__class__.__name__} not written')
+            #continue
+
+        case_count += 1
+        header = [
+            4, itable, 4,
+            4, 1, 4,
+            4, 0, 4,
+        ]
+        #print('writing itable=%s' % itable)
+        assert itable is not None, '%s itable is None' % result.__class__.__name__
+        op2_file.write(struct_9i.pack(*header))
+        fop2_ascii.write('footer2 = %s\n' % header)
+        new_result = False
+
+    #assert case_count > 0, case_count
+    # print(f'op2_writer: itable={itable}; case_count={case_count}')
+    return case_count
+
+def _fix_subcase_id(key: int | tuple[Any], res: Any) -> int:
+    """
+    The subcase id may be inconsistent between the op2 result object
+    and the key. The key takes priority to make doing a load case
+    combination easier.
+    """
+    subcase_id = key
+    if isinstance(key, tuple):
+        subcase_id = key[0]
+    res.isubcase = subcase_id
+    return subcase_id
+
+
+def write_op2_header(model: OP2, op2_file, fop2_ascii,
+                     struct_3i: Struct,
+                     nastran_revision: str='',
+                     post: int=-1, endian: bytes=b'<'):
     """writes the op2 header"""
-    if post == -1:
-    #_write_markers(op2, op2_ascii, [3, 0, 7])
-        fop2.write(struct_3i.pack(*[4, 3, 4,]))
-        tape_code = b'NASTRAN FORT TAPE ID CODE - '
-        fop2.write(pack(endian + b'7i 28s i', *[4, 1, 4,
-                                                4, 7, 4,
-                                                28, tape_code, 28]))
+    is_nx = model.is_nx
+    is_msc = model.is_msc
+    is_optistruct = model.is_optistruct
+    if model.date == (1, 1, 2000):  # (7, 24, 2020)
+        today = datetime.datetime.today()
+        model.date = (today.month, today.day, today.year)
 
-        nastran_version = b'NX8.5   ' if obj.is_nx else b'XXXXXXXX'
-        fop2.write(pack(endian + b'4i 8s i', *[4, 2, 4,
-                                               #4, 2, 4,
-                                               #4, 1, 4,
-                                               #4, 8, 4,
-                                               8, nastran_version, 8]))
-        fop2.write(pack(endian + b'6i', *[4, -1, 4,
-                                          4, 0, 4,]))
+    if post == -1:
+        #_write_markers(op2_file, op2_ascii, [3, 0, 7])
+        op2_file.write(struct_3i.pack(*[4, 3, 4,]))
+        tape_code = b'NASTRAN FORT TAPE ID CODE - '
+        if is_nx:
+            op2_file.write(pack(endian + b'7i 28s i', *[4, 1, 4,
+                                                        4, 7, 4,
+                                                        28, tape_code, 28]))
+            if nastran_revision in {None, ''}:
+                nastran_revision = '8.5'
+            nastran_version_str = f'NX{nastran_revision:6s}'
+            nastran_version = nastran_version_str.encode('utf8')
+
+        elif is_msc or is_optistruct:
+            day, month, year = model.date
+            op2_file.write(pack(endian + b'9i 28s i', *[12,
+                                                        day, month, year - 2000,
+                                                        12, 4, 7, 4,
+                                                        28, tape_code, 28]))
+            nastran_version = b'XXXXXXXX'
+        else:  # pragma: no cover
+            raise NotImplementedError(model._nastran_format)
+
+        op2_file.write(pack(endian + b'4i 8s i', *[4, 2, 4,
+                                                   #4, 2, 4,
+                                                   #4, 1, 4,
+                                                   #4, 8, 4,
+                                                   8, nastran_version, 8]))
+        op2_file.write(pack(endian + b'6i', *[4, -1, 4,
+                                              4, 0, 4,]))
     elif post == -2:
-        _write_markers(fop2, fop2_ascii, [2, 4])
-    else:
-        raise RuntimeError('post = %r; use -1 or -2' % post)
+        _write_markers(op2_file, fop2_ascii, [2, 4])
+    else:  # pragma: no cover
+        raise RuntimeError(f'post = {post:d}; use -1 or -2')

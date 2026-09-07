@@ -1,9 +1,12 @@
 """defines a list of cards used by the bdf reader"""
+MAX_INT = 99_999_999
+#MAX_32_BIT_INT = 99999999
+MAX_32_BIT_INT = 2_147_483_647
 
 #CASE_CONTROL_CARDS = CASE_CONTROL_INT_CARDS.union(CASE_CONTROL_PLOTTABLE_TYPES)
 
 # case control cards that are also bulk data cards
-FLAGGED_CARDS = {
+CASE_BULK_CARDS = {
     # of the form 'LOAD = 5', so 'PARAM,POST,-1' doesn't count
     'LOAD', 'SPC', 'FREQ', 'MPC',  # case control + bulk data cards
     'FORCE', 'TRIM', 'DESVAR', 'TSTEP', 'TSTEPNL', 'NSM', 'CLOAD', 'SUPORT1',
@@ -12,6 +15,7 @@ FLAGGED_CARDS = {
     'ACCEL',  # short for ACCELERATION
     # 'PARAM', # equals sign is problematic
 }
+FLAGGED_CARDS = CASE_BULK_CARDS
 
 # we're going to say that all these cards are are BDF cards, not that they are
 # all read
@@ -49,7 +53,7 @@ BULK_DATA_CARDS = {
     'CBUSH', 'CBUSH1D', 'CBUSH2D',
     # dampers
     'CDAMP1', 'CDAMP2', 'CDAMP3', 'CDAMP4', 'CDAMP5',
-    'CFAST',
+    'CFAST', 'CWELD',
 
     'CBAR', 'CBARAO', 'BAROR',
     'CROD', 'CTUBE', 'CBEAM', 'CBEAM3', 'CONROD', 'CBEND', 'BEAMOR',
@@ -61,7 +65,7 @@ BULK_DATA_CARDS = {
     'SNORM',
 
     'CTETRA', 'CPYRAM', 'CPENTA', 'CHEXA',
-    'CIHEX1', 'CIHEX2',
+    #'CIHEX1', 'CIHEX2', 'CHEXA1', 'CHEXA2', # nastran95-removed
     'CSHEAR', 'CVISC', 'CRAC2D', 'CRAC3D',
     'CGAP',
     'GENEL',
@@ -70,11 +74,12 @@ BULK_DATA_CARDS = {
     'RBAR', 'RBAR1', 'RBE1', 'RBE2', 'RBE3', 'RROD', 'RSPLINE', 'RSSCON',
 
     ## plotels
-    'PLOTEL',
+    'PLOTEL', 'PLOTEL3', 'PLOTEL4', 'PLOTEL6', 'PLOTEL8',
+    'PLOTTET', 'PLOTPYR', 'PLOTPEN', 'PLOTHEX',
 
     ## properties
     'PMASS',
-    'PELAS', 'PGAP', 'PFAST', 'PLPLANE', 'PPLANE',
+    'PELAS', 'PGAP', 'PFAST', 'PWELD', 'PLPLANE', 'PPLANE',
     'PBUSH', 'PBUSH1D',
     'PDAMP', 'PDAMP5',
     'PROD', 'PBAR', 'PBARL', 'PBEAM', 'PTUBE', 'PBCOMP', 'PBRSECT', 'PBEND',
@@ -83,8 +88,8 @@ BULK_DATA_CARDS = {
 
     'PSHELL', 'PCOMP', 'PCOMPG', 'PSHEAR',
     'PSOLID', 'PLSOLID', 'PVISC', 'PRAC2D', 'PRAC3D',
-    'PIHEX', 'PCOMPS',
-    # PQUAD4
+    'PCOMPS',
+    # PQUAD4, PIHEX
 
     # axixsymmetric
     'CCONEAX', # element
@@ -109,7 +114,7 @@ BULK_DATA_CARDS = {
     'MATG', 'MATHE', 'MATHP',
 
     ## Material dependence - MATT1/MATT2/etc.
-    'MATT1', 'MATT2', 'MATT3', 'MATT4', 'MATT5', 'MATT8', 'MATT9',
+    'MATT1', 'MATT2', 'MATT3', 'MATT4', 'MATT5', 'MATT8', 'MATT9', 'MATT11',
     'MATS1', #'MATS3', 'MATS8',
     # 'MATHE'
     'EQUIV',
@@ -146,10 +151,10 @@ BULK_DATA_CARDS = {
     'GRAV', 'ACCEL', 'ACCEL1',
     'PLOAD', 'PLOAD1', 'PLOAD2', 'PLOAD4',
     'PLOADX1', 'RFORCE', 'RFORCE1',
-    'GMLOAD', 'SPCD', 'DEFORM',
+    'SPCD', 'DEFORM',
 
-    # axisymmetric
-    'PRESAX',
+    # axisymmetric - removed
+    # 'PRESAX',
 
     #thermal
     'QVOL',
@@ -179,10 +184,14 @@ BULK_DATA_CARDS = {
     'CSSCHD',  ## csschds
     'DIVERG',  ## divergs
 
+    ## msgmesh
+    # 'GMCORD', # coords
+    # 'GMLOAD', # loads
+    # 'CGEN', # elements
+
     ## coords
     'CORD1R', 'CORD1C', 'CORD1S',
     'CORD2R', 'CORD2C', 'CORD2S',
-    'GMCORD',
 
     # temperature cards
     'TEMP', 'TEMPD', 'TEMPB3', 'TEMPAX',
@@ -223,7 +232,7 @@ BULK_DATA_CARDS = {
     'DSCREEN',
 
     # sets
-    'SET1', 'SET3',  ## sets
+    'SET1', 'SET2', 'SET3',  ## sets
     'ASET', 'ASET1',  ## asets
     'OMIT', 'OMIT1',  ## omits
     'BSET', 'BSET1',  ## bsets
@@ -304,7 +313,7 @@ BULK_DATA_CARDS = {
 
     ## ???
     'ACMODL', 'PANEL', 'SWLDPRM',
-    'CWELD', 'PWELD', 'PWSEAM', 'CWSEAM', 'CSEAM', 'PSEAM', 'DVSHAP', 'BNDGRID',
+    'PWSEAM', 'CWSEAM', 'CSEAM', 'PSEAM', 'DVSHAP', 'BNDGRID',
     'MODTRAK', 'DSCONS', 'DVAR', 'DVSET', 'DYNRED',
     'BNDFIX', 'BNDFIX1',
     'AEFORCE', 'UXVEC', 'GUST2',
@@ -316,12 +325,13 @@ BULK_DATA_CARDS = {
 
 NASA_CARDS = {
     # axisymmetric
-    'CCONEAX', 'AXIC', 'MOMAX', 'PCONEAX', 'POINTAX', 'RINGAX',
+    #'CCONEAX', 'AXIC', 'MOMAX', 'PCONEAX', 'POINTAX', 'RINGAX',
     'CTRAPAX', 'PRESAX', 'PTRIAAX', 'CTRIAAX',
 
     # fluid
-    'AXIF', 'CFLUID2', 'CFLUID3', 'CFLUID4', 'RINGFL',
-    'BDYLIST', 'FSLIST', 'FLSYM', 'GRIDB',
+    #'AXIF',
+    'CFLUID2', 'CFLUID3', 'CFLUID4',  #'RINGFL',
+    'BDYLIST', 'FSLIST', 'FLSYM',  #'GRIDB',
     'PRESPT',
 
     # slot
@@ -347,28 +357,31 @@ NASA_CARDS = {
     'CTRIM6',
     'CTRIARG',
 
-    'CTRIA1', 'CTRIA2', 'CQUAD1', 'CQUAD2',
-    'CTRMEM',
-    'CQDMEM', 'CQDMEM1', 'CQDMEM2',
+    # nastran95
+    #'CTRIA1', 'CTRIA2', 'CQUAD1', 'CQUAD2',
+    #'CTRMEM',
+    #'CQDMEM', 'CQDMEM1', 'CQDMEM2',
     'CTRIA3', 'CQUAD4',
 
-    'CHEXA1', 'CHEXA2', 'CIHEX1', 'CIHEX2', 'CIHEX3',
+    # nastran95-removed
+    #'CHEXA1', 'CHEXA2', 'CIHEX1', 'CIHEX2', 'CIHEX3',
+
     'CWEDGE', 'CTETRA',
     'GENEL', 'DMI', 'DMIG', 'DTI', 'PLOTEL',
 
     # rigid
-    'CRIGD1', 'CRIGD2', 'CRIGD3', 'CRIGDR',
+    #'CRIGD1', 'CRIGD2', 'CRIGD3', 'CRIGDR',
     'PBAR', 'PROD', 'PSHEAR', 'PTUBE',
-    'PTRIM6',
-    'PTRIA1', 'PTRIA2', 'PQUAD1', 'PQUAD2',
-    'PSHELL', 'PCOMP', 'PCOMP1', 'PCOMP2',
+    #'PTRIM6',
+    #'PTRIA1', 'PTRIA2', 'PQUAD1', 'PQUAD2',
+    'PSHELL', 'PCOMP', #'PCOMP1', 'PCOMP2',
 
-    'PTRMEM',
-    'PQDMEM', 'PQDMEM1', 'PQDMEM2',
-    'PIHEX',
+    #'PTRMEM',
+    #'PQDMEM', 'PQDMEM1', 'PQDMEM2',
+    #'PIHEX',
 
     # no idea...
-    'CTRSHL', 'PTRSHL',
+    #'CTRSHL', 'PTRSHL',
     'CELBOW', 'PELBOW',
     'CIS2D8', 'PIS2D8',
     'CTRPLT1', 'PTRPLT1',

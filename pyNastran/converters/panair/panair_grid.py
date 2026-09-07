@@ -14,8 +14,13 @@ from pyNastran.converters.panair.panair_grid_patch import (
     PanairPatch, PanairWakePatch, print_float)
 from pyNastran.converters.panair.assign_type import (
     integer, double, integer_or_blank, double_or_blank, fortran_value)
-from cpylog import get_logger2
 from pyNastran.utils import check_path
+from cpylog import __version__ as CPYLOG_VERSION
+if CPYLOG_VERSION > '1.6.0':
+    from cpylog import get_logger
+else:  # pragma: no cover
+    from cpylog import get_logger2 as get_logger
+
 
 #from pyNastran.utils import list_print
 
@@ -105,7 +110,7 @@ class PanairGrid:
         self.symmetry_section = ''
 
         self.msg = ''
-        self.log = get_logger2(log, debug=debug)
+        self.log = get_logger(log, debug)
 
     def write_plot3d(self, p3dname, is_binary=False, is_iblank=False):
         assert not is_binary, is_binary
@@ -286,17 +291,19 @@ class PanairGrid:
 
         return points
 
-    def add_wake_patch(self, network_name, options, xyz):
+    def add_wake_patch(self, network_name: str, options, xyz: np.ndarray) -> PanairWakePatch:
         patch = PanairWakePatch(self.nnetworks, network_name, options, xyz, self.log)
         self.msg += patch.process()
         self.patches[patch.inetwork] = patch  # deepcopy?
         self.nnetworks += 1
+        return patch
 
-    def add_patch(self, network_name, kt, cp_norm, xyz):
+    def add_patch(self, network_name: str, kt: int, cp_norm: int, xyz: np.ndarray) -> PanairPatch:
         patch = PanairPatch(self.nnetworks, network_name, kt, cp_norm, xyz, self.log)
         self.msg += patch.process()
         self.patches[patch.inetwork] = patch  # deepcopy?
         self.nnetworks += 1
+        return patch
 
     def find_patch_by_name(self, network_name):
         names = []
@@ -400,7 +407,7 @@ class PanairGrid:
         if cp_norm:
             self.log.debug("nnetworks=%s cp_norm=%s" % (nnetworks, cp_norm))
         else:
-            self.log.debug("nnetworks=%s" % (nnetworks))
+            self.log.debug("nnetworks=%s" % nnetworks)
         #print("nnetworks=%s cp_norm=%s" % (nnetworks, cp_norm))
 
         n = 3
@@ -573,14 +580,14 @@ class PanairGrid:
         self.icontp = double(section[1][30:40], 1.0)
         self.icontp = 1.0
         # 1.0 outputs control pt location, upper surface unit normals, control point
-        #     diagnositc data, control pt maps and singularity parameter maps
+        #     diagnostic data, control pt maps and singularity parameter maps
         # 2.0 add additional control point map for each network
 
         self.ibconp = double(section[1][40:50], 'ibconp')
         #self.ibconp = 0.0
-        # 1.0 outputs boundary condition coeffs, diagnositc data,
+        # 1.0 outputs boundary condition coeffs, diagnostic data,
         #     boundary condition maps, control point maps,
-        #     and singularity paramter maps
+        #     and singularity parameter maps
 
         self.iedgep = double(section[1][50:60], 'iedgep')
         self.iedgep = 0.0
@@ -676,7 +683,7 @@ class PanairGrid:
             try:
                 patch = self.find_patch_by_name(trailed_panel)
             except KeyError:
-                self.log.debug('trailed_panel isnt defined...trailed_panel=%r' % (trailed_panel))
+                self.log.debug(f'trailed_panel is not defined...trailed_panel={trailed_panel!r}')
                 raise
 
             (unused_p1, xyz1) = patch.get_edge(edge_number)
@@ -691,7 +698,7 @@ class PanairGrid:
                 xyz[1, :, 2] = xyz1[:, 2]
             else:
                 #alphaC, betaC
-                raise NotImplementedError('twake isnt supported')
+                raise NotImplementedError('twake is not supported')
             #self.log.debug("--xyz---")
             #self.log.debug(xyz)
             #nm = integer(section[n-1][0 :10], 'nm')
@@ -699,6 +706,7 @@ class PanairGrid:
             options = [kt, cp_norm, matchw, trailed_panel, edge_number, xwake,
                        twake]
             patch = self.add_wake_patch(network_name, options, xyz)
+            del patch
             self.log.info('----------------------------')
             n += 1
         return True
@@ -810,14 +818,14 @@ class PanairGrid:
         valid_maps = section_map.keys()
 
         for section, section_name in zip(sections, section_names):  # 1st line
-            self.msg += '  $%s\n' % (section_name)
+            self.msg += f'  ${section_name}\n'
             #print "section = ", len(section)
             #self.log.debug("section_name=%s" % (section_name))
             if section_name in valid_maps:
                 #self.log.debug("section[0] = %s" % (section[0]))
                 function_map = section_map[section_name]
                 ran = function_map(section)
-                assert ran, '%s didnt run' % (section_name)
+                assert ran, f'{section_name} didnt run'
                 #self.log.debug("")
             if section_name == 'end':
                 break

@@ -1,8 +1,11 @@
-from typing import List
+from typing import Optional
+
 import numpy as np
 from numpy import zeros
 
-from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.utils.numpy_utils import integer_types, integer_float_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype, combination_inplace
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
 
@@ -26,10 +29,10 @@ class RealBushArray(OES_Object):
         return False
 
     @property
-    def nnodes_per_elements(self) -> int:
+    def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         if self.table_name not in ['OESRMS2', 'OESNO2', 'OSTRRMS2', 'OSTRNO2']:
             self.ielement = 0
@@ -37,47 +40,46 @@ class RealBushArray(OES_Object):
     def _get_msgs(self):
         raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
 
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
-        #return headers
-
     def build(self):
         """sizes the vectorized attributes of the RealBushArray"""
-        #print("self.ielement =", self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
-
+        if self.is_built:
+            return
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
         assert self.nelements > 0, 'nelements=%s' % self.nelements
         assert self.ntotal > 0, 'ntotal=%s' % self.ntotal
 
-        if self.element_type == 102:
-            #nnodes_per_element = 1
-            pass
-        else:
-            raise NotImplementedError(self.element_type)
-
-        # buggy MSC 2005 (was this ever fixed?)
-        # NX doesn't have this bug
-        if self.table_name in ['OESRMS2', 'OESNO2', 'OSTRRMS2', 'OSTRNO2']:
-            self.ntotal = self.nelements
+        assert self.element_type == 102, self.element_type
+        #nnodes_per_element = 1
 
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        _times = zeros(self.ntimes, dtype=dtype)
-        element = zeros(self.ntotal, dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
 
         # [tx, ty, tz, rx, ry, rz]
-        data = zeros((self.ntimes, self.ntotal, 6), dtype='float32')
+        if self.is_sort1:
+            ntimes = self.ntimes
+            ntotal = self.ntotal
+        else:
+            ntimes = self.ntotal
+            ntotal = self.ntimes
+            #print('BUSH SORT2:', ntimes, ntotal)
+
+        # buggy MSC 2005 (was this ever fixed?)
+        # NX doesn't have this bug
+        if self.table_name in ['OESRMS2', 'OESNO2', 'OSTRRMS2', 'OSTRNO2']:
+            print('flipping the order...')
+            ntimes, ntotal = ntotal, ntimes
+
+        _times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        element = np.zeros(ntotal, dtype=idtype)
+        data = np.zeros((ntimes, ntotal, 6), dtype=fdtype)
 
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
@@ -90,6 +92,17 @@ class RealBushArray(OES_Object):
             self._times = _times
             self.element = element
             self.data = data
+
+    def linear_combination(self, factor: integer_float_types,
+                           data: Optional[np.ndarray]=None,
+                           update: bool=True) -> None:
+        # [tx, ty, tz, rx, ry, rz]
+        combination_inplace(self.data, data, factor)
+        if update:
+            self.update_data_components()
+
+    def update_data_components(self):
+        return
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -105,9 +118,9 @@ class RealBushArray(OES_Object):
             #          ry    0.0  0.0
             #          rz    0.0  0.0
             #21        tx    0.0  0.0
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
         else:
             # >25.0
@@ -167,6 +180,7 @@ class RealBushArray(OES_Object):
 
     def add_sort1(self, dt, eid, tx, ty, tz, rx, ry, rz):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.itotal] = eid
@@ -174,11 +188,24 @@ class RealBushArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_sort2(self, dt, eid, tx, ty, tz, rx, ry, rz):
+        """unvectorized method for adding SORT1 transient data"""
+        assert self.is_sort2, self
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        itime = self.ielement
+        itotal = self.itime
+        #print(f'dt={dt} eid={eid}; itime={itime}; itotal={itotal}')
+        self._times[itime] = dt
+        self.element[itotal] = eid
+        self.data[itime, itotal, :] = [tx, ty, tz, rx, ry, rz]
+        self.itotal += 1
+        self.ielement += 1
+
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
-            return ['<%s>\n' % self.__class__.__name__,
-                    '  ntimes: %i\n' % self.ntimes,
-                    '  ntotal: %i\n' % self.ntotal,
+            return [f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                    f'  ntimes: {self.ntimes:d}\n',
+                    f'  ntotal: {self.ntotal:d}\n',
                     ]
 
         nelements = self.ntotal
@@ -200,9 +227,9 @@ class RealBushArray(OES_Object):
         n = len(headers)
         assert n == self.data.shape[2], 'nheaders=%s shape=%s' % (n, str(self.data.shape))
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -216,7 +243,7 @@ class RealBushArray(OES_Object):
         return ind
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg = self._get_msgs()
@@ -248,17 +275,17 @@ class RealBushArray(OES_Object):
             page_num -= 1
         return page_num
 
-    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
                   is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
         from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -285,7 +312,7 @@ class RealBushArray(OES_Object):
         #assert self.ntimes == 1, self.ntimes
 
         #device_code = self.device_code
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         eids_device = self.element * 10 + self.device_code
 
@@ -293,16 +320,28 @@ class RealBushArray(OES_Object):
         #print('ntotal=%s' % (ntotal))
         #assert ntotal == 193, ntotal
 
-        if self.is_sort1:
-            struct1 = Struct(endian + b'i6f')
-        else:
+        if not self.is_sort1:
             raise NotImplementedError('SORT2')
+        struct1 = Struct(endian + b'i6f')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        fdtype = self.data.dtype
+        if self.size == fdtype.itemsize:
+            pass
+        else:
+            # print(f'downcasting {self.class_name}...')
+            #cen_word_bytes = b'CEN/    '
+            idtype = np.int32(1)
+            fdtype = np.float32(1.0)
+
+        use_numpy = True
+        data_out = np.empty((nelements, 7), dtype=fdtype)
+        data_out[:, 0] = eids_device.view(fdtype)
+
+        op2_ascii.write(f'nelements={nelements:d}\n')
 
         for itime in range(self.ntimes):
             #print('3, %s' % itable)
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             #print('stress itable = %s' % itable)
@@ -313,37 +352,42 @@ class RealBushArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
-            tx = self.data[itime, :, 0]
-            ty = self.data[itime, :, 1]
-            tz = self.data[itime, :, 2]
-            rx = self.data[itime, :, 3]
-            ry = self.data[itime, :, 4]
-            rz = self.data[itime, :, 5]
+            if use_numpy:
+                # [eid_device, txi, tyi, tzi, rxi, ryi, rzi]
+                data_out[:, 1:] = self.data[itime, :, :]
+                assert data_out.size == ntotal, f'data_out.shape={data_out.shape} size={data_out.size}; ntotal={ntotal}'
+                op2_file.write(data_out)
+            else:
+                tx = self.data[itime, :, 0]
+                ty = self.data[itime, :, 1]
+                tz = self.data[itime, :, 2]
+                rx = self.data[itime, :, 3]
+                ry = self.data[itime, :, 4]
+                rz = self.data[itime, :, 5]
+                for eid, eid_device, txi, tyi, tzi, rxi, ryi, rzi in zip(
+                        eids, eids_device, tx, ty, tz, rx, ry, rz):
+                    data = [eid_device, txi, tyi, tzi, rxi, ryi, rzi]
 
-            for eid, eid_device, txi, tyi, tzi, rxi, ryi, rzi in zip(
-                    eids, eids_device, tx, ty, tz, rx, ry, rz):
-                data = [eid_device, txi, tyi, tzi, rxi, ryi, rzi]
+                    vals = [txi, tyi, tzi, rxi, ryi, rzi]
+                    vals2 = write_floats_13e(vals)
+                    [txi, tyi, tzi, rxi, ryi, rzi] = vals2
+                    op2_ascii.write('0                   %8i     %-13s %-13s %-13s %-13s %-13s %s\n' % (
+                            eid, txi, tyi, tzi, rxi, ryi, rzi))
+                    op2_file.write(struct1.pack(*data))
 
-                vals = [txi, tyi, tzi, rxi, ryi, rzi]
-                vals2 = write_floats_13e(vals)
-                [txi, tyi, tzi, rxi, ryi, rzi] = vals2
-                op2_ascii.write('0                   %8i     %-13s %-13s %-13s %-13s %-13s %s\n' % (
-                        eid, txi, tyi, tzi, rxi, ryi, rzi))
-                op2.write(struct1.pack(*data))
-
-            #for eid, axiali, SMai, torsioni, SMti in zip(eids_device, axial, SMa, torsion, SMt):
-                #data = [eid, axiali, SMai, torsioni, SMti]
-                #op2_ascii.write('  eid=%s axial=%s SMa=%s torsion=%s SMt=%s\n' % tuple(data))
-                #op2.write(struct1.pack(*data))
+                #for eid, axiali, SMai, torsioni, SMti in zip(eids_device, axial, SMa, torsion, SMt):
+                    #data = [eid, axiali, SMai, torsioni, SMti]
+                    #op2_ascii.write('  eid=%s axial=%s SMa=%s torsion=%s SMt=%s\n' % tuple(data))
+                    #op2_file.write(struct1.pack(*data))
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -354,11 +398,12 @@ class RealBushStressArray(RealBushArray, StressObject):
         RealBushArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
         return headers
 
-    def _get_msgs(self) -> List[str]:
+    def _get_msgs(self) -> list[str]:
         if self.element_type == 102:
             pass
         else:
@@ -376,11 +421,12 @@ class RealBushStrainArray(RealBushArray, StrainObject):
         RealBushArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
         return headers
 
-    def _get_msgs(self) -> List[str]:
+    def _get_msgs(self) -> list[str]:
         if self.element_type == 102:
             pass
         else:

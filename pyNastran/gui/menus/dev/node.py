@@ -6,10 +6,11 @@ http://www.saltycrane.com/blog/2007/12/pyqt-43-qtableview-qabstracttablemodel/
 http://stackoverflow.com/questions/12152060/how-does-the-keypressevent-method-work-in-this-program
 """
 from pyNastran.gui.gui_objects.alt_geometry_storage import AltGeometry
-from pyNastran.gui.menus.manage_actors import Model, SingleChoiceQTableView
+from pyNastran.gui.menus.edit_geometry_properties.manage_actors import Model, SingleChoiceQTableView
 from pyNastran.gui.qt_version import qt_int as qt_version
+from pyNastran.gui.utils.qt.checks.qlineedit import QLINEEDIT_GOOD, QLINEEDIT_ERROR
 
-from qtpy import QtCore#, QtGui
+from qtpy import QtCore
 from qtpy.QtGui import QColor, QPalette
 from qtpy.QtWidgets import (
     QDialog, QLabel, QPushButton, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout,
@@ -77,10 +78,7 @@ class EditNodeProperties(QDialog):
         table_model = Model(items, header_labels, self)
         view = SingleChoiceQTableView(self) #Call your custom QTableView here
         view.setModel(table_model)
-        if qt_version == 4:
-            view.horizontalHeader().setResizeMode(QHeaderView.Stretch)
-        else:
-            view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table = view
 
         #self.representation = actor_obj.representation
@@ -124,11 +122,11 @@ class EditNodeProperties(QDialog):
         self.point_size_edit.setSingleStep(1)
         self.point_size_edit.setValue(point_size)
 
-        self.opacity = QLabel("Opacity:")
+        self.opacity = QLabel('Opacity:')
         self.opacity_edit = QDoubleSpinBox(self)
         self.opacity_edit.setRange(0.1, 1.0)
-        self.opacity_edit.setDecimals(1)
-        self.opacity_edit.setSingleStep(0.1)
+        self.opacity_edit.setDecimals(2)
+        self.opacity_edit.setSingleStep(0.05)
         self.opacity_edit.setValue(opacity)
 
         # show/hide
@@ -252,14 +250,14 @@ class EditNodeProperties(QDialog):
         location_layout.addWidget(self.location_y_edit)
         location_layout.addWidget(self.location_z_edit)
 
-        checkboxs = QButtonGroup(self)
-        checkboxs.addButton(self.checkbox_show)
-        checkboxs.addButton(self.checkbox_hide)
+        checkboxes = QButtonGroup(self)
+        checkboxes.addButton(self.checkbox_show)
+        checkboxes.addButton(self.checkbox_hide)
 
         vbox1 = QVBoxLayout()
         vbox1.addWidget(self.checkbox_show)
         vbox1.addWidget(self.checkbox_hide)
-        #vbox1.addLayout(checkboxs)
+        #vbox1.addLayout(checkboxes)
 
         #-----------------------------------------
         irow = 0
@@ -331,50 +329,26 @@ class EditNodeProperties(QDialog):
 
     def set_connections(self):
         """creates the actions for the menu"""
-        if qt_version == 4:
-            self.connect(self.opacity_edit, QtCore.SIGNAL('clicked()'), self.on_opacity)
-            self.connect(self.point_size, QtCore.SIGNAL('clicked()'), self.on_point_size)
-            self.connect(self.color_edit, QtCore.SIGNAL('clicked()'), self.on_color)
-            self.connect(self.checkbox_show, QtCore.SIGNAL('clicked()'), self.on_show)
-            self.connect(self.checkbox_hide, QtCore.SIGNAL('clicked()'), self.on_hide)
+        self.opacity_edit.valueChanged.connect(self.on_opacity)
+        #self.connect(self.point_size, QtCore.SIGNAL('clicked()'), self.on_point_size)
+        #self.point_size_edit.clicked.connect(self.on_point_size)  # need to update name??
+        self.color_edit.clicked.connect(self.on_color)
+        self.checkbox_show.clicked.connect(self.on_show)
+        self.checkbox_hide.clicked.connect(self.on_hide)
 
+        self.description_edit.textEdited.connect(self.on_description)  # valueChanged????
+        self.coord_edit.valueChanged.connect(self.on_coord)
+        self.radio_rectangular.clicked.connect(self.on_coord_type)
+        self.radio_cylindrical.clicked.connect(self.on_coord_type)
+        self.radio_spherical.clicked.connect(self.on_coord_type)
 
-            self.connect(self.description_edit, QtCore.SIGNAL("valueChanged(int)"), self.on_description)
-            self.connect(self.coord_edit, QtCore.SIGNAL("valueChanged(int)"), self.on_coord)
-            self.connect(self.radio_rectangular, QtCore.SIGNAL('clicked()'), self.on_coord_type)
-            self.connect(self.radio_cylindrical, QtCore.SIGNAL('clicked()'), self.on_coord_type)
-            self.connect(self.radio_spherical, QtCore.SIGNAL('clicked()'), self.on_coord_type)
-
-            self.connect(self.location_x_edit, QtCore.SIGNAL('clicked()'), self.on_location_x)
-            self.connect(self.location_y_edit, QtCore.SIGNAL('clicked()'), self.on_location_y)
-            self.connect(self.location_z_edit, QtCore.SIGNAL('clicked()'), self.on_location_z)
-
-            self.connect(self.close_button, QtCore.SIGNAL('clicked()'), self.on_close)
-
-            #self.connect(self.check_apply, QtCore.SIGNAL('clicked()'), self.on_check_apply)
-
-            #self.connect(self.apply_button, QtCore.SIGNAL('clicked()'), self.on_apply)
-            #self.connect(self.ok_button, QtCore.SIGNAL('clicked()'), self.on_ok)
-            #self.connect(self.close_button, QtCore.SIGNAL('clicked()'), self.on_close)
-        else:
-            #self.opacity_edit.clicked.connect(self.on_opacity)
-            #self.point_size.clicked.connect(self.on_point_size)
-            #self.color_edit.clicked.connect(self.on_color)
-            #self.checkbox_show.clicked.connect(self.on_show)
-            #self.checkbox_hide.clicked.connect(self.on_hide)
-
-            #self.description_edit.valueChanged.connect(self.on_description)
-            #self.coord_edit.valueChanged.connect(self.on_coord)
-            #self.radio_rectangular.clicked.connect(self.on_coord_type)
-            #self.radio_cylindrical.clicked.connect(self.on_coord_type)
-            #self.radio_spherical.clicked.connect(self.on_coord_type)
-
-            #self.location_x_edit.clicked.connect(self.on_location_x)
-            #self.location_y_edit.clicked.connect(self.on_location_y)
-            #self.location_z_edit.clicked.connect(self.on_location_z)
-            self.close_button.clicked.connect(self.on_close)
-
-
+        self.location_x_edit.valueChanged.connect(self.on_location_x)
+        self.location_y_edit.valueChanged.connect(self.on_location_y)
+        self.location_z_edit.valueChanged.connect(self.on_location_z)
+        #self.connect(self.check_apply, QtCore.SIGNAL('clicked()'), self.on_check_apply)
+        #self.connect(self.apply_button, QtCore.SIGNAL('clicked()'), self.on_apply)
+        #self.connect(self.ok_button, QtCore.SIGNAL('clicked()'), self.on_ok)
+        self.close_button.clicked.connect(self.on_close)
 
     def on_color(self):
         obj = self.out_data['point_properties']
@@ -456,15 +430,15 @@ class EditNodeProperties(QDialog):
 
     #def on_default_name(self):
         #self.name_edit.setText(str(self._default_name))
-        #self.name_edit.setStyleSheet("QLineEdit{background: white;}")
+        #self.name_edit.setStyleSheet(QLINEEDIT_GOOD)
 
     #def check_name(self, cell):
         #text = str(cell.text()).strip()
         #if len(text):
-            #cell.setStyleSheet("QLineEdit{background: white;}")
+            #cell.setStyleSheet(QLINEEDIT_GOOD)
             #return text, True
         #else:
-            #cell.setStyleSheet("QLineEdit{background: red;}")
+            #cell.setStyleSheet(QLINEEDIT_ERROR)
             #return None, False
 
     def on_validate(self):

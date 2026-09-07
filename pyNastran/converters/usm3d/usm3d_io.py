@@ -1,6 +1,6 @@
 """Defines the GUI IO file for Usm3d."""
 import os
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
 import numpy as np
 
@@ -99,7 +99,7 @@ class Usm3dIO:
                     #n = int(n)
                     #if n > nold:
                         #return n
-                #except:
+                #except Exception:
                     #raise NotImplementedError()
         #return None
 
@@ -166,7 +166,7 @@ class Usm3dIO:
         elif dimension_flag == 3:
             ntets = tets.shape[0]
             ntets = 0
-        else:
+        else:  # pragma: no cover
             raise RuntimeError()
         self.gui.nelements = ntris + ntets
 
@@ -199,8 +199,8 @@ class Usm3dIO:
                 etype = 10 # vtkTetra().GetCellType()
                 assert tets.max() > 0, tets.min()
                 create_vtk_cells_of_constant_element_type(grid, tets, etype)
-        else:
-            raise RuntimeError('dimension_flag=%r' % dimension_flag)
+        else:  # pragma: no cover
+            raise RuntimeError(f'dimension_flag={dimension_flag!r}')
 
         grid.SetPoints(points)
         grid.Modified()
@@ -211,11 +211,12 @@ class Usm3dIO:
         # regions/loads
         self.gui.scalar_bar_actor.Modified()
 
-        cases = OrderedDict()
+        cases = {}
         form = []
-        form, cases = self._fill_usm3d_results(cases, form,
-                                               bcs, mapbc, bcmap_to_bc_name, loads,
-                                               is_geometry=True)
+        form, cases = self._fill_usm3d_results(
+            cases, form,
+            bcs, mapbc, bcmap_to_bc_name, loads,
+            is_geometry=True)
         self.gui._finish_results_io2(model_name, form, cases)
 
     def clear_usm3d(self):
@@ -244,7 +245,8 @@ class Usm3dIO:
         return form, cases
 
     def _fill_usm3d_case(self, cases, form,
-                         bcs, mapbc, bcmap_to_bc_name, loads, is_geometry=True):
+                         bcs, mapbc, bcmap_to_bc_name, loads,
+                         is_geometry: bool=True):
         """actually fills the sidebar"""
         self.gui.scalar_bar_actor.VisibilityOff()
         colormap = self.gui.settings.colormap

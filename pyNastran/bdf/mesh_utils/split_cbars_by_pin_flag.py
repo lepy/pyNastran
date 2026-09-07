@@ -4,12 +4,14 @@ defines:
        bdf_filename, pin_flags_filename=None, bdf_filename_out=None)
 
 """
+from pyNastran.utils import PathLike
 from pyNastran.bdf.bdf import read_bdf
 
 
-def split_cbars_by_pin_flag(bdf_filename,
+def split_cbars_by_pin_flag(bdf_filename: PathLike,
                             pin_flags_filename=None, bdf_filename_out=None,
-                            debug=False):
+                            punch: bool=False,
+                            debug: bool=False):
     """
     Splits bar elements if they have a pin flag.  That way you can
     each side of the element (A/B) a unique color based on the pin flag.
@@ -43,7 +45,7 @@ def split_cbars_by_pin_flag(bdf_filename,
 
     """
     if isinstance(bdf_filename, str):
-        model = read_bdf(bdf_filename, xref=False, debug=debug)
+        model = read_bdf(bdf_filename, xref=False, debug=debug, punch=punch)
     else:
         model = bdf_filename
     card_types = ['CBAR', 'CBEAM']

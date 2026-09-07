@@ -59,7 +59,7 @@ class TestRigid(unittest.TestCase):
         lines_expected = [
             'RBE2      100045  166007  123456  117752  101899  117766  101898  117748',
             '          117765  117764  117763  109821  117743  117744  117750  117751',
-            '          117745  117746  101902 .000001'
+            '          117745  117746  101902 .000001      0.'
         ]
         lines_actual = msg.rstrip().split('\n')
         msg = '\n%s\n\n%s\n' % ('\n'.join(lines_expected), msg)
@@ -89,7 +89,7 @@ class TestRigid(unittest.TestCase):
         lines_expected = [
             'RBE2      100045  166007  123456  117752  101899  117766  101898  117748',
             '          117765  117764  117763  109821  117743  117744  117750  117751',
-            '          117745  117746  101902      0.'
+            '          117745  117746  101902      0.      0.'
         ]
         lines_actual = msg.rstrip().split('\n')
         msg = '\n%s\n\n%s\n' % ('\n'.join(lines_expected), msg)
@@ -352,6 +352,24 @@ class TestRigid(unittest.TestCase):
         rrod.write_card(size=8)
         rrod.raw_fields()
         save_load_deck(model)
+
+    def test_rbe3_update(self):
+        model = BDF()
+        eid = 1
+        refgrid = 2
+        refc = '123'
+        weights = [1.0, 2.0]
+        comps = ['123', '456']
+        Gijs = [3, 4]
+        rbe3 = model.add_rbe3(eid, refgrid, refc, weights, comps, Gijs,
+                              Gmi=None, Cmi=None, alpha=0.0, comment='')
+        #print(rbe3)
+        rbe3.refgrid = 42
+        #print(rbe3)
+        rbe3.get_field(4)
+        #rbe3.update_field(2, 3)
+        #self.assertRaises(IndexError):
+        rbe3.update_field(4, 6)
 
 def check_rbe(rbe):
     """simple RBE checks"""

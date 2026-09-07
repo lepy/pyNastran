@@ -1,10 +1,19 @@
 """
-Simple pure python utilities used by the GUI
+Simple pure python utilities (not vtk/qt) used by the GUI
 """
-from typing import List
+from typing import Optional
+import numpy as np
 
+def is_value(value: Optional[float]) -> bool:
+    return not is_blank(value)
 
-def find_next_value_in_sorted_list(lst: List[int], old: int, new: int):
+def is_blank(value: Optional[float]) -> bool:
+    if value is None or not np.isfinite(value):
+        return True
+    return False
+
+def find_next_value_in_sorted_list(lst: list[int],
+                                   old: int, new: int) -> int:
     """
     iold=1 and inew=2, but there is no value of 2, so we skip to 3
     """

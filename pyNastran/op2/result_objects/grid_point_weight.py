@@ -1,12 +1,16 @@
 """defines the GridPointWeight class"""
 from io import StringIO
+from itertools import count
 from struct import pack
+from typing import TextIO, BinaryIO, cast
 import numpy as np
 
 from pyNastran.utils import object_attributes, object_methods
-from pyNastran.op2.result_objects.op2_objects import _write_table_header
-from pyNastran.op2.op2_interface.write_utils import export_to_hdf5
+from pyNastran.op2.result_objects.op2_objects import _write_table_header, Date
+from pyNastran.op2.op2_interface.write_utils import get_title_subtitle_label
+#from pyNastran.op2.writer.utils import fix_table3_types
 
+# restricted b/c we dont support 64-bit writing
 float_types = (float, np.float32)
 integer_types = (int, np.int32)
 
@@ -14,10 +18,17 @@ integer_types = (int, np.int32)
 #good = (4, 2, 4, 8, 1464878927, 538976327, 8, 4, -1, 4, 4, 7, 4, 28, 101, 0, 0, 0, 0,   0, 1, 28, 4, -2, 4, 4, 1, 4, 4, 0, 4, 4, 2, 4, 8,  1464878927, 538976327, 8, 4,                   -3, 4, 4, 1, 4, 4, 0, 4, 4, 146, 4)
 #bad  = (4, 2, 4, 8, 1464878927, 538976327, 8, 4, -1, 4, 4, 7, 4, 28, 102, 0, 0, 0, 512, 0, 0, 28, 4, -2, 4, 4, 1, 4, 4, 0, 4, 4, 7, 4, 28, 1464878927, 538976327, 9, 27, 19, 0, 1, 28, 4, -3, 4, 4, 1, 4, 4)
 class GridPointWeight:
-    def __init__(self, reference_point, MO, S, mass, cg, IS, IQ, Q,
-                 approach_code=1, table_code=13,
-                 title='', subtitle='', label='',
-                 superelement_adaptivity_index=''):
+    def __init__(self, reference_point: int,
+                 MO: np.ndarray,
+                 S: np.ndarray,
+                 mass: np.ndarray,
+                 cg: np.ndarray,
+                 IS: np.ndarray,
+                 IQ: np.ndarray,
+                 Q: np.ndarray,
+                 approach_code: int=1, table_code: int=13,
+                 title: str='', subtitle: str='', label: str='',
+                 superelement_adaptivity_index: str=''):
         """
         .. seealso:: http://www.6dof.com/index.php?option=com_content&view=article&id=298:output-from-the-grid-point-weight-generator&catid=178:courses-and-trainings&Itemid=61
         """
@@ -98,16 +109,17 @@ class GridPointWeight:
         self.title = title
         self.subtitle = subtitle
         self.label = label
-        self.superelement_adaptivity_index = subtitle
+        self.superelement_adaptivity_index = superelement_adaptivity_index
         self.approach_code = approach_code
         self.table_code = table_code
 
     def export_to_hdf5(self, group, log) -> None:
         """exports the object to HDF5 format"""
+        from pyNastran.op2.op2_interface.write_utils_hdf5 import export_to_hdf5
         export_to_hdf5(self, group, log)
 
-    def object_attributes(self, mode='public', keys_to_skip=None,
-                          filter_properties=False):
+    def object_attributes(self, mode: str='public', keys_to_skip=None,
+                          filter_properties: bool=False) -> list[str]:
         if keys_to_skip is None:
             keys_to_skip = []
 
@@ -118,7 +130,7 @@ class GridPointWeight:
                                  keys_to_skip=keys_to_skip+my_keys_to_skip,
                                  filter_properties=filter_properties)
 
-    def object_methods(self, mode='public', keys_to_skip=None):
+    def object_methods(self, mode: str='public', keys_to_skip=None):
         if keys_to_skip is None:
             keys_to_skip = []
         my_keys_to_skip = []
@@ -128,7 +140,7 @@ class GridPointWeight:
         ]
         return object_methods(self, mode=mode, keys_to_skip=keys_to_skip+my_keys_to_skip)
 
-    def __eq__(self, weight):
+    def __eq__(self, weight) -> bool:
         msg = ''
         if not self.reference_point == weight.reference_point:
             msg += f'reference_point: {self.reference_point} -> {weight.reference_point}\n'
@@ -150,53 +162,44 @@ class GridPointWeight:
             raise ValueError('GridPointWeight:\n' + msg)
         return True
 
-    def get_stats(self, key='', short=True):
+    def get_stats(self, key: str='', short: bool=True) -> str:
         key2 = f'[{key!r}]'
         if short:
             msg = (f'GridPointWeight{key2}: ref_point=%s mass=%g; '
                    '[reference_point, M0, S, mass, cg, IS, IQ, Q]\n' % (
                        self.reference_point, self.mass.max()))
         else:
+            RB = self.MO
             msg = (
                 f'GridPointWeight{key2}:'
-                '  reference_point=%s\n'
-                '  mass=[%10g %10g %10g]\n'
-                '  cg  =[%10g %10g %10g]\n'
-                '       [%10g %10g %10g]\n'
-                '       [%10g %10g %10g]\n\n'
+                f'  reference_point={self.reference_point:d}\n'
+                f'  mass=[{self.mass[0]:10g} {self.mass[1]:10g} {self.mass[2]:10g}]\n'
+                f'  cg = [{self.cg[0, 0]:10g} {self.cg[0, 1]:10g} {self.cg[0, 2]:10g}]\n'
+                f'       [{self.cg[1, 0]:10g} {self.cg[1, 1]:10g} {self.cg[1, 2]:10g}]\n'
+                f'       [{self.cg[2, 0]:10g} {self.cg[2, 1]:10g} {self.cg[2, 2]:10g}]\n\n'
 
-                '  IS  =[%10g %10g %10g]\n'
-                '       [%10g %10g %10g]\n'
-                '       [%10g %10g %10g]\n\n'
+                f'  MO = [{RB[0, 0]:10g} {RB[0, 1]:10g} {RB[0, 2]:10g} {RB[0, 3]:10g} {RB[0, 4]:10g} {RB[0, 5]:10g}]\n'
+                f'       [{RB[1, 0]:10g} {RB[1, 1]:10g} {RB[1, 2]:10g} {RB[1, 3]:10g} {RB[1, 4]:10g} {RB[1, 5]:10g}]\n'
+                f'       [{RB[2, 0]:10g} {RB[2, 1]:10g} {RB[2, 2]:10g} {RB[2, 3]:10g} {RB[2, 4]:10g} {RB[2, 5]:10g}]\n'
+                f'       [{RB[3, 0]:10g} {RB[3, 1]:10g} {RB[3, 2]:10g} {RB[3, 3]:10g} {RB[3, 4]:10g} {RB[3, 5]:10g}]\n'
+                f'       [{RB[4, 0]:10g} {RB[4, 1]:10g} {RB[4, 2]:10g} {RB[4, 3]:10g} {RB[4, 4]:10g} {RB[4, 5]:10g}]\n'
+                f'       [{RB[5, 0]:10g} {RB[5, 1]:10g} {RB[5, 2]:10g} {RB[5, 3]:10g} {RB[5, 4]:10g} {RB[5, 5]:10g}]\n\n'
 
-                '  IQ  =[%10g %10s %10s]\n'
-                '       [%10s %10g %10s]\n'
-                '       [%10s %10s %10g]\n\n'
+                f'  IS = [{self.IS[0, 0]:10g} {self.IS[0, 1]:10g} {self.IS[0, 2]:10g}]\n'
+                f'       [{self.IS[1, 0]:10g} {self.IS[1, 1]:10g} {self.IS[1, 2]:10g}]\n'
+                f'       [{self.IS[2, 0]:10g} {self.IS[2, 1]:10g} {self.IS[2, 2]:10g}]\n\n'
 
-                '  Q  = [%10g %10g %10g]\n'
-                '       [%10g %10g %10g]\n'
-                '       [%10g %10g %10g]\n' % (
-                    self.reference_point, self.mass[0], self.mass[1], self.mass[2],
-                    self.cg[0, 0], self.cg[0, 1], self.cg[0, 2],
-                    self.cg[1, 0], self.cg[1, 1], self.cg[1, 2],
-                    self.cg[2, 0], self.cg[2, 1], self.cg[2, 2],
+                f"  IQ = [{self.IQ[0]:10g} {'':10s} {'':10s}]\n"
+                f"       [{'':10s} {self.IQ[1]:10g} {'':10s}]\n"
+                f"       [{'':10s} {'':10s} {self.IQ[2]:10g}]\n\n"
 
-                    self.IS[0, 0], self.IS[0, 1], self.IS[0, 2],
-                    self.IS[1, 0], self.IS[1, 1], self.IS[1, 2],
-                    self.IS[2, 0], self.IS[2, 1], self.IS[2, 2],
-
-                    self.IQ[0], '', '',
-                    '', self.IQ[1], '',
-                    '', '', self.IQ[2],
-
-                    self.Q[0, 0], self.Q[0, 1], self.Q[0, 2],
-                    self.Q[1, 0], self.Q[1, 1], self.Q[1, 2],
-                    self.Q[2, 0], self.Q[2, 1], self.Q[2, 2],
-                    )
+                f'  Q  = [{self.Q[0, 0]:10g} {self.Q[0, 1]:10g} {self.Q[0, 2]:10g}]\n'
+                f'       [{self.Q[1, 0]:10g} {self.Q[1, 1]:10g} {self.Q[1, 2]:10g}]\n'
+                f'       [{self.Q[2, 0]:10g} {self.Q[2, 1]:10g} {self.Q[2, 2]:10g}]\n'
             )
         return msg
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         f = StringIO()
         page_stamp = 'PAGE %i'
         page_num = 1
@@ -204,7 +207,11 @@ class GridPointWeight:
         msg = f.getvalue()
         return msg
 
-    def _write_table_3(self, op2_file, fascii, new_result, table_name, itable=-3):
+    def _write_table_3(self, op2_file: BinaryIO,
+                       fascii: TextIO,
+                       new_result: bool,
+                       table_name: bytes,
+                       itable: int=-3) -> None:
         import inspect
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
@@ -238,11 +245,11 @@ class GridPointWeight:
         num_wide = 79 # self.num_wide
         #acoustic_flag = self.acoustic_flag if hasattr(self, 'acoustic_flag') else 0
         reference_point = self.reference_point
-        reference_point = 22
+        #reference_point = 22
         #thermal = self.thermal
-        title = b'%-128s' % self.title.encode('ascii')
-        subtitle = b'%-128s' % self.subtitle.encode('ascii')  # missing superelement_adaptivity_index
-        label = b'%-128s' % self.label.encode('ascii')
+        title, subtitle, label = get_title_subtitle_label(
+            self.title, self.subtitle, self.label,
+            self.superelement_adaptivity_index)
 
         #1, 13, 0, 0, 0, 0, 0, 0, 0, 78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
         ftable3 = b'i' * 50 + b'128s 128s 128s'
@@ -259,8 +266,8 @@ class GridPointWeight:
             title, subtitle, label,
         ]
 
+        #table3 = fix_table3_types(table3, size=4)
         n = 0
-        from itertools import count
         for i, val, ftable3i in zip(count(), table3, ftable3.decode('ascii')):
             assert val is not None, 'i=%s val=%s ftable3i=%s\n%s' % (i, val, ftable3i, self.get_stats())
             if isinstance(val, integer_types):
@@ -270,6 +277,7 @@ class GridPointWeight:
                 n += 4
                 assert ftable3i == 'f', 'i=%s val=%s type=%s' % (i, val, ftable3i)
             else:
+                val = cast(str, val)
                 n += len(val)
         assert n == 584, n
         data = [584] + table3 + [584]
@@ -284,7 +292,10 @@ class GridPointWeight:
         #pack(ftable3[:j], *table3[:j])
         op2_file.write(pack(fmt, *data))
 
-    def write_op2(self, op2_file, op2_ascii, date, endian=b'<'):
+    def write_op2(self, op2_file: BinaryIO,
+                  op2_ascii: TextIO,
+                  date: Date,
+                  endian: bytes=b'<') -> int:
         itable = -1
         import inspect
         #allowed_tables = [
@@ -302,7 +313,7 @@ class GridPointWeight:
 
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         subtable_name = b'OGPWG'
         if itable == -1:
@@ -342,7 +353,7 @@ class GridPointWeight:
         self._write_table_3(op2_file, op2_ascii, new_result, table_name, itable)
 
         # record 4
-        itable -= 1
+        itable -= 1  # -4
         header = [4, itable, 4,
                   4, 1, 4,
                   4, 0, 4,
@@ -350,7 +361,7 @@ class GridPointWeight:
                   4*ntotal]
         op2_file.write(pack(b'%ii' % len(header), *header))
         op2_ascii.write('r4 [4, 0, 4]\n')
-        op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
+        op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
         op2_ascii.write('r4 [4, %i, 4]\n' % (4*ntotal))
 
         # -------------------------------------------------------
@@ -376,7 +387,9 @@ class GridPointWeight:
         return itable
 
 
-    def write_f06(self, f06_file, page_stamp, page_num):
+    def write_f06(self, f06_file: TextIO,
+                  page_stamp: str,
+                  page_num: int) -> int:
         """
         writes the f06
 
@@ -394,13 +407,12 @@ class GridPointWeight:
         page_num : int
             the new page number
         """
-        if self.reference_point is None:
-            return page_num
-        msg = ['                           O U T P U T   F R O M   G R I D   P O I N T   W E I G H T   G E N E R A T O R']
-        msg.append('0                                                     REFERENCE POINT =        %i' % self.reference_point)
+        msg = [
+            '                           O U T P U T   F R O M   G R I D   P O I N T   W E I G H T   G E N E R A T O R',
+            f'0                                                     REFERENCE POINT =        {self.reference_point:d}',
+            '                                                                M O']
 
         # MO
-        msg.append('                                                                M O')
         for i in range(6):
             msg.append('                      * %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E *' % tuple(self.MO[i, :]))
 
@@ -431,10 +443,10 @@ class GridPointWeight:
         f06_file.write('\n'.join(msg))
         return page_num + 1
 
-def make_grid_point_weight(reference_point, MO,
-                           approach_code=1, table_code=13,
-                           title='', subtitle='', label='',
-                           superelement_adaptivity_index='') -> None:
+def make_grid_point_weight(reference_point: int, MO: np.ndarray,
+                           approach_code: int=1, table_code: int=13,
+                           title: str='', subtitle: str='', label: str='',
+                           superelement_adaptivity_index: str='') -> GridPointWeight:
     """creates a grid point weight table"""
     Mtt_ = MO[:3, :3]
     Mrr_ = MO[3:, 3:]

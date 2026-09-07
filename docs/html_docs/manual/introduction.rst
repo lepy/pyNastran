@@ -8,19 +8,13 @@ dynamics, etc. problems.  The file formats were originally developed by MSC
 for a product now called MSC Nastran.  There have been many spinoff version
 of NASTRAN that have been created based on the 2001 source code release of
 MSC Nastran in 2002 after settlement with the FTC (Federal Trade Commisson).
-There is now NX Nastran and NEi Nastran, which are developed independently as well
-as the 1995 Natran `source code <https://github.com/nasa/NASTRAN-95>`_.
+There is now NX Nastran and NEi Nastran, which are developed independently.
 
 :mod:`pyNastran` is at it's core an API (Application Programming Interface) to
 the legacy formats used by Nastran.  These files include the BDF, F06, OP2, OP4,
 and PCH files.  Other code has been added to :mod:`pyNastran` in order to drive
 development of the software in order to be able to solve other engineering
-problems.  For example, `Code\_Aster <http://www.code-aster.org>`_, an
-open-source finite element code developed by the EDF (Electricity of France),
-has a Nastran to `Code\_Aster <http://www.code-aster.org>`_ converter that is in
-development.  The development has helped to define the API for the loads in
-order to be able to extract them in a way that makes sense.  However, this is
-not the focus of the software.
+problems.
 
 
 
@@ -30,7 +24,7 @@ Target Audience
 :mod:`pyNastran` target audience are users of Nastran and therefore are expected
 to be familiar with the software.  This has greatly reduced the necessity of
 documenting every variable exhaustively as users can easily reference existing
-Nastran documentation. The BDF file has roughly 700 cards availble to a user
+Nastran documentation. The BDF file has roughly 700 cards available to a user
 with 373 being currently supported by pyNastran.  The majority of the cards,
 defined as separate Python classes, are not documented.  However, the Quick
 Reference Guide (QRG) defines each input to the card.  A user with the QRG

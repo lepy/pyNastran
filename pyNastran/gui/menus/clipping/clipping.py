@@ -3,12 +3,14 @@ defines:
  - ClippingPropertiesWindow
 """
 from pyNastran.gui.qt_version import qt_int as qt_version
-from qtpy import QtCore
+#from qtpy import QtCore
 from qtpy.QtWidgets import (
-    QLabel, QLineEdit, QPushButton, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout)
+    QLabel, QPushButton, QGridLayout, QApplication, QVBoxLayout)
 
-from pyNastran.gui.utils.qt.pydialog import PyDialog, check_float
-from pyNastran.gui.menus.menu_utils import eval_float_from_string
+from pyNastran.utils.locale import func_str
+from pyNastran.gui.utils.qt.pydialog import PyDialog, QFloatEdit
+from pyNastran.gui.utils.qt.checks.qlineedit import check_float, QLINEEDIT_GOOD
+
 
 class ClippingPropertiesWindow(PyDialog):
     """
@@ -43,12 +45,12 @@ class ClippingPropertiesWindow(PyDialog):
     def create_widgets(self):
         # Min
         self.min_label = QLabel("Min:")
-        self.min_edit = QLineEdit(str(self._default_min))
+        self.min_edit = QFloatEdit(func_str(self._default_min))
         self.min_button = QPushButton("Default")
 
         # Max
         self.max_label = QLabel("Max:")
-        self.max_edit = QLineEdit(str(self._default_max))
+        self.max_edit = QFloatEdit(func_str(self._default_max))
         self.max_button = QPushButton("Default")
 
         # closing
@@ -69,15 +71,11 @@ class ClippingPropertiesWindow(PyDialog):
         vbox.addLayout(grid)
 
         vbox.addStretch()
-        vbox.addLayout(self.ok_button)
+        vbox.addWidget(self.ok_button)
         self.setLayout(vbox)
 
     def set_connections(self):
         """creates the actions for the menu"""
-        if qt_version == 4:
-            self.connect(self, QtCore.SIGNAL('triggered()'), self.closeEvent)
-        #else:
-            # closeEvent
         self.min_button.clicked.connect(self.on_default_min)
         self.max_button.clicked.connect(self.on_default_max)
         self.min_edit.textChanged.connect(self.on_apply)
@@ -85,12 +83,12 @@ class ClippingPropertiesWindow(PyDialog):
         self.ok_button.clicked.connect(self.on_ok)
 
     def on_default_min(self):
-        self.min_edit.setText(str(self._default_min))
-        self.min_edit.setStyleSheet("QLineEdit{background: white;}")
+        self.min_edit.setText(func_str(self._default_min))
+        self.min_edit.setStyleSheet(QLINEEDIT_GOOD)
 
     def on_default_max(self):
-        self.max_edit.setText(str(self._default_max))
-        self.max_edit.setStyleSheet("QLineEdit{background: white;}")
+        self.max_edit.setText(func_str(self._default_max))
+        self.max_edit.setStyleSheet(QLINEEDIT_GOOD)
 
     def on_validate(self):
         min_value, flag0 = check_float(self.min_edit)
@@ -112,6 +110,7 @@ class ClippingPropertiesWindow(PyDialog):
     def on_ok(self):
         passed = self.on_apply()
         if passed:
+            self._updated_clipping = True
             self.close()
             #self.destroy()
 
@@ -126,20 +125,21 @@ def main():  # pragma: no cover
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-
     import sys
     # Someone is launching this directly
     # Create the QApplication
     app = QApplication(sys.argv)
     #The Main window
     d = {
-        'min_clip' : 0.,
-        'max_clip' : 10,
+        'font_size': 10,
+        'min_clip': 0.,
+        'max_clip': 10,
     }
     main_window = ClippingPropertiesWindow(d)
     main_window.show()
     # Enter the main loop
     app.exec_()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':   # pragma: no cover
     main()

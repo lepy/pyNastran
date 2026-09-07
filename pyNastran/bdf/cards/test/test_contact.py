@@ -1,6 +1,7 @@
 import copy
 import unittest
 
+from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.cards.test.utils import save_load_deck
 
@@ -8,9 +9,49 @@ from pyNastran.bdf.cards.test.utils import save_load_deck
 
 class TestContact(unittest.TestCase):
 
+    def test_bctparm(self):
+        """tests a BCPARM"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        params = {
+            'PENN': 10.0,
+            'PENT': 0.5,
+            'CTOL': 0.001,
+            'SHLTHK': 1,
+            'A': 2,
+            'B': 3,
+            'C': 4,
+            'D': 5,
+        }
+        bcparm = model.add_bctparm(1, params)
+        str(bcparm)
+        bcparm.raw_fields()
+        save_load_deck(model)
+
+    def test_bgset_bgadd(self):
+        """checks the BGADD, BGSET cards"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        glue_id = 10
+        sids = [11, 12]
+        tids = [13, 14]
+        sdists = [1.0, 2.0]
+        exts = [3.0, 4.0]
+        bgset = model.add_bgset(
+            glue_id, sids, tids,
+            sdists, exts, comment='bgset', sol=101)
+
+        add_id = 42
+        glue_ids = [glue_id]
+        bgadd = model.add_bgadd(add_id, glue_ids, comment='bgadd')
+        bgset.raw_fields()
+        bgadd.raw_fields()
+        save_load_deck(model)
+
     def test_contact_01(self):
         """checks the BSURF cards"""
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
 
         lines = [
             'BSURF          3       1       2       3       4       5       6       7',
@@ -18,15 +59,15 @@ class TestContact(unittest.TestCase):
             '              16      17      18      19      20      21      22      23',
         ]
         unused_card = model.add_card(copy.deepcopy(lines), 'BSURF', is_list=False)
-        out = model.bsurf[3].write_card(8, None)
+        out = model.bsurf[3].write_card(size=8, is_double=False)
         lines2 = out.split('\n')
         for line, line2 in zip(lines, lines2):
             self.assertEqual(line, line2)
 
     def test_contact_2(self):
-        sid = 42
         eids = [1, 2, 3]
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
         sid = 42
         bsurf = model.add_bsurf(sid, eids, comment='bsurf')
         bsurf.raw_fields()
@@ -60,7 +101,7 @@ class TestContact(unittest.TestCase):
         model.validate()
 
         contact_region = 102
-        params = {'cat' : 111, 'dog' : 222, 'frog' : 0.}
+        params = {'tied' : 1}
         bctpara = model.add_bctpara(contact_region, params, comment='bctpara')
         bctpara.raw_fields()
         str(bctpara)
@@ -77,7 +118,8 @@ class TestContact(unittest.TestCase):
          - BLSEG
          - BCONP -> BFRIC
         """
-        model = BDF(debug=False, log=None, mode='msc')
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log, mode='msc')
         nodes = [2, 3]
         contact_id = 4
         master = 5
@@ -92,8 +134,9 @@ class TestContact(unittest.TestCase):
 
         line_id = slave
         blseg = model.add_blseg(line_id, nodes, comment='blseg_slave')
-        bconp = model.add_bconp(contact_id, slave, master, sfac, friction_id, ptype, cid,
-                                comment='bconp')
+        bconp = model.add_bconp(
+            contact_id, slave, master, sfac, friction_id, ptype, cid,
+            comment='bconp')
         mu1 = 0.2
         bfric = model.add_bfric(friction_id, mu1, fstiff=None, comment='bfric')
         model.add_grid(2, [0., 0., 0.])
@@ -105,6 +148,128 @@ class TestContact(unittest.TestCase):
         blseg.raw_fields()
         bconp.raw_fields()
         save_load_deck(model)
+
+    def test_contact_bgset(self):
+        """
+        |   1   |  2   |  3   |   4  |    5    | 6  |  7   |   8  |  9 |
+        | BGSET | GSID | SID1 | TID1 | SDIST1  |    | EXT1 |      |    |
+        |       |      | SID2 | TID2 | SDIST2  |    | EXT2 |      |    |
+        """
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log, mode='msc')
+        gsid = 1
+        sids = [1, 2, 3]
+        tids = [10, 20, 30]
+        sdists = [100., 200., 300.]
+        exts = [0.01, 0.02, 0.03]
+        card = [
+            'BGSET',
+            gsid, sids[0], tids[0], sdists[0], None, exts[0], None, None,
+            None, sids[1], tids[1], sdists[1], None, exts[1], None, None,
+            None, sids[2], tids[2], sdists[2], None, exts[2], None, None,
+        ]
+        card = model.add_card(card, 'BGSET', comment='comment', ifile=None, is_list=True, has_none=True)
+        save_load_deck(model)
+        #bgset = model.add_bgset
+
+    def test_contact_bcbody(self):
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log, mode='msc')
+        contact_id = 42
+        bsid = 3
+        bcbody = model.add_bcbody(
+            contact_id, bsid, {},
+            dim='3D', behav='DEFORM',
+            istype=0, fric=0,
+            idispl=0, comment='bcbody')
+        bcbody.cross_reference(model)
+        bcbody.raw_fields()
+        bcbody.write_card(size=8)
+        bcbody.write_card(size=16)
+        contact_id += 1
+        grow = [0.1, 0.2, 0.3, 1, 2, 3]
+        bcbody_grow = model.add_bcbody(
+            contact_id, bsid, {'GROW': grow},
+            dim='3D', behav='DEFORM',
+            istype=0, fric=0,
+             idispl=0, comment='bcbody')
+        contact_id += 1
+
+        bcbody_rigid = model.add_bcbody(
+            contact_id, bsid, {},
+            dim='3D', behav='RIGID',
+            istype=0, fric=0,
+             idispl=0, comment='bcbody')
+
+        heat = [0.1] * 17
+        bcbody_heat = model.add_bcbody(
+            contact_id, bsid, {'HEAT': heat},
+            dim='3D', behav='SYMM',
+            istype=0, fric=0,
+            idispl=0, comment='bcbody')
+
+        csid = 10
+        params = {
+            'BIAS': 20.0,
+            'DDULMT': 1.0,
+            'ERRBAS': 1,
+            'ERROR': 3.0,
+            'FKIND': 1,
+            'FNTOL': 4.0,
+            'FTYPE': 1,
+            'IBSEP': 1,
+            'ISPLIT': 1,
+            'ICSEP': 1,
+            'LINQUAD': 1,
+            'LINCNT': -1,
+            'METHOD': 'NODESURF',
+            'MAXENT': 3,
+            'MAXNOD': 42,
+            'NLGLUE': 0,
+            'NBODIES': 2,
+            'SLDLMT': 1.0,
+            'SEGSYM': 0,
+            'THKOFF': 1,
+        }
+        bcpara = model.add_bcpara(csid, params, comment='bcpara')
+        bcpara.raw_fields()
+        bcpara.write_card(size=8)
+        bcpara.write_card(size=16)
+
+        bct_params1 = {
+            'TYPE': 1,
+            'NSIDE': 2,
+            'TBIRTH': 3.0,
+            'TDEATH': 4.0,
+            'INIPENE': 2,
+            'PDEPTH': 6.0,
+        }
+        bct_params2 = {
+            'SEGNORM': -1,
+            'OFFTYPE': 1,
+            'OFFSET': 9.0,
+            'TZPENE': 10.0,
+            'CSTIFF': 1,
+        }
+        bct_params3 = {
+            'TIED': 1,
+            'TIEDTOL': 13.0,
+            'EXTFAC': 0.09,
+        }
+        bctpara1 = model.add_bctpara(csid, bct_params1, comment='bctpara')
+        bctpara2 = model.add_bctpara(csid+1, bct_params2, comment='bctpara')
+        bctpara3 = model.add_bctpara(csid+2, bct_params3, comment='bctpara')
+        bctpara1.raw_fields()
+        bctpara1.write_card(size=8)
+        bctpara1.write_card(size=16)
+        model_out = save_load_deck(model)
+        # from io import StringIO
+        # stringio = StringIO()
+        # model_out.write_bdf(stringio, close=False)
+        # stringio.seek(0)
+        # msg = stringio.read()
+        # print(msg)
+
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

@@ -1,8 +1,7 @@
 """Defines the GUI IO file for STL."""
-from collections import OrderedDict
 from numpy import arange
 
-import vtk
+import vtkmodules
 
 from pyNastran.converters.stl.stl import read_stl
 from pyNastran.gui.gui_objects.gui_result import GuiResult, NormalResult
@@ -67,7 +66,7 @@ class STL_IO:
         self.gui.scalar_bar_actor.VisibilityOff()
         self.gui.scalar_bar_actor.Modified()
 
-        cases = OrderedDict()
+        cases = {}
         self.gui.isubcase_name_map = {}
         ID = 1
 

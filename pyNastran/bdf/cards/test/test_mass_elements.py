@@ -6,6 +6,8 @@ import numpy as np
 from cpylog import get_logger
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.cards.test.utils import save_load_deck
+from pyNastran.bdf.mesh_utils.mass_properties import (
+    mass_properties, transform_inertia)
 #from pyNastran.op2.op2 import OP2, read_op2
 
 
@@ -62,6 +64,91 @@ class TestMassElements(unittest.TestCase):
         model.validate()
         save_load_deck(model)
 
+    def test_mass_transform1(self):
+        mass = 0.2
+        dx1 = 3.
+        dx2 = 1.
+        xyz_ref1 = np.array([0., 0., 0.])
+        xyz_cg = np.array([dx1, 0., 0.])
+        xyz_ref2 = np.array([dx1+dx2, 0., 0.])
+        Ixy = 0.0
+        Ixz = 0.0
+        Iyz = 0.0
+        Ixx = 10.0
+        Iyy = 20.0
+        Izz = 30.0
+        Ixx_expected = 10.0
+        Iyy_expected = Iyy + mass * (dx2 ** 2 - dx1**2) #  18.4
+        Izz_expected = Izz + mass * (dx2 ** 2 - dx1**2)
+        inertia = np.array([Ixx, Iyy, Izz, Ixy, Ixz, Iyz])
+
+        inertia2 = transform_inertia(
+            mass, xyz_cg,
+            xyz_ref1, xyz_ref2, inertia)
+        Ixx2, Iyy2, Izz2, Ixy2, Ixz2, Iyz2 = inertia2
+        assert np.allclose(Ixy2, 0.0), Ixy2
+        assert np.allclose(Ixz2, 0.0), Ixz2
+        assert np.allclose(Iyz2, 0.0), Iyz2
+
+        assert np.allclose(Ixx2, Ixx_expected), (Ixx2, Ixx_expected)
+        assert np.allclose(Iyy2, Iyy_expected), (Iyy2, Iyy_expected)
+        assert np.allclose(Izz2, Izz_expected), (Izz2, Izz_expected)
+
+    def test_mass_transform2(self):
+        mass = 1.0
+        xyz_cg = np.array([0., 0., 0.])
+        xyz_ref1 = np.array([0., 0., 0.])
+        xyz_ref2 = np.array([0., 0., 0.])
+
+        origin = np.array([0., 0., 0.])
+        # we're flipping the x/z axes
+        zaxis = np.array([1., 0., 0.])
+        xzplane = np.array([0., 0., 1.])
+        Ixy = 0.0
+        Ixz = 0.0
+        Iyz = 0.0
+
+        Izz_expected = Ixx = 1.0
+        Iyy_expected = Iyy = 2.0
+        Ixx_expected = Izz = 3.0
+        inertia = np.array([Ixx, Iyy, Izz, Ixy, Ixz, Iyz])
+
+        model = BDF(debug=False)
+        coord = model.add_cord2r(1, origin, zaxis, xzplane)
+        inertia2 = transform_inertia(
+            mass, xyz_cg,
+            xyz_ref1, xyz_ref2,
+            inertia,
+            coord1=None, coord2=coord,
+            debug=True)
+        Ixx2, Iyy2, Izz2, Ixy2, Ixz2, Iyz2 = inertia2
+        assert np.allclose(Ixy2, 0.0), Ixy2
+        assert np.allclose(Ixz2, 0.0), Ixz2
+        assert np.allclose(Iyz2, 0.0), Iyz2
+
+        assert np.allclose(Ixx2, Ixx_expected), (Ixx2, Ixx_expected)
+        assert np.allclose(Iyy2, Iyy_expected), (Iyy2, Iyy_expected)
+        assert np.allclose(Izz2, Izz_expected), (Izz2, Izz_expected)
+
+        #---------------------------
+        # flip2: change xz plane to y
+        zaxis = np.array([1., 0., 0.])
+        xzplane = np.array([0., 1., 0.])
+        Izz_expected = Ixx = 1.0
+        Ixx_expected = Iyy = 2.0
+        Iyy_expected = Izz = 3.0
+        coord = model.add_cord2r(2, origin, zaxis, xzplane)
+        inertia2 = transform_inertia(
+            mass, xyz_cg,
+            xyz_ref1, xyz_ref2,
+            inertia,
+            coord1=None, coord2=coord,
+            debug=False)
+        Ixx2, Iyy2, Izz2, Ixy2, Ixz2, Iyz2 = inertia2
+        assert np.allclose(Ixx2, Ixx_expected), (Ixx2, Ixx_expected)
+        assert np.allclose(Iyy2, Iyy_expected), (Iyy2, Iyy_expected)
+        assert np.allclose(Izz2, Izz_expected), (Izz2, Izz_expected)
+
     def test_conm2(self):
         """tests a conm2"""
         log = get_logger(level='warning', encoding='utf-8')
@@ -69,29 +156,68 @@ class TestMassElements(unittest.TestCase):
         nid = 10
         eid = 20
         massi = 42.
-        model.add_conm2(eid, nid, massi, cid=0, X=None, I=None, comment='conm2')
+        conm2 = model.add_conm2(eid, nid, massi, cid=0, X=None, I=None, comment='conm2')
+        with self.assertRaises(AttributeError):
+            conm2.center_of_mass()
+        conm2neg = model.add_conm2(eid+1, nid, massi, cid=-1, X=None, I=None, comment='conm2')
+        conm2neg.center_of_mass()
+        conm2pos = model.add_conm2(eid+2, nid, massi, cid=200, X=None, I=None, comment='conm2')
+        with self.assertRaises(RuntimeError):
+            conm2pos.center_of_mass()
+
         model.add_grid(nid, [0., 0., 0.])
+        origin = [1., 1., 1.]
+        zaxis = [0., 1., 0.]
+        xzplane = [1, 0., 0.]
+        model.add_cord2r(200, origin, zaxis, xzplane, rid=0)
+
         model.validate()
         model.cross_reference()
+        model.pop_parse_errors()
+        model.pop_xref_errors()
+        conm2.center_of_mass()
+        conm2neg.center_of_mass()
+        conm2pos.center_of_mass()
+
+        conm2.Centroid_no_xref(model)
+        conm2neg.Centroid_no_xref(model)
+        conm2pos.Centroid_no_xref(model)
+        xyz_nid = conm2.nid_ref.get_position()
+        conm2.offset(xyz_nid)
+        conm2neg.offset(xyz_nid)
+        conm2pos.offset(xyz_nid)
+        assert np.allclose(conm2.Mass(), 42.0), conm2.Mass()
+        assert np.allclose(conm2neg.Mass(), 42.0), conm2neg.Mass()
+        assert np.allclose(conm2pos.Mass(), 42.0), conm2pos.Mass()
+
         model = save_load_deck(model, run_convert=False)
         pids_to_mass, mass_type_to_mass = model.get_mass_breakdown(property_ids=None)
         assert len(pids_to_mass) == 0, pids_to_mass
-        assert mass_type_to_mass['CONM2'] == 42., mass_type_to_mass
+        assert np.allclose(mass_type_to_mass['CONM2'], 3*42.), mass_type_to_mass
 
-        mass, cg, I = model.mass_properties(element_ids=None, mass_ids=None, reference_point=None,
-                                            sym_axis=None, scale=None)
+        pids_to_mass, pids_to_mass_nonstructural, mass_type_to_mass = model.get_mass_breakdown_detailed(
+            property_ids=None)
+        assert len(pids_to_mass) == 0, pids_to_mass
+        assert mass_type_to_mass['CONM2'] == 126., mass_type_to_mass
+        assert len(pids_to_mass_nonstructural) == 0, pids_to_mass_nonstructural
+
+        mass, cg, I = mass_properties(
+            model, element_ids=None, mass_ids=None, reference_point=None,
+            sym_axis=None, scale=None)
+        assert np.allclose(mass, 3*massi), 'massi=%s mass=%s' % (massi, mass)
+        assert np.array_equal(cg, np.zeros(3))
+        assert np.array_equal(I, np.zeros(6))
+
+        mass, cg, I = mass_properties(
+            model, element_ids=None, mass_ids=[20], reference_point=None,
+            sym_axis=None, scale=None)
         assert np.allclose(mass, massi), 'massi=%s mass=%s' % (massi, mass)
         assert np.array_equal(cg, np.zeros(3))
         assert np.array_equal(I, np.zeros(6))
 
-        mass, cg, I = model.mass_properties(element_ids=None, mass_ids=[20], reference_point=None,
-                                            sym_axis=None, scale=None)
-        assert np.allclose(mass, massi), 'massi=%s mass=%s' % (massi, mass)
-        assert np.array_equal(cg, np.zeros(3))
-        assert np.array_equal(I, np.zeros(6))
-
-        mass, cg, I = model.mass_properties(element_ids=None, mass_ids=[42], reference_point=None,
-                                            sym_axis=None, scale=None)
+        mass, cg, I = mass_properties(
+            model, element_ids=None, mass_ids=[42], reference_point=None,
+            sym_axis=None, scale=None)
         ## TODO: is this reasonable behavior
         assert np.allclose(mass, 0.), 'massi=%s mass=%s' % (massi, mass)
 
@@ -107,6 +233,7 @@ class TestMassElements(unittest.TestCase):
         g2 = 2
         c2 = 4
         cmass1 = model.add_cmass1(eid, pid, [g1, g2], c1, c2, comment='cmass1')
+        cmass1.grid_component()
         cmass1.write_card(size=8)
         cmass1.write_card(size=16)
         cmass1.write_card(size=16, is_double=True)
@@ -121,6 +248,7 @@ class TestMassElements(unittest.TestCase):
 
         eid = 10
         cmass2 = model.add_cmass2(eid, mass, [g1, g2], c1, c2, comment='cmass2')
+        cmass2.grid_component()
         cmass2.write_card(size=8)
         cmass2.write_card(size=16)
         cmass2.write_card(size=16, is_double=True)
@@ -154,6 +282,7 @@ class TestMassElements(unittest.TestCase):
         s1 = 1
         s2 = 2
         cmass3 = model.add_cmass3(eid, pid, [s1, s2], comment='cmass3')
+        cmass3.grid_component()
         cmass3.write_card(size=8)
         cmass3.write_card(size=16)
         cmass3.write_card(size=16, is_double=True)
@@ -168,6 +297,7 @@ class TestMassElements(unittest.TestCase):
 
         eid = 10
         cmass4 = model.add_cmass4(eid, mass, [s1, s2], comment='cmass4')
+        cmass4.grid_component()
         cmass4.write_card(size=8)
         cmass4.write_card(size=16)
         cmass4.write_card(size=16, is_double=True)

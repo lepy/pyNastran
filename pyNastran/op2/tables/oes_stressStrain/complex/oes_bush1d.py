@@ -1,7 +1,7 @@
-from typing import List
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, OES_Object
 from pyNastran.f06.f06_formatting import write_imag_floats_13e, _eigenvalue_header
 
@@ -15,21 +15,18 @@ class ComplexCBush1DArray(OES_Object):
         self.nelements = 0  # result specific
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return False
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return True
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
-        raise NotImplementedError()
-
-    def get_headers(self):
         raise NotImplementedError()
 
     def build(self):
@@ -41,14 +38,11 @@ class ComplexCBush1DArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = np.zeros(self.ntimes, dtype=dtype)
-        self.element = np.zeros(self.nelements, dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(self.nelements, dtype=idtype)
 
         #[tx, ty, tz, rx, ry, rz]
         self.data = np.zeros((self.ntimes, self.nelements, 6), dtype='complex64')
@@ -57,12 +51,13 @@ class ComplexCBush1DArray(OES_Object):
         """creates a pandas dataframe"""
         import pandas as pd
         headers = self.get_headers()
-        column_names, column_values = self._build_dataframe_transient_header()
-        #self.data_frame = self._build_pandas_transient_elements(
-            #column_values, column_names,
-            #headers, self.element, self.data)
-        #print(self.data_frame)
-        #aa
+        column_names, column_values = build_dataframe_transient_header(self)
+        # self.data_frame = build_pandas_transient_elements(
+        #     self, column_values, column_names,
+        #     headers, self.element, self.data)
+        # print(self.data_frame)
+
+        raise RuntimeError('replace pd.Panel')
         self.data_frame = pd.Panel(self.data, items=column_values,
                                    major_axis=self.element, minor_axis=headers).to_frame()
         self.data_frame.columns.names = column_names
@@ -106,18 +101,19 @@ class ComplexCBush1DArray(OES_Object):
 
     def add_sort1(self, dt, eid, tx, ty, tz, rx, ry, rz):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, :] = [tx, ty, tz, rx, ry, rz]
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -137,9 +133,9 @@ class ComplexCBush1DArray(OES_Object):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -199,7 +195,8 @@ class ComplexCBush1DStressArray(ComplexCBush1DArray, StressObject):
         ComplexCBush1DArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
         return headers
 

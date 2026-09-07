@@ -16,7 +16,7 @@ class TestBDFInterface(unittest.TestCase):
 
         cards = model.get_cards_by_card_types(card_types, reset_type_to_slot_map=False,
                                               stop_on_missing_card=False)
-        assert cards == {'GRID' : []}, cards
+        assert cards == {'GRID': []}, cards
 
         card_types = 'GRID'
         with self.assertRaises(TypeError):
@@ -99,7 +99,7 @@ class TestBDFInterface(unittest.TestCase):
         independent_node_ids_c1, dependent_node_ids_c1 = out
         #print('independent_node_ids_c1 =', independent_node_ids_c1)
         #print('dependent_node_ids_c1 =', dependent_node_ids_c1)
-        assert independent_node_ids_c1 == {'4' : [11],}, independent_node_ids_c1
+        assert independent_node_ids_c1 == {'4': [11],}, independent_node_ids_c1
         assert dependent_node_ids_c1 == {}, dependent_node_ids_c1
 
     def test_loads(self):
@@ -117,10 +117,23 @@ class TestBDFInterface(unittest.TestCase):
         out = get_load_arrays(model, subcase_id, eid_map, node_ids, normals,
                               nid_map=None)
         is_loads, is_temperatures, temperature_data, load_data = out
+        blank_array = np.array([], dtype='float64')
         assert is_loads is False, is_loads
         assert is_temperatures is False, is_temperatures
-        assert temperature_data == (None, None), temperature_data
-        assert load_data == (None, None, None), load_data
+
+        #assert temperature_data == (None, blank_array), temperature_data
+        assert isinstance(temperature_data, tuple), temperature_data
+        assert len(temperature_data) == 2, temperature_data
+        assert temperature_data[0] is None, temperature_data
+        assert np.array_equal(temperature_data[1], blank_array), temperature_data
+
+        #assert load_data == (blank_array, blank_array, blank_array, blank_array), load_data
+        assert isinstance(load_data, tuple), load_data
+        assert len(load_data) == 4, load_data
+        assert np.array_equal(load_data[0], blank_array), load_data
+        assert np.array_equal(load_data[1], blank_array), load_data
+        assert np.array_equal(load_data[2], blank_array), load_data
+        assert np.array_equal(load_data[3], blank_array), load_data
 
         key = 'LOAD'
         value = 10
@@ -189,5 +202,5 @@ class TestBDFInterface(unittest.TestCase):
         ]
         assert np.array_equal(mklist2, mklist2_expected), mklist2
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     unittest.main()

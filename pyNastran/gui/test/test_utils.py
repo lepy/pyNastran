@@ -1,13 +1,14 @@
 """defines various GUI unit tests"""
 import os
 import shutil
+from pathlib import Path
 import unittest
 import numpy as np
 
 try:
     import matplotlib.pyplot as plt
     IS_MATPLOTLIB = True
-except ImportError:
+except ModuleNotFoundError:
     IS_MATPLOTLIB = False
 
 import pyNastran
@@ -20,11 +21,58 @@ from pyNastran.gui.menus.legend.write_gif import (
     setup_animation, make_two_sided, make_symmetric, write_gif, IS_IMAGEIO)
 from pyNastran.gui.menus.results_sidebar_utils import get_cases_from_tree, build_pruned_tree
 
-PKG_PATH = pyNastran.__path__[0]
-MODEL_PATH = os.path.join(PKG_PATH, '..', 'models')
+PKG_PATH = Path(pyNastran.__path__[0])
+MODEL_PATH = PKG_PATH / '..' / 'models'
 from pyNastran.gui.gui_objects.gui_result import GuiResult
+from pyNastran.gui.utils.utils import find_next_value_in_sorted_list
+from pyNastran.gui.utils.qt.checks.utils import (check_locale_float, is_ranged_value,
+                                                 check_format_str)
+
 
 class GuiUtils(unittest.TestCase):
+    def test_find_next_value_in_sorted_list(self):
+        """"
+        This method is used by the gui to get the next result.
+        We may have missing values because they were deleted.
+
+        """
+        # ascending
+        lst = [1, 2, 3, 4, 5]
+        old = 1
+        new = 2
+        value = find_next_value_in_sorted_list(lst, old, new)
+        assert value == 2, value
+
+        lst = [1, 3, 4, 5]
+        old = 1
+        new = 2
+        value = find_next_value_in_sorted_list(lst, old, new)
+        assert value == 3, value
+
+        lst = [1, 3, 4, 5]
+        old = 5
+        new = 6
+        value = find_next_value_in_sorted_list(lst, old, new)
+        assert value == 1, value
+        # ---------------------------------
+        # descending
+        lst = [1, 2, 3, 4, 5]
+        old = 1
+        new = 0
+        value = find_next_value_in_sorted_list(lst, old, new)
+        assert value == 5, value
+
+        old = 2
+        new = 1
+        value = find_next_value_in_sorted_list(lst, old, new)
+        assert value == 1, value
+
+        lst = [1, 2, 4, 5]
+        old = 4
+        new = 3
+        value = find_next_value_in_sorted_list(lst, old, new)
+        assert value == 2, value
+
     def test_gui_result(self):
         """tests GuiResult"""
         subcase_id = 1
@@ -73,15 +121,51 @@ class GuiUtils(unittest.TestCase):
         x2 % 3
         x2 % y2
 
+    def test_check_version_fake_lower(self):
+        """no dev versions"""
+        version_current_test = '1.0.0'
+        version_latest_test = '1.1.0'
+        version_latest, version_current, is_newer = check_for_newer_version(
+            version_current=version_current_test,
+            version_latest=version_latest_test,
+            quiet=True)
+        #print(version_latest, version_current, is_newer)
+        assert version_current == version_current_test, (version_current, version_current_test)
+        assert version_latest == version_latest_test, (version_latest, version_latest_test)
+        assert is_newer is True, f'version_latest={version_latest!r} version_current={version_current!r} is_newer={is_newer!r}'
 
+    def test_check_version_fake_bigger(self):
+        """a bigger number version takes priority"""
+        version_current_test = '1.4.0+dev.5378fd363'
+        version_latest_test = '1.0.0'
+        (version_latest, version_current, is_newer) = check_for_newer_version(
+            version_current=version_current_test,
+            version_latest=version_latest_test,
+            quiet=True)
+        assert version_current == version_current_test
+        assert version_latest == version_latest_test
+        assert is_newer is False, f'version_latest={version_latest!r} version_current={version_current!r} is_newer={is_newer!r}'
 
-    def test_check_version(self):
-        """tests ``check_for_newer_version``"""
-        unused_version_latest, unused_version_current, is_newer = check_for_newer_version(
-            '1.0.0', quiet=True)
-        assert is_newer is True, is_newer
-        check_for_newer_version(quiet=True)
-        assert is_newer is True, is_newer
+    def test_check_version_fake_dev(self):
+        """a dev version is older than a non-dev version"""
+        version_current_test = '1.4.0+dev.5378fd363'
+        version_latest_test = '1.4.0'
+        (version_latest, version_current, is_newer) = check_for_newer_version(
+            version_current=version_current_test,
+            version_latest=version_latest_test,
+            quiet=True)
+        assert version_current == version_current_test
+        assert version_latest == version_latest_test
+        assert is_newer is False, f'version_latest={version_latest!r} version_current={version_current!r} is_newer={is_newer!r}'
+
+    def test_check_version_actual(self):
+        """tests ``check_for_newer_version`` with actual data"""
+        # current/dev release version -> False
+        (version_latest, version_current, is_newer) = check_for_newer_version(
+            version_current=None,
+            version_latest=None,
+            quiet=True)
+        assert is_newer is False, (version_latest, version_current, is_newer)
 
     def test_gui_csv_01(self):
         """tests solid_bending.txt"""
@@ -140,6 +224,10 @@ class GuiUtils(unittest.TestCase):
         csv_filename = os.path.join(MODEL_PATH, 'custom_geom.csv')
         load_user_geom(csv_filename)
 
+    def test_gui_custom_geom_02(self):
+        stl_filename = PKG_PATH / 'converters' / 'stl' / 'sphere.stl'
+        load_user_geom(stl_filename)
+
     def test_animation_scale_0(self):
         """0 to scale"""
         scale = 2.0
@@ -147,7 +235,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='0 to scale',
             fps=5)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -159,6 +247,37 @@ class GuiUtils(unittest.TestCase):
         expected_scales = [0.0, 0.25*scale, 0.5*scale, 0.75*scale, scale]
         assert_array(scales, expected_scales, 'scales')
 
+    def test_setup_animation_bug(self):
+        """0 to Scale to 0"""
+        scale = 0.225
+        out = setup_animation(
+            scale, istep=None,
+            animate_scale=True, animate_phase=False, animate_time=False,
+            icase_fringe=8, icase_disp=8, icase_vector=None,
+
+            icase_fringe_start=None, icase_fringe_end=None, icase_fringe_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
+            icase_vector_start=None, icase_vector_end=None, icase_vector_delta=None,
+
+            time=2.0, animation_profile='0 to Scale to 0',
+            fps=30, animate_in_gui=True)
+        phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
+        assert len(np.unique(icases_fringe)) == 1
+        assert len(np.unique(icases_disp)) == 1
+        #assert len(np.unique(icases_vector)) == 1  # None vector
+        assert len(np.unique(phases)) == 1
+        nsteps = len(icases_disp)
+        assert np.array_equal(isteps, np.arange(nsteps, dtype='int32'))
+
+        assert np.allclose(analysis_time, 1.0), analysis_time
+        assert np.allclose(scales.min(), 0.), scales
+        assert np.allclose(scales.max(), 0.225), scales
+        expected_scales = np.array([
+            0., 0.0140625, 0.028125 , 0.0421875, 0.05625  , 0.0703125,
+            0.084375 , 0.0984375, 0.1125   , 0.1265625, 0.140625 , 0.1546875,
+            0.16875  , 0.1828125, 0.196875 , 0.2109375, 0.225, ])
+        assert_array(scales, expected_scales, 'scales')
+
     def test_animation_scale_1a(self):
         """0 to scale to 0"""
         scale = 2.0
@@ -166,7 +285,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='0 to scale to 0',
             fps=11)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -185,7 +304,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='0 to scale to 0',
             fps=10)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -204,7 +323,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='-scale to scale',
             fps=5)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -223,7 +342,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='-scale to scale to -scale',
             fps=11)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -242,7 +361,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='-scale to scale to -scale',
             fps=10)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -262,7 +381,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='-scale to scale to -scale',
             fps=1)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -284,7 +403,7 @@ class GuiUtils(unittest.TestCase):
                 scale, istep=None,
                 animate_scale=True, animate_phase=False, animate_time=False,
                 icase_disp=42,
-                icase_start=None, icase_end=None, icase_delta=None,
+                icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
                 time=1.0, animation_profile='0 to scale to -scale to 0',
                 fps=5, )
             phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -309,7 +428,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=1.0, animation_profile='0 to scale to -scale to 0',
             fps=7, animate_in_gui=True)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -342,7 +461,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=True, animate_phase=False, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=2.0, animation_profile='0 to scale to -scale to 0',
             fps=7, animate_in_gui=True)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -357,10 +476,12 @@ class GuiUtils(unittest.TestCase):
     #msg += '%s = %s\n' % (expected_name, expected_array)
 
         msg = ''
-        if not np.allclose(scales.min(), -scale, atol=atol):  # pragma: no cover
-            msg += 'scales=%s min=%s expected=%s\n' % (scales, scales.min(), -scale)
-        if not np.allclose(scales.max(), scale, atol=atol):  # pragma: no cover
-            msg += 'scales=%s max=%s expected=%s' % (scales, scales.max(), scale)
+        min_scale = scales.min()
+        max_scale = scales.max()
+        if not np.allclose(min_scale, -scale, atol=atol):  # pragma: no cover
+            msg += 'scales=%s min=%s expected=%s\n' % (scales, min_scale, -scale)
+        if not np.allclose(max_scale, scale, atol=atol):  # pragma: no cover
+            msg += 'scales=%s max=%s expected=%s' % (scales, max_scale, scale)
         if msg:  # pragma: no cover
             raise ValueError(msg)
 
@@ -368,11 +489,16 @@ class GuiUtils(unittest.TestCase):
         """sinusoidal: 0 to scale to -scale to 0"""
         scale_atols = [(1., 0.00001), (10.0, 0.0001)]
         for scale, atol in scale_atols:
+            # sinusoidal: 0 to scale to -scale to 0
+            #    1
+            # 0     0     0
+            #         -1
+            #
             out = setup_animation(
                 scale, istep=None,
                 animate_scale=True, animate_phase=False, animate_time=False,
                 icase_disp=42,
-                icase_start=None, icase_end=None, icase_delta=None,
+                icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
                 time=2.0, animation_profile='sinusoidal: 0 to scale to -scale to 0',
                 fps=5)
             phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -381,10 +507,12 @@ class GuiUtils(unittest.TestCase):
             assert np.allclose(analysis_time, 2.0), analysis_time
 
             msg = ''
-            if not np.allclose(scales.min(), -scale, atol=atol):  # pragma: no cover
-                msg += 'scales=%s min=%s expected=%s\n' % (scales, scales.min(), -scale)
-            if not np.allclose(scales.max(), scale, atol=atol):  # pragma: no cover
-                msg += 'scales=%s max=%s expected=%s' % (scales, scales.max(), scale)
+            min_scale = scales.min()
+            max_scale = scales.max()
+            if not np.allclose(min_scale, -scale, atol=atol):  # pragma: no cover
+                msg += 'scales=%s min=%s expected=%s\n' % (scales, min_scale, -scale)
+            if not np.allclose(max_scale, scale, atol=atol):  # pragma: no cover
+                msg += 'scales=%s max=%s expected=%s' % (scales, max_scale, scale)
             if msg:  # pragma: no cover
                 raise ValueError(msg)
 
@@ -396,7 +524,7 @@ class GuiUtils(unittest.TestCase):
                 scale, istep=None,
                 animate_scale=False, animate_phase=False, animate_time=False,
                 icase_disp=42,
-                icase_start=None, icase_end=None, icase_delta=None,
+                icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
                 time=2.0, animation_profile='-scale to scale',
                 fps=30)
 
@@ -407,7 +535,7 @@ class GuiUtils(unittest.TestCase):
             scale, istep=None,
             animate_scale=False, animate_phase=True, animate_time=False,
             icase_disp=42,
-            icase_start=None, icase_end=None, icase_delta=None,
+            icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
             time=2.0, #animation_profile='0 to scale',
             fps=30)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
@@ -417,18 +545,94 @@ class GuiUtils(unittest.TestCase):
         assert np.allclose(phases[0], 0.), phases
         assert np.allclose(phases[-1], 354.), phases
 
-    def test_animation_time_1(self):
+    def test_animation_time_disp(self):
+        """time plot"""
+        scale = 1.0
+        with self.assertRaises(RuntimeError):
+            setup_animation(
+                scale, istep=None,
+                animate_scale=False, animate_phase=False, animate_time=True,
+                icase_disp=42,
+                icase_disp_start=None, icase_disp_end=None, icase_disp_delta=None,
+                time=2.0, #animation_profile='0 to scale',
+                fps=30)
+
+        out = setup_animation(
+            scale, istep=None,
+            animate_scale=False, animate_phase=False, animate_time=True,
+            icase_disp=42,
+            icase_disp_start=1, icase_disp_end=10, icase_disp_delta=2,
+            time=2.0, #animation_profile='0 to scale',
+            fps=30)
+        phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
+        assert np.array_equal(icases_disp, [1, 3, 5, 7, 9]), icases_disp
+        assert len(np.unique(scales)) == 1, scales
+        assert len(np.unique(isteps)) > 1, isteps
+        assert len(np.unique(phases)) == 1, phases
+        assert np.allclose(analysis_time, 2.0), analysis_time
+        assert np.allclose(phases.max(), 0.), phases
+
+    def test_animation_time_fringe(self):
+        """time plot"""
+        scale = 1.0
+        with self.assertRaises(ValueError):
+            # ncases_disp=10 nscales=5
+            setup_animation(
+                scale, istep=None,
+                animate_scale=False, animate_phase=False, animate_time=True,
+                icase_disp=42,
+                icase_disp_start=11, icase_disp_end=20, icase_disp_delta=1,
+                icase_fringe_start=1, icase_fringe_end=10, icase_fringe_delta=2,
+                time=2.0, #animation_profile='0 to scale',
+                fps=30)
+
+        out = setup_animation(
+            scale, istep=None,
+            animate_scale=False, animate_phase=False, animate_time=True,
+            icase_disp=42,
+            icase_disp_start=11, icase_disp_end=20, icase_disp_delta=2,
+            icase_fringe_start=1, icase_fringe_end=10, icase_fringe_delta=2,
+            time=2.0, #animation_profile='0 to scale',
+            fps=30)
+        phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
+        assert np.array_equal(icases_fringe, [1, 3, 5, 7, 9]), icases_fringe
+        assert np.array_equal(icases_disp, [11, 13, 15, 17, 19]), icases_fringe
+        assert len(np.unique(scales)) == 1, scales
+        assert len(np.unique(isteps)) > 1, isteps
+        assert len(np.unique(phases)) == 1, phases
+        assert np.allclose(analysis_time, 2.0), analysis_time
+        assert np.allclose(phases.max(), 0.), phases
+
+    def test_animation_time_fringe_disp(self):
         """time plot"""
         scale = 1.0
         out = setup_animation(
             scale, istep=None,
             animate_scale=False, animate_phase=False, animate_time=True,
             icase_disp=42,
-            icase_start=1, icase_end=10, icase_delta=2,
+            icase_fringe_start=1, icase_fringe_end=10, icase_fringe_delta=2,
             time=2.0, #animation_profile='0 to scale',
             fps=30)
         phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
-        assert np.array_equal(icases_disp, [1, 3, 5, 7, 9]), icases_disp
+        assert np.array_equal(icases_fringe, [1, 3, 5, 7, 9]), icases_fringe
+        assert len(np.unique(scales)) == 1, scales
+        assert len(np.unique(isteps)) > 1, isteps
+        assert len(np.unique(phases)) == 1, phases
+        assert np.allclose(analysis_time, 2.0), analysis_time
+        assert np.allclose(phases.max(), 0.), phases
+
+    def test_animation_time_vector(self):
+        """time plot"""
+        scale = 1.0
+        out = setup_animation(
+            scale, istep=None,
+            animate_scale=False, animate_phase=False, animate_time=True,
+            icase_disp=42,
+            icase_vector_start=1, icase_vector_end=10, icase_vector_delta=2,
+            time=2.0, #animation_profile='0 to scale',
+            fps=30)
+        phases, icases_fringe, icases_disp, icases_vector, isteps, scales, analysis_time, onesided, endpoint = out
+        assert np.array_equal(icases_vector, [1, 3, 5, 7, 9]), icases_vector
         assert len(np.unique(scales)) == 1, scales
         assert len(np.unique(isteps)) > 1, isteps
         assert len(np.unique(phases)) == 1, phases
@@ -531,12 +735,25 @@ class GuiUtils(unittest.TestCase):
             self.assertTrue(success)
             shutil.rmtree('mydir')
 
+    def test_check_format_str(self):
+        assert check_format_str('%g')[1] is True
+        assert check_format_str('%i')[1] is True
+        assert check_format_str('%d')[1] is True
+        assert check_format_str('%.3E')[1] is True
+        assert check_format_str('%.3g')[1] is True
+        assert check_format_str('%.4f')[1] is True
+        assert check_format_str('%08,.1f')[1] is True
+        assert check_format_str('%08,.p1f')[1] is False
+        assert check_locale_float('3.14')[0] == 3.14
+        assert check_locale_float('2,557')[0] == 2.557
 
-def assert_array(actual_array, expected_array, name):
+
+
+def assert_array(actual_array, expected_array, name: str):
     """checks the arrays for equivalence and the correct length"""
     expected_array = np.asarray(expected_array)
-    actual_name = 'actual_%s  ' % (name)
-    expected_name = 'expected_%s' % (name)
+    actual_name = 'actual_%s  ' % name
+    expected_name = 'expected_%s' % name
     if not len(actual_array) == len(expected_array):
         raise AssertionError('Invalid Length\n'
                              '%s=%s; len=%s\n'

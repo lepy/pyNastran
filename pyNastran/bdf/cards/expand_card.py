@@ -4,21 +4,28 @@ defines:
  - expand_thru_by
 
 """
-from typing import  List, Union
+from typing import Optional
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.bdf_interface.assign_type import interpret_value
 
 
-def expand_thru(fields, set_fields=True, sort_fields=False):
-    # type: (List[str], bool, bool) -> List[int]
+def set_list_print(mylist: list[Optional[int | str]]):
+    """write a list of [1, None 2] as [1, None, 2]"""
+    lst = ', '.join([str(val) for val in mylist])
+    return f'[{lst}]'
+
+
+def expand_thru(fields: list[str | int],
+                set_fields: bool=True,
+                sort_fields: bool=False) -> list[int]:
     """
     Expands a list of values of the form [1,5,THRU,9,13]
     to be [1,5,6,7,8,9,13]
 
     Parameters
     ----------
-    fields : List[int/str]
+    fields : list[int/str]
         the fields to expand
     set_fields : bool; default=True
         Should the fields be converted to a set and then back to a list?
@@ -35,8 +42,7 @@ def expand_thru(fields, set_fields=True, sort_fields=False):
     elif len(fields) == 1:
         return [int(fields[0])]
 
-    fields = [field.upper()
-              if isinstance(field, str) else field for field in fields]
+    fields = remove_blanks_capitalize(fields)
 
     out = []
     nfields = len(fields)
@@ -61,15 +67,31 @@ def expand_thru(fields, set_fields=True, sort_fields=False):
     return out
 
 
-def expand_thru_by(fields: List[str], set_fields: bool=True, sort_fields: bool=True,
-                   require_int: bool=True, allow_blanks: bool=False) -> List[int]:
+def remove_blanks_capitalize(fields: list[Optional[str | int]]) -> list[Optional[str | int]]:
+    """remove any blanks and capitalize any strings"""
+    # fields2 = [field.upper()
+    #            if isinstance(field, str) else field for field in fields]
+    fields2 = []
+    for field in fields:
+        if field is None:
+            continue
+        if isinstance(field, str):
+            field = field.upper()
+            if len(field) == 0:
+                continue
+        fields2.append(field)
+    return fields2
+
+
+def expand_thru_by(fields: list[str | int], set_fields: bool=True, sort_fields: bool=True,
+                   require_int: bool=True, allow_blanks: bool=False) -> list[int]:
     """
     Expands a list of values of the form [1,5,THRU,9,BY,2,13]
     to be [1,5,7,9,13]
 
     Parameters
     ----------
-    fields : List[int/str]
+    fields : list[int/str]
         the fields to expand
     set_fields : bool; default=True
         Should the fields be converted to a set and then back to a list
@@ -88,7 +110,10 @@ def expand_thru_by(fields: List[str], set_fields: bool=True, sort_fields: bool=T
 
     Notes
     -----
-    used for QBDY3 and what else ???
+    used for:
+      BLSEG, DDVAL, NSM1, ACCEL1
+      QVECT, QBDY3, RADBC, QVOL
+    what else ???
 
     """
     if require_int:
@@ -97,8 +122,7 @@ def expand_thru_by(fields: List[str], set_fields: bool=True, sort_fields: bool=T
         func = interpret_value
 
     # ..todo:  should this be removed...is the field capitalized when read in?
-    fields = [field.upper()
-              if isinstance(field, str) else field for field in fields]
+    fields = remove_blanks_capitalize(fields)
 
     if len(fields) == 1:
         return [func(fields[0])]

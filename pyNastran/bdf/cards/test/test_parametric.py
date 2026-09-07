@@ -1,4 +1,5 @@
 import unittest
+from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.cards.test.utils import save_load_deck
 
@@ -6,8 +7,8 @@ from pyNastran.bdf.cards.test.utils import save_load_deck
 class TestParametric(unittest.TestCase):
     def test_parametric(self):
         """tests PVAL, PSET, FEEDGE, FEFACE, GMCURV, GMSURF"""
-
-        model = BDF(debug=False)
+        log = SimpleLogger(level='warning')
+        model = BDF(debug=False, log=log)
         idi = 10
         poly1 = 11
         poly2 = 12
@@ -61,7 +62,8 @@ class TestParametric(unittest.TestCase):
                        run_save_load_hdf5=True,
                        run_mass_properties=False,
                        run_loads=False,
-                       run_test_bdf=False)
+                       run_test_bdf=False,
+                       remove_disabled_cards=False)
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

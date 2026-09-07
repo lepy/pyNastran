@@ -19,7 +19,7 @@ Notations
  - NA   - card doesn't have any cross-referencing (e.g. an SPOINT card) and is done
  - ??? no check has been done on this card
  - any other note means a card isn't done
- - no label means the card isnt done and probably isnt even added in readWrite
+ - no label means the card isn't done and probably isn't even added in readWrite
 
 ----Control---:
 ECHOON  (done)
@@ -397,7 +397,7 @@ QSET1  (no)
 USET1  (???)
 
 SET1   (???)
-SET2
+SET2   (???)
 SET3   (???)
 
 SEQSEP
@@ -447,33 +447,33 @@ PARAM   (???)
 -----------------------------------------------
 
 ----Axial Nodes----:
-RINGAX (not integrated)
-POINTAX
+RINGAX  (removed)
+POINTAX (removed)
 
 ----Axial Elements----:
 CTRIAX  (done)
 CTRIAX6 (done)
 CQUADX  (done)
-RINGAX
+RINGAX (removed)
 
 ----Axial Cone Elements/Properties----:
-CCONEAX
-PCONEAX
+CCONEAX (removed)
+PCONEAX (removed)
 
 ----Axial Loads----:
-FORCEAX
-PLOADX1  (no)
+FORCEAX (removed)
+PLOADX1  (done)
 MOMAX
-TEMPAX
-PRESAX
+TEMPAX (removed)
+PRESAX (removed)
 
 ----Axial Constraints----:
 MPCAX
-SPCAX   (???)
+SPCAX   (removed)
 SUPAX
 
 ----Axial Other----:
-AXIC
+AXIC   (removed)
 OMITAX
 SECTAX
 

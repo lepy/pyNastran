@@ -12,7 +12,7 @@ Multi-segment beams are IntegratedLineProperty objects.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from numpy import pi
+import numpy as np
 
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
@@ -116,17 +116,17 @@ class PROD(Property):
         j = double_or_blank(card, 4, 'J', 0.0)
         c = double_or_blank(card, 5, 'c', 0.0)
         nsm = double_or_blank(card, 6, 'nsm', 0.0)
-        assert len(card) <= 7, 'len(PROD card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(PROD card) = {len(card):d}\ncard={card}'
         return PROD(pid, mid, A, j, c, nsm, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PROD card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -146,12 +146,12 @@ class PROD(Property):
         J = self.J()
         c = self.c
         nsm = self.Nsm()
-        assert isinstance(pid, int), 'pid=%r' % pid
-        assert isinstance(mid, int), 'mid=%r' % mid
-        assert isinstance(A, float), 'pid=%r' % A
-        assert isinstance(J, float), 'cid=%r' % J
-        assert isinstance(c, float), 'c=%r' % c
-        assert isinstance(nsm, float), 'nsm=%r' % nsm
+        assert isinstance(pid, int), 'PROD: pid=%r' % pid
+        assert isinstance(mid, int), 'PROD: mid=%r' % mid
+        assert isinstance(A, float), 'PROD: pid=%r' % A
+        assert isinstance(J, float), 'PROD: J=%r' % J
+        assert isinstance(c, float), 'PROD: c=%r' % c
+        assert isinstance(nsm, float), 'PROD: nsm=%r' % nsm
 
     def Area(self):
         return self.A
@@ -203,7 +203,7 @@ class PROD(Property):
         msg = ', which is required by PROD mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -217,7 +217,6 @@ class PROD(Property):
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
-        # type: () -> None
         self.mid = self.Mid()
         self.mid_ref = None
 
@@ -340,20 +339,20 @@ class PTUBE(Property):
         pid = integer(card, 1, 'pid')
         mid = integer(card, 2, 'mid')
         OD1 = double(card, 3, 'OD1')
-        t = double_or_blank(card, 4, 't', OD1/2.)
-        nsm = double_or_blank(card, 5, 'nsm', 0.0)
-        OD2 = double_or_blank(card, 6, 'OD2', OD1)
-        assert len(card) <= 7, 'len(PTUBE card) = %i\ncard=%s' % (len(card), card)
+        t = double_or_blank(card, 4, 't', default=OD1/2)
+        nsm = double_or_blank(card, 5, 'nsm', default=0.0)
+        OD2 = double_or_blank(card, 6, 'OD2', default=OD1)
+        assert len(card) <= 7, f'len(PTUBE card) = {len(card):d}\ncard={card}'
         return PTUBE(pid, mid, OD1, t, nsm, OD2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PTUBE card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -395,7 +394,7 @@ class PTUBE(Property):
         msg = ', which is required by PTUBE mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -441,9 +440,9 @@ class PTUBE(Property):
     def J(self):
         Dout = self.OD1
         if self.t == 0.0:
-            return pi / 8. * Dout**4
+            return np.pi / 8. * Dout**4
         Din = Dout - 2 * self.t
-        return pi / 8. * (Dout**4 - Din**2)
+        return np.pi / 8. * (Dout**4 - Din**2)
 
     def Area(self):
         r"""
@@ -477,18 +476,18 @@ class PTUBE(Property):
         """Gets the Area of Section 1 of the CTUBE."""
         Dout = self.OD1
         if self.t == 0:
-            return pi / 4. * Dout**2
+            return np.pi / 4. * Dout**2
         Din = Dout - 2 * self.t
-        A1 = pi / 4. * (Dout * Dout - Din * Din)
+        A1 = np.pi / 4. * (Dout * Dout - Din * Din)
         return A1
 
     def _area2(self):
         """Gets the Area of Section 2 of the CTUBE."""
         Dout = self.OD2
         if self.t == 0:
-            return pi / 4. * Dout**2
+            return np.pi / 4. * Dout**2
         Din = Dout - 2 * self.t
-        A2 = pi / 4. * (Dout * Dout - Din * Din)
+        A2 = np.pi / 4. * (Dout * Dout - Din * Din)
         return A2
 
     #def massMatrix(self):

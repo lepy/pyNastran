@@ -7,7 +7,7 @@ import numpy as np
 from pyNastran.bdf.bdf import BDF, BDFCard
 from pyNastran.bdf.bdf import CROD, CONROD, PROD, CTUBE, PTUBE, GRID, MAT1
 from pyNastran.bdf.cards.test.test_shells import make_dvprel_optimization
-from pyNastran.bdf.cards.test.utils import save_load_deck
+from pyNastran.bdf.cards.test.utils import save_load_deck, mass_properties
 
 #from pyNastran.bdf.field_writer_8 import print_card_8
 
@@ -19,13 +19,14 @@ class TestRods(unittest.TestCase):
         cardi = BDFCard(card)
 
         size = 8
-        card = CROD.add_card(cardi)
-        card.write_card(size, 'dummy')
-        card.raw_fields()
-        self.assertEqual(card.eid, 10)
-        self.assertEqual(card.Pid(), 100)
-        node_ids = card.node_ids
+        crod = CROD.add_card(cardi)
+        crod.write_card(size, 'dummy')
+        crod.raw_fields()
+        self.assertEqual(crod.eid, 10)
+        self.assertEqual(crod.Pid(), 100)
+        node_ids = crod.node_ids
         assert node_ids == [10, 2], node_ids # probably wrong
+        assert crod.get_edge_ids() == [(2, 10)]
 
     def test_prod_nsm(self):
         model = BDF(debug=False)
@@ -113,8 +114,9 @@ class TestRods(unittest.TestCase):
         model.safe_cross_reference()
         model.uncross_reference()
         model.cross_reference()
-        mass, cg, inertia = model.mass_properties(
-            element_ids=None, mass_ids=None,
+        assert ctube.get_edge_ids() == [(10, 12)]
+        mass, cg, inertia = mass_properties(
+            model, element_ids=None, mass_ids=None,
             reference_point=None, sym_axis=None,
             scale=None, inertia_reference='cg')
 
@@ -135,13 +137,14 @@ class TestRods(unittest.TestCase):
         cardi = BDFCard(card)
 
         size = 8
-        card = CONROD.add_card(cardi)
-        card.write_card(size, 'dummy')
-        card.raw_fields()
-        self.assertEqual(card.eid, eid)
-        self.assertEqual(card.Mid(), mid)
-        node_ids = card.node_ids
+        conrod = CONROD.add_card(cardi)
+        conrod.write_card(size, 'dummy')
+        conrod.raw_fields()
+        self.assertEqual(conrod.eid, eid)
+        self.assertEqual(conrod.Mid(), mid)
+        node_ids = conrod.node_ids
         assert node_ids == [nid1, nid2], node_ids
+        assert conrod.get_edge_ids() == [(2, 3)]
 
     def test_conrod_nsm(self):
         model = BDF(debug=False)
@@ -154,6 +157,25 @@ class TestRods(unittest.TestCase):
         nids = [1, 2]
         conrod = model.add_conrod(eid, mid, nids, A=A, j=0.0, c=0.0, nsm=nsm,
                                comment='')
+        assert conrod.get_edge_ids() == [(1, 2)]
+        conrod.Mid()
+        conrod.Area()
+        conrod.J()
+        conrod.C()
+        conrod.Nsm()
+        conrod.Area()
+        with self.assertRaises(RuntimeError):
+            conrod.Length()
+        with self.assertRaises(RuntimeError):
+            conrod.Centroid()
+        with self.assertRaises(RuntimeError):
+            conrod.MassPerLength()
+        with self.assertRaises(RuntimeError):
+            conrod.E()
+        with self.assertRaises(RuntimeError):
+            conrod.G()
+        with self.assertRaises(RuntimeError):
+            conrod.Mass()
 
         E = 1.0
         G = None
@@ -167,6 +189,7 @@ class TestRods(unittest.TestCase):
                        has_none=True)
         model.pop_parse_errors()
         conrod2 = model.elements[2]
+        assert conrod2.get_edge_ids() == [(1, 2)]
 
         #------------------
         model.cross_reference()
@@ -193,7 +216,6 @@ class TestRods(unittest.TestCase):
         J = 42.
         c = 3.333
         nsm = 0.
-        size = 8
 
         E = 1e7
         G = 2e7
@@ -213,34 +235,38 @@ class TestRods(unittest.TestCase):
         card = model._process_card(lines)
         cardi = BDFCard(card)
         conrod = CONROD.add_card(cardi)
-        model._add_element_object(conrod)
+        add_methods = model._add_methods
+        add_methods.add_element_object(conrod)
         card = model.elements[eid]
         node_ids = card.node_ids
         assert node_ids == [nid1, nid2], node_ids # probably wrong
+        assert conrod.get_edge_ids() == [(nid1, nid2)]
 
         lines = ['crod,%i, %i, %i, %i' % (eid+1, pid, nid1, nid2)]
         card = model._process_card(lines)
         cardi = BDFCard(card)
         crod = CROD.add_card(cardi)
-        model._add_element_object(crod)
+        add_methods.add_element_object(crod)
         card = model.elements[eid+1]
         node_ids = card.node_ids
         assert node_ids == [nid1, nid2], node_ids # probably wrong
+        assert crod.get_edge_ids() == [(nid1, nid2)]
 
         lines = ['ctube,%i, %i, %i, %i' % (eid+2, pid+1, nid1, nid2)]
         card = model._process_card(lines)
         cardi = BDFCard(card)
         ctube = CTUBE.add_card(cardi)
-        model._add_element_object(ctube)
+        add_methods.add_element_object(ctube)
         card = model.elements[eid+2]
         node_ids = card.node_ids
         assert node_ids == [nid1, nid2], node_ids # probably wrong
+        assert ctube.get_edge_ids() == [(nid1, nid2)]
 
         lines = ['prod,%i, %i, %f, %f, %f, %f' % (pid, mid, A, J, c, nsm)]
         card = model._process_card(lines)
         cardi = BDFCard(card)
         prod = PROD.add_card(cardi)
-        model._add_property_object(prod)
+        add_methods.add_property_object(prod)
 
         #self.pid = integer(card, 1, 'pid')
         #self.mid = integer(card, 2, 'mid')
@@ -255,25 +281,25 @@ class TestRods(unittest.TestCase):
         card = model._process_card(lines)
         cardi = BDFCard(card)
         ptube = PTUBE.add_card(cardi)
-        model._add_property_object(ptube)
+        add_methods.add_property_object(ptube)
 
         lines = ['mat1,%i, %.2e, %.2e, %f, %f' % (mid, E, G, nu, rho)]
         card = model._process_card(lines)
         cardi = BDFCard(card)
         card = MAT1.add_card(cardi)
-        model._add_structural_material_object(card)
+        add_methods.add_structural_material_object(card)
 
         lines = ['grid,%i, %i, %f, %f, %f' % (nid1, 0, xyz1[0], xyz1[1], xyz1[2])]
         card = model._process_card(lines)
         cardi = BDFCard(card)
         card = GRID.add_card(cardi)
-        model._add_node_object(card)
+        add_methods.add_node_object(card)
 
         lines = ['grid,%i, %i, %f, %f, %f' % (nid2, 0, xyz2[0], xyz2[1], xyz2[2])]
         card = model._process_card(lines)
         cardi = BDFCard(card)
         card = GRID.add_card(cardi)
-        model._add_node_object(card)
+        add_methods.add_node_object(card)
 
         model.cross_reference()
         mass = L * (rho * A + nsm)
@@ -352,13 +378,63 @@ class TestRods(unittest.TestCase):
         E = 3.0e7
         G = None
         nu = 0.3
-        model.add_crod(eid_rod, pid_rod, [1, 2])
+        crod = model.add_crod(eid_rod, pid_rod, [1, 2])
+        with self.assertRaises(RuntimeError):
+            crod.Mid()
+        with self.assertRaises(RuntimeError):
+            crod.Area()
+        with self.assertRaises(RuntimeError):
+            crod.Length()
+        with self.assertRaises(RuntimeError):
+            crod.J()
+        with self.assertRaises(RuntimeError):
+            crod.Centroid()
+        with self.assertRaises(RuntimeError):
+            crod.MassPerLength()
+        with self.assertRaises(RuntimeError):
+            crod.C()
+        with self.assertRaises(RuntimeError):
+            crod.E()
+        with self.assertRaises(RuntimeError):
+            crod.G()
+        with self.assertRaises(RuntimeError):
+            crod.Nsm()
+        with self.assertRaises(RuntimeError):
+            crod.Area()
+        with self.assertRaises(RuntimeError):
+            crod.Mass()
+
         model.add_prod(pid_rod, mid, A)
         model.add_mat1(mid, E, G, nu)
 
         eid_tube = 2
         pid_tube = 2
-        model.add_ctube(eid_tube, pid_tube, [1, 2])
+        ctube = model.add_ctube(eid_tube, pid_tube, [1, 2])
+        with self.assertRaises(RuntimeError):
+            ctube.Mid()
+        with self.assertRaises(RuntimeError):
+            ctube.Area()
+        with self.assertRaises(RuntimeError):
+            ctube.Length()
+        with self.assertRaises(RuntimeError):
+            ctube.J()
+        with self.assertRaises(RuntimeError):
+            ctube.Centroid()
+        # with self.assertRaises(RuntimeError):
+        #     ctube.MassPerLength()
+        # with self.assertRaises(RuntimeError):
+        #     ctube.C()
+        with self.assertRaises(RuntimeError):
+            ctube.E()
+        with self.assertRaises(RuntimeError):
+            ctube.G()
+        with self.assertRaises(RuntimeError):
+            ctube.Nsm()
+        with self.assertRaises(RuntimeError):
+            ctube.Area()
+        with self.assertRaises(RuntimeError):
+            ctube.Mass()
+
         model.add_ptube(pid_tube, mid, 1.0)
         params = [
             ('A', 2.0),

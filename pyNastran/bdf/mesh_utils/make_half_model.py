@@ -5,20 +5,21 @@ This file defines:
         log=None, debug=True)
 
 """
-from cpylog import get_logger2
-from pyNastran.utils import deprecated
+from pyNastran.utils import PathLike  # deprecated
 from pyNastran.bdf.mesh_utils.internal_utils import get_bdf_model
 from pyNastran.bdf.mesh_utils.mirror_mesh import _plane_to_iy
 
 
-def make_symmetric_model(bdf_filename, plane: str='xz',
-                         zero_tol: float=1e-12, log=None, debug: bool=True):
-    log = get_logger2(log=log, debug=debug, encoding='utf-8')
-    deprecated('make_symmetric_model', 'make_half_model', '1.3', levels=[0, 1, 2])
-    return make_half_model(bdf_filename, plane=plane, zero_tol=zero_tol, log=log, debug=debug)
+# def make_symmetric_model(bdf_filename, plane: str='xz',
+#                          zero_tol: float=1e-12, log=None, debug: bool=True):
+#     log = get_logger(log=log, debug=debug, encoding='utf-8')
+#     deprecated('make_symmetric_model', 'make_half_model', '1.3', levels=[0, 1, 2])
+#     return make_half_model(bdf_filename, plane=plane, zero_tol=zero_tol, log=log, debug=debug)
 
-def make_half_model(bdf_filename, plane: str='xz',
-                         zero_tol: float=1e-12, log=None, debug: bool=True):
+def make_half_model(bdf_filename: PathLike,
+                    plane: str='xz',
+                    zero_tol: float=1e-12,
+                    log=None, debug: bool=True):
     """
     Makes a half/symmetric model from a full model
 
@@ -32,7 +33,7 @@ def make_half_model(bdf_filename, plane: str='xz',
         xz : +y/-y
         yz : +x/-x
         xy : +z/-z
-    zaero_tol : float; default=1e-12
+    zero_tol : float; default=1e-12
         the symmetry plane tolerance
 
     Returns
@@ -128,9 +129,9 @@ def make_half_model(bdf_filename, plane: str='xz',
 
     for unused_trim_id, trim in model.trims.items():
         labels = trim.labels
-        ilabels_to_remove = [labels.index(label) for label in labels_to_remove
-                             if label in labels]
+        ilabels_to_remove = set(labels.index(label) for label in labels_to_remove
+                                if label in labels)
         #print("ilabels_to_remove =", ilabels_to_remove)
-        trim.uxz = [trim.uxs[ilabel] for ilabel in ilabels_to_remove]
-        trim.labels = [trim.labels[ilabel] for ilabel in ilabels_to_remove]
+        trim.uxs = [trim.uxs[i] for i in range(len(labels)) if i not in ilabels_to_remove]
+        trim.labels = [trim.labels[i] for i in range(len(labels)) if i not in ilabels_to_remove]
     return model

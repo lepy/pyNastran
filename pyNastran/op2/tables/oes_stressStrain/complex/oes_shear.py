@@ -1,10 +1,12 @@
-from typing import List
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
-    StressObject, StrainObject, OES_Object)
+    StressObject, StrainObject, OES_Object,
+    oes_complex_data_code, get_scode,
+    set_element_case, set_freq_case, set_complex_modes_case)
 from pyNastran.f06.f06_formatting import write_imag_floats_13e
 
 
@@ -16,7 +18,7 @@ class ComplexShearArray(OES_Object):
     """
     def __init__(self, data_code, is_sort1, isubcase, dt):
         OES_Object.__init__(self, data_code, isubcase, apply_data_code=False)   ## why???
-        self.element_node = None
+        #self.element_node = None
         #self.code = [self.format_code, self.sort_code, self.s_code]
 
         #self.ntimes = 0  # or frequency/mode
@@ -41,7 +43,7 @@ class ComplexShearArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -64,12 +66,11 @@ class ComplexShearArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
         #print('ntotal=%s ntimes=%s nelements=%s' % (self.ntotal, self.ntimes, self.nelements))
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
-        self._times = np.zeros(self.ntimes, dtype=dtype)
+        idtype, cfdtype = get_complex_times_dtype(self.size)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
         #self.ntotal = self.nelements * nnodes
 
         self.element = np.zeros(self.nelements, dtype=idtype)
@@ -94,10 +95,91 @@ class ComplexShearArray(OES_Object):
         #22        max_shear  5.855954e-09+0.000000e+00j  0.000000+0.000000j
         #          avg_shear  5.855954e-09+0.000000e+00j  0.000000+0.000000j
         #import pandas as pd
-        column_names, column_values = self._build_dataframe_transient_header()
-        self.data_frame = self._build_pandas_transient_elements(
-            column_values, column_names,
+        column_names, column_values = build_dataframe_transient_header(self)
+        self.data_frame = build_pandas_transient_elements(
+            self, column_values, column_names,
             self.headers, self.element, self.data)
+
+
+    @classmethod
+    def _add_case(cls,
+                  table_name, element_name, isubcase,
+                  is_sort1, is_random, is_msc,
+                  random_code, title, subtitle, label):
+        is_strain = 'Strain' in cls.__name__
+        assert isinstance(is_strain, bool), is_strain
+        assert isinstance(element_name, str), element_name
+        is_strain = 'Strain' in cls.__name__
+        num_wide = 3
+        data_code = oes_complex_data_code(
+            table_name,
+            element_name, num_wide,
+            is_sort1=is_sort1, is_random=is_random,
+            random_code=random_code, title=title, subtitle=subtitle, label=label,
+            is_msc=is_msc)
+
+        ELEMENT_NAME_TO_ELEMENT_TYPE = {
+            'CSHEAR': 4,
+        }
+        #
+        #stress_bits[0] = 1  # Henky von-mises bit (vs. octehedral)????
+        #stress_bits[1] = 1  # strain bit (vs. stress)
+        #stress_bits[2] = 1  # curvature bit (vs. fiber)     ---> always 0
+        #stress_bits[3] = 1  # strain bit (vs. stress)
+        #stress_bits[4] = 1  # von mises bit (vs. max shear) ---> always 0
+        if is_strain:
+            # fiber   # 2  =0
+            # strain  # 1,3=1
+            #stress_bits[2] == 0
+            stress_bits = [1, 1, 0, 1, 0]
+            #data_code['s_code'] = 1 # strain?
+        else:
+            # fiber   # 2   =0
+            # stress  # 1, 3=0
+            stress_bits = [0, 0, 0, 0, 0]
+            #data_code['s_code'] = 0
+
+        s_code = get_scode(stress_bits)
+        data_code['stress_bits'] = stress_bits
+        data_code['s_code'] = s_code
+
+        assert stress_bits[1] == stress_bits[3]  # strain
+
+        element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name.upper()]
+        data_code['element_name'] = element_name.upper()
+        data_code['element_type'] = element_type
+        return data_code
+
+    @classmethod
+    def add_freq_case(cls, table_name, element_name: str,
+                      element, data, isubcase,
+                      freqs,
+                      is_sort1=True, is_random=False, is_msc=True,
+                      random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name, isubcase,
+            is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+
+        obj = set_freq_case(cls, is_sort1, isubcase, data_code,
+                            set_element_case, (element, data), freqs)
+        return obj
+
+    @classmethod
+    def add_complex_modes_case(cls, table_name, element, data, isubcase,
+                               modes, eigrs, eigis,
+                               element_name: str,
+                               is_sort1=True, is_random=False, is_msc=True,
+                               random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name, isubcase,
+            is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+
+        obj = set_complex_modes_case(cls, is_sort1, isubcase, data_code,
+                                     set_element_case, (element, data),
+                                     modes, eigrs, eigis)
+        return obj
 
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
@@ -113,8 +195,8 @@ class ComplexShearArray(OES_Object):
                     for ieid, eid in enumerate(self.element):
                         t1 = self.data[itime, ieid, :]
                         t2 = table.data[itime, ieid, :]
-                        (tx1, ty1, unused_tz1, unused_rx1, unused_ry1, unused_rz1) = t1
-                        (tx2, ty2, unused_tz2, unused_rx2, unused_ry2, unused_rz2) = t2
+                        (tx1, ty1) = t1
+                        (tx2, ty2) = t2
                         d = t1 - t2
                         if not np.allclose([tx1.real, tx1.imag, ty1.real, ty1.imag],
                                            [tx2.real, tx2.imag, ty2.real, ty2.imag], atol=0.0001):
@@ -137,6 +219,7 @@ class ComplexShearArray(OES_Object):
 
     def add_sort1(self, dt, eid, max_shear, avg_shear):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.data[self.itime, self.itotal] = [max_shear, avg_shear]
@@ -144,12 +227,12 @@ class ComplexShearArray(OES_Object):
         #self.ielement += 1
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -164,14 +247,14 @@ class ComplexShearArray(OES_Object):
             msg.append('  type=%s nelements=%i nnodes=%i; table_name=%r\n' % (
                 self.__class__.__name__, nelements, nnodes, self.table_name))
         msg.append('  data: [ntimes, nnodes, 2] where 2=[%s]\n' % str(', '.join(self._get_headers())))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg.append('  %s\n' % self.element_name)
         msg += self.get_data_code()
         return msg
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         """
                 C O M P L E X   F O R C E S   A C T I N G   O N   S H E A R   P A N E L   E L E M E N T S   (CSHEAR)
                                                           (REAL/IMAGINARY)
@@ -240,10 +323,11 @@ class ComplexShearArray(OES_Object):
         return page_num - 1
 
     @property
-    def headers(self) -> List[str]:
+    def headers(self) -> list[str]:
         return self._get_headers()
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         return self.headers
 
 class ComplexShearStressArray(ComplexShearArray, StressObject):
@@ -251,8 +335,10 @@ class ComplexShearStressArray(ComplexShearArray, StressObject):
         ComplexShearArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def _get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         return ['max_shear', 'avg_shear']
+
 
 class ComplexShearStrainArray(ComplexShearArray, StrainObject):
     def __init__(self, data_code, is_sort1, isubcase, dt):
@@ -260,7 +346,8 @@ class ComplexShearStrainArray(ComplexShearArray, StrainObject):
         StrainObject.__init__(self, data_code, isubcase)
         assert self.is_strain, self.stress_bits
 
-    def _get_headers(self):
+    @property
+    def headers(self) -> list[str]:
         return ['max_shear', 'avg_shear']
 
 def _get_cshear_msg(is_mag_phase, is_sort1):

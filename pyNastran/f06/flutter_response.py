@@ -1,32 +1,304 @@
+"""
+Supports:
+ - Plotting
+   - Vg/Vf plot
+     - swap out V_EAS for V_TAS, Mach, Q-Dynamic Pressure, Altitude,
+                          K-Reduced Frequency
+   - Vg/Vk plot
+     - same, but Reduced Frequency
+   - Root locus
+ - Limits
+ - Point removal
+ - Mode number or point-style
+ - Mode hiding
+   - dashed lines if frequencies don't change more than 1.0 Hz
+   - remove lines if frequencies don't change more than 0.5 Hz
+ - Flutter Crossings
+   - first crossing only
+   - TODO: add capability for "sine crossings"; a sine wave
+           has multiple crossings and I want all of them
+   - TODO: capaibility to turn off flutter crossings from
+           modes without removing mode from plot (maybe)
+Other:
+ - more control of font sizes
+ - control over point size / text annotation size
+"""
+from __future__ import annotations
+from collections import Counter
+
+import os
+import warnings
 from itertools import count
-from typing import  List, Dict, Union, Tuple, Iterable, Optional, Any
+from pathlib import PurePath
+from typing import Iterable, TextIO, Optional, Any, TYPE_CHECKING
 
 import numpy as np
-
+import numpy.typing as npt
 try:
+    import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gridspec
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import MultipleLocator
     IS_MATPLOTLIB = True
-except ImportError:  # pragma: no cover
+except ModuleNotFoundError:  # pragma: no cover
     IS_MATPLOTLIB = False
 
+from cpylog import SimpleLogger
 from pyNastran.utils.atmosphere import (
     get_alt_for_density, atm_density,
     convert_altitude, convert_velocity, convert_density, convert_pressure,
 )
-from pyNastran.utils import object_attributes, object_methods
+from pyNastran.utils import object_attributes, object_methods, PathLike
+from pyNastran.utils.numpy_utils import integer_types, float_types, integer_float_types
+
+if TYPE_CHECKING and IS_MATPLOTLIB:  # pragma: no cover
+    from matplotlib.axes import Axes
+
+Color = str
+LineData = tuple[str, float, Color, str]
+LINESTYLES = ['-', '--', '-.', ':', 'None', ' ', '',
+              'solid', 'dashed', 'dashdot', 'dotted']
+Crossing = tuple[np.floating | float,
+                 float, float]
+Limit = tuple[Optional[float], Optional[float]] | None
+
+VCrossingModeDict = dict[int, list[Crossing]]
+# VCrossingDict = dict[npt.floating, VCrossingModeDict]
+VCrossingDict = dict[float, VCrossingModeDict]
 
 
 class FlutterResponse:
     """storage object for single subcase SOL 145 results"""
 
-    def __init__(self, subcase: int, configuration: str,
+    def __eq__(self, flutter_response: FlutterResponse) -> bool:
+        return True
+
+    def export_to_hdf5(self, h5_file, encoding: str):
+        return  # h5_file.create_dataset('data', data=np.ones(10))
+
+    def __repr__(self) -> str:
+        # from pyNastran.utils import object_stats
+        # print(object_stats(self))
+        # configuration : 'AEROSG2D'
+        # in_units : {'velocity': 'm/s', 'density': 'kg/m^3', 'altitude': 'm', 'dynamic_pressure': 'Pa', 'eas': 'm/s'}
+        # ialt   : 11
+        # idamping : 5
+        # idensity : 2
+        # ieas   : 9
+        # ieigi  : 8
+        # ieigr  : 7
+        # ifreq  : 6
+        # ikfreq : 0
+        # ikfreq_inv : 1
+        # imach  : 3
+        # iq     : 10
+        # ivelocity : 4
+        # method : 'PKNL'
+        # modes  : array([1, 2])
+        # names  : ['kfreq', '1/kfreq', 'density', 'velocity', 'damping', 'freq', 'eigr', 'eigi', 'eas', 'q', 'alt']
+        # noline : False
+        # out_units : {'velocity': 'in/s', 'density': 'slinch/in^3', 'altitude': 'ft',
+        # 'dynamic_pressure': 'psi', 'eas': 'in/s'}
+        xyz_sym = ''
+        if hasattr(self, 'xysym'):
+            xyz_sym += f'xysym  = {self.xysym!r}\n'
+            xyz_sym += f'xzsym  = {self.xzsym!r}\n'
+
+        msg = (
+            'FlutterResponse:\n'
+            f'subcase= {self.subcase:d}\n'
+            f'{xyz_sym}'
+            f'in_units   = {self.in_units}\n'
+            f'out_units  = {self.out_units}\n'
+            f'names  = {self.names}; n={len(self.names)}\n\n'
+            f'method  = {self.method!r}\n'
+            f'modes  = {self.modes}; n={len(self.modes)}\n'
+            f'results.shape = {self.results.shape}; (nmodes, npoint, nresults)\n'
+            # configuration : 'AEROSG2D'
+            # density_ratio : 1.0
+            # ikfreq : 0
+            # ikfreq_inv : 1
+            # ivelocity : 2
+            # idamping : 3
+            # ieigi  : 6
+            # ieigr  : 5
+            # ifreq  : 4
+            # mach   : 0.0
+        )
+        return msg
+
+    def get_stats(self) -> str:
+        return f'FlutterResponse(isubcase={self.subcase})'
+
+    @classmethod
+    def from_zaero(cls,
+                   modes: list[int],
+                   result: np.ndarray,
+                   in_units: dict[str, str],
+                   zaero_out_filename: str,
+                   subcase_id: int=1, subtitle: str='', label: str='',
+                   # cref: float=1.0,
+                   # is_xysym: bool=False, is_xzsym: bool=False,
+                   ):
+
+        mach0 = 0.0
+        density_ratio = 1.0
+        configuration = 'AEROSG2D'  # TODO: what is this?
+        xysym = '???'
+        xzsym = '???'
+        method = 'PKNL'
+        # in_units = {
+        #     'altitude': 'ft',
+        #     'velocity': 'in/s',
+        #     'eas': 'in/s',
+        #     'density': 'slinch/in^3',
+        #     'dynamic_pressure': 'psi',
+        # }
+        out_units = in_units
+        # print('in_units', in_units)
+        assert isinstance(in_units, dict), in_units
+        resp = FlutterResponse(
+            zaero_out_filename, subcase_id, configuration, xysym, xzsym, mach0, density_ratio,
+            method, modes, result, in_units=in_units,
+            subtitle=subtitle,
+            label=label,
+            use_rhoref=False,
+            make_alt=False)
+        resp.set_out_units(out_units)
+        # fig, axes = resp.plot_vg_vf(
+        #     fig=None, damp_axes=None, freq_axes=None, modes=None, plot_type='eas',
+        #     legend=True, xlim=None,
+        #     ylim_damping=None, ylim_freq=None,
+        #     damping_limit=None,
+        #     clear=False, close=False,
+        #     ncol=0, png_filename=None, show=False)
+        # plt.show()
+        return resp
+
+    @classmethod
+    def from_nx(cls, method: str, fdata: np.ndarray,
+                op2_filename: str,
+                subcase_id: int=1, subtitle: str='', label: str='',
+                cref: float=1.0,
+                is_xysym: bool=False, is_xzsym: bool=False,
+                in_units: dict[str, str]=None):
+        """
+        Parameters
+        ----------
+        method : str
+            expected PKNL
+        fdata : (nvel, nfreq, 5) np.ndarray
+            fdata = [rho, mach, velocity, damping, freq]
+        subcase_id : int
+            subcase id
+        subtitle : str; default=''
+            subcase subtitle
+        label : str; default=''
+            subcase label
+        cref : chord; default=1.0
+            Reference length for reduced frequency
+            used to compute b (reference semi-chord); found per the AERO card
+        is_xysym : bool; default=False
+            is the model symmetric about the xy plane?
+        is_xzsym : bool; default=False
+            is the model symmetric about the xz plane?
+
+        """
+        if in_units is None:
+            in_units = get_flutter_units('english_in')
+
+        if cref == 1.0:
+            warnings.warn(f'cref = {cref}')
+
+        b = cref / 2.0
+        configuration = 'AEROSG2D'  # TODO: what is this?
+        xysym = '???'
+        xzsym = '???'
+        # [mach, rho, velocity, damping, freq]
+        modes = None
+        mach = 0.0
+        density_ratio = 1.0
+        assert method in {'PKNL', 'PK', 'KE'}, method
+        nmodes, npoints, five = fdata.shape
+        assert five == 5, fdata.shape
+
+        # fdata   [                rho,     mach, velocity, damping, freq]
+        # results [kfreq, 1/kfreq, density, mach, velocity, damping, freq, eigr, eigi]
+        #
+        # kfreq = omega*b / V
+        results = np.zeros((nmodes, npoints, 9), dtype=fdata.dtype)
+        # rhos = fdata[:, :, 0]
+        # machs = fdata[:, :, 1]
+        vels = fdata[:, :, 2]
+        damps = fdata[:, :, 3]
+        freqs = fdata[:, :, 4]
+        omegas = 2 * np.pi * freqs
+        kfreqs = omegas * b / vels
+        # print('omega:\n', omegas)
+        # print('V:\n', vels)
+        # print('kfreq:\n', kfreqs)
+
+        # lambda = omega*(zeta + 1j)
+        eigr = omegas * damps / 2
+        eigc = omegas
+
+        izero = (freqs == 0.)
+        if izero.sum():
+            # Re = g * V / L * ln(2)
+            ln2 = np.log(2)
+            eigri = ln2 * damps[izero] * vels[izero] / cref
+            eigr[izero] = eigri
+
+        one_over_kfreq = np.full(kfreqs.shape, np.nan, dtype=kfreqs.dtype)
+        ikfreq = np.where(kfreqs != 0)
+        one_over_kfreq[ikfreq] = 1 / kfreqs[ikfreq]
+        results[:, :, 0] = kfreqs
+        results[:, :, 1] = one_over_kfreq
+        results[:, :, 7] = eigr  # real part of eigenvalue
+        results[:, :, 8] = eigc  # complex part of eigenvalue
+        results[:, :, [2, 3, 4, 5, 6]] = fdata[:, :, [0, 1, 2, 3, 4]]
+        modes = np.arange(nmodes, dtype='int32') + 1
+
+        resp = FlutterResponse(
+            op2_filename, subcase_id, configuration, xysym, xzsym, mach, density_ratio,
+            method, modes, results, in_units=in_units,
+            subtitle=subtitle,
+            label=label,
+            use_rhoref=False,
+            make_alt=False)
+        if 0:  # pragma: no cover
+            ncol = 0
+            resp.plot_root_locus(modes=None, fig=None, axes=None, xlim=None, ylim=None,
+                                 ncol=ncol, show=False,
+                                 clear=False, close=False, legend=True, png_filename=None)
+            resp.plot_vg_vf(fig=None, damp_axes=None, freq_axes=None, modes=None, plot_type='eas',
+                            legend=True, xlim=None,
+                            ylim_damping=None, ylim_freq=None,
+                            damping_limit=None,
+                            clear=False, close=False,
+                            ncol=ncol, png_filename=None, show=False)
+            resp.plot_kfreq_damping(modes=None, plot_type='tas', fig=None, damp_axes=None, freq_axes=None,
+                                    xlim=None, ncol=ncol, legend=True,
+                                    show=False, clear=False, close=False, png_filename=None,
+                                    ylim_damping=None, ylim_kfreq=None, damping_limit=None)
+            resp.plot_kfreq_damping2(modes=None, fig=None, xlim=None, ylim=None,
+                                     show=True, clear=False, close=False,
+                                     ncol=ncol, legend=True, png_filename=None)
+        return resp
+
+    def __init__(self, f06_filename: str,
+                 subcase: int, configuration: str,
                  xysym: str, xzsym: str,
                  mach: float, density_ratio: float, method: str,
-                 modes: List[int], results: Any,
-                 f06_units: Union[None, str, Dict[str, str]]=None,
-                 out_units: Union[None, str, Dict[str, str]]=None,
-                 make_alt: bool=False) -> None:
+                 modes: list[int] | np.ndarray, results: Any,
+                 in_units: None | str | dict[str, str]=None,
+                 out_units: None | str | dict[str, str]=None,
+                 subtitle: str='', label: str='',
+                 use_rhoref: bool | float=False,
+                 make_alt: bool=True,
+                 eigenvector: Optional[np.ndarray]=None,
+                 eigr_eigi_velocity: Optional[np.ndarray]=None) -> None:
         """
         Parameters
         ----------
@@ -34,29 +306,32 @@ class FlutterResponse:
             the subcase id
         method : str
             PK, PKNL, ???
-        modes : List[int]; (default=None -> all)
+        modes : list[int]; (default=None -> all)
             the modes; typically 1 to N
         results : varies
             method = PK
-                List[List[float] * 7] * nmodes
+                list[list[float] * 7] * nmodes
                 kfreq, 1/kfreq,                velocity, damping, freq, eigr, eigi
             method = PKNL
-                List[List[float] * 9] * nmodes
+                list[list[float] * 9] * nmodes
                 kfreq, 1/kfreq, density, mach, velocity, damping, freq, eigr, eigi
+        use_rhoref: bool; default=False
+            False: assume the density in the table is absolute density
+            True: assume the density should be defined by sea level density,
+                  so density is a density ratio
+            float: use specified rho_ref
+        in_units : dict[str] = str (default=None -> no units conversion)
+            The units to read from the F06.  Units are only applicable for
+            quantities that have units (e.g. units on Mach don't do anything).
+            All allowable fields are shown below.
 
-        Units
-        -----
-        Units are only applicable for quantities that have units
-        (e.g. units on Mach don't do anything).
-        All allowable fields are shown below.
-
-        f06_units : dict[str] = str (default=None -> no units conversion)
-            The units to to read from the F06.
             PK method:
-                f06_units = {'velocity' : 'in/s'}
+                in_units = {'velocity' : 'in/s'}
                 The velocity units are the units for the FLFACT card in the BDF
             PKNL method:
-                f06_units = {'velocity' : 'in/s', 'density' : 'slinch/in^3'}
+                in_units = {
+                    'velocity' : 'in/s', 'density' : 'slinch/in^3', 'altitude' : 'ft',
+                    'dynamic_pressure': 'psi'}
                 The velocity/density units are the units for the FLFACT card in the BDF
 
         out_units dict[str] = str (default=None -> no units conversion)
@@ -68,7 +343,8 @@ class FlutterResponse:
                     'velocity' : 'ft/s',
                     'eas' : 'knots',
                     'density' : 'slinch/in^3',
-                    'altitude' : 'ft'
+                    'altitude' : 'ft',
+                    'dynamic_pressure' : 'psf',
                 }
 
         Unused Parameters
@@ -79,32 +355,47 @@ class FlutterResponse:
             ASYMMETRIC, SYMMETRIC
             unused
         XZ-SYMMETRY : str
-            ASYMMETRIC, SYMMETRIC
-            unused
+            unused: ASYMMETRIC, SYMMETRIC
+
         """
+        self.f06_filename = f06_filename
+        if eigr_eigi_velocity is None:
+            eigr_eigi_velocity = np.zeros((0, 3), dtype='float64')
+        if eigenvector is None:
+            eigenvector = np.array([], dtype='complex128')
+        else:
+            assert eigenvector.ndim == 2, eigenvector.shape
+
+        assert eigr_eigi_velocity.ndim == 2, eigr_eigi_velocity
+        assert eigr_eigi_velocity.shape[1] == 3, eigr_eigi_velocity
+
+        self.noffset = 10
+        self.freq_ndigits = 1
+        self.markevery = 0
+        self.eigenvector = eigenvector
+        self.eigr_eigi_velocity = eigr_eigi_velocity
+
+        self.in_units = in_units
+        self.out_units = ''
         self.make_alt = make_alt
-        self.f06_units = f06_units
-        self.out_units = out_units
-        required_keys = ['altitude', 'velocity', 'eas', 'density', 'dynamic_pressure']
-        for key in required_keys:
-            assert key in f06_units, 'key=%r not in f06_units=%s' % (key, f06_units)
-            assert key in out_units, 'key=%r not in out_units=%s' % (key, out_units)
-        for key in f06_units.keys():
-            assert key in required_keys, 'key=%r not in required_keys=%s' % (key, required_keys)
+        in_units_dict = get_flutter_units(in_units)
 
-
+        self.is_complex = True
+        self.is_real = True
+        self.nonlinear_factor = None
         self.subcase = subcase
+        self.subtitle = subtitle
+        self.label = label
         self.configuration = configuration
+        assert isinstance(method, str), f'method={method!r}'
         if method == 'PK':
             self.mach = mach
             self.xysym = xysym
             self.xzsym = xzsym
             self.density_ratio = density_ratio
-            #print('mach=%s' % mach)
 
         self.method = method
         self.modes = np.asarray(modes, dtype='int32')
-
         self.ikfreq = 0
         self.ikfreq_inv = 1
 
@@ -115,21 +406,15 @@ class FlutterResponse:
             self.ifreq = 4
             self.ieigr = 5
             self.ieigi = 6
-            self.results = results
 
-            kvel = self._get_unit_factor('velocity')[0]
-
-            # (imode, istep, iresult)
-            results[:, :, self.ivelocity] *= kvel
             # velocity is the target
             self.names = ['kfreq', '1/kfreq', 'velocity', 'damping', 'freq', 'eigr', 'eigi']
-
         elif self.method == 'PKNL':
             # velocity is the target
             self.names = ['kfreq', '1/kfreq', 'density', 'velocity', 'damping',
                           'freq', 'eigr', 'eigi', 'eas', 'q', 'alt']
 
-            #KFREQ  1./KFREQ  DENSITY  MACH  VELOCITY  DAMPING  FREQUENCY  COMPLEX EIGENVALUE
+            # KFREQ  1./KFREQ  DENSITY  MACH  VELOCITY  DAMPING  FREQUENCY  COMPLEX EIGENVALUE
             self.idensity = 2
             self.imach = 3
             self.ivelocity = 4
@@ -140,9 +425,69 @@ class FlutterResponse:
             self.ieas = 9
             self.iq = 10
             self.ialt = 11
-            self.set_pknl_results(results)
-        else:
+            if isinstance(use_rhoref, float_types):
+                rhoref = use_rhoref
+                results[:, :, self.idensity] *= rhoref
+            elif use_rhoref:
+                rhoref = atm_density(alt=0, density_units=in_units_dict['density'])
+                # print(f'applying rhoref={rhoref}')
+                results[:, :, self.idensity] *= rhoref
+            else:
+                assert isinstance(use_rhoref, bool) or isinstance(use_rhoref, float_types), use_rhoref
+
+            # print('rho2', results[0, :, self.idensity])
+            # print('vel2', results[0, :, self.ivelocity])
+            # print('mach2', results[0, :, self.imach])
+
+        else:  # pragma: no cover
             raise NotImplementedError(method)
+
+        # -------------------------------------------
+        if self.method in ['PK', 'KE']:
+            pass
+        elif self.method == 'PKNL':
+            results = self._set_pknl_results(in_units_dict, results)
+        else:  # pragma: no cover
+            raise NotImplementedError(self.method)
+
+        self.results_in = results
+        self.results = self.results_in
+        if out_units is not None:
+            self.set_out_units(out_units)
+
+        # print(f'eigenvector = {self.eigenvector}')
+        # assert len(self.eigenvector), 'no eigenvectors'
+        if len(self.eigenvector) > 1:
+            # print(f'results.shape = {results.shape}')
+            nmodes, nvelocity = results.shape[:2]
+            # print(f'nmodes={nmodes}; nvelocity={nvelocity}')
+            # not sure on the shapes
+            #
+            # npoint, nvelocity, 3?
+            # self.eigr_eigi_velocity = self.eigenvector.reshape(nmodes, nvelocity, 3)
+            # nmodes_mpf, npoint, nvelocity?
+            reshape_eigenvectors = True
+            if reshape_eigenvectors:
+                eigenvector, eigr_eigi_velocity = _reshape_eigenvectors(
+                    self.eigenvector, self.eigr_eigi_velocity)
+
+                eigr = self.results[:, :, self.ieigr].copy()
+                eigi = self.results[:, :, self.ieigi].copy()
+                try:
+                    eigenvector, eigr_eigi_velocity = _sort_eigenvectors(
+                        self, eigenvector, eigr_eigi_velocity, eigr, eigi)
+                except (AssertionError, KeyError, RuntimeError):
+                    pass
+                # assert not np.array_equal(eigenvector, eigenvector2)
+                # assert not np.array_equal(eigr_eigi_velocity, eigr_eigi_velocity2)
+
+                self.eigenvector = eigenvector
+                self.eigr_eigi_velocity = eigr_eigi_velocity
+                assert len(self.eigenvector) and len(self.eigr_eigi_velocity), (len(self.eigenvector), len(self.eigr_eigi_velocity))
+                # = self.eigenvector.reshape(nmodes, nmodes, nvelocity)
+            assert eigr_eigi_velocity.ndim == 3, eigr_eigi_velocity
+            assert eigr_eigi_velocity.shape[2] == 3, eigr_eigi_velocity
+            nvelocity = results.shape
 
         # c - cyan
         # b - black
@@ -150,7 +495,7 @@ class FlutterResponse:
         # g - green
         # m - magenta
         # y - yellow
-        #colors = ['b', 'c', 'g', 'k', 'm', 'r'] #, 'y']
+        # colors = ['b', 'c', 'g', 'k', 'm', 'r'] #, 'y'
         # D - wide diamond
         # h - hexagon
         # * - star
@@ -160,168 +505,460 @@ class FlutterResponse:
         # d - thin diamond
         # 1 - Y shape
         # s - square
-        #shapes = ['D', 'h', '*', 's', 'd', '3', 'o', '1', '2', '4', 'x', '^', '<', '>'] # '+',
-        #symbol_list = []
-        #for shape in shapes:
-            #for color in colors:
-                #symbol_list.append('%s-%s' % (shape, color))
+        # shapes = ['D', 'h', '*', 's', 'd', '3', 'o', '1', '2', '4', 'x', '^', '<', '>'] # '+',
+        # symbol_list = []
+        # for shape in shapes:
+            # for color in colors:
+                # symbol_list.append('%s-%s' % (shape, color))
         self.noline = False
-        self._symbols = []  # type: List[str]
+        self.nopoints = False
+        self._symbols: list[str] = []
+        self._colors: list[str] = []
         self.generate_symbols()
+        self.set_symbol_settings()
+        self.set_font_settings(font_size=None)
 
-    def set_pknl_results(self, results):
-        density_units_in = self.f06_units['density']
+        self._xtick_major_locator_multiple = None
+        self._ytick_major_locator_multiple = None
+
+        # -----------------------------------------------------------
+        # The plot gets messy and dfreq_tol doesn't work if you have NaN
+        # points. To hack this, we just chop the plot above some
+        # x value (x_cutoff)
+        #
+        # 0 rigid body modes -> don't filter 0 frequency points for the first N modes
+        # not really the rigid body modes, but you can say don't filter the first 20 modes
+        # TODO: may go away
+        self.nrigid_body_modes = 0
+        # lets you filter failed modes to a specific value
+        self.x_cutoff = None
+
+    def set_plot_settings(self, figsize=None,
+                          xtick_major_locator_multiple=None,
+                          ytick_major_locator_multiple=None):
+        """
+        Parameters
+        ----------
+        figsize : tuple[float, float]; default -> (6.4, 4.8)
+            the size of the figure
+        x/ytick_major_locator_multiple : list[float]; default=None
+            the delta spacing for the x/y axis
+        """
+        if figsize is None:
+            figsize = plt.rcParams['figure.figsize']
+            # figsize = (6.4, 4.8)
+
+        # print('plt.rcParams = ', plt.rcParams)
+        assert xtick_major_locator_multiple is None or isinstance(xtick_major_locator_multiple, (list, tuple)), xtick_major_locator_multiple
+        assert ytick_major_locator_multiple is None or isinstance(ytick_major_locator_multiple, (list, tuple)), ytick_major_locator_multiple
+        self._xtick_major_locator_multiple = xtick_major_locator_multiple
+        self._ytick_major_locator_multiple = ytick_major_locator_multiple
+        figure_params = {
+            'figsize': figsize,
+        }
+        matplotlib.rc('figure', **figure_params)
+
+    def set_symbol_settings(self, nopoints: bool=False,
+                            show_mode_number: bool=False,
+                            point_spacing: int=0,
+                            markersize: int=None) -> None:
+        if markersize is None:
+            markersize = plt.rcParams['lines.markersize']
+        plt.rcParams['lines.markersize'] = markersize
+
+        self.nopoints = nopoints
+        self.show_mode_number = show_mode_number
+        self.markevery = point_spacing
+
+    def set_font_settings(self, font_size: Optional[int]=13) -> None:
+        # TODO: split label, title, tic_marks, legend
+        if font_size is None:
+            font_size = plt.rcParams['font.size']
+
+        font = {
+            # 'family': 'normal',
+            # 'weight': 'bold',
+            'size': font_size,
+        }
+        matplotlib.rc('font', **font)
+        self.font_size = font_size
+
+    def set_out_units(self, out_units: str | dict[str, str]) -> None:
+        self.convert_units(out_units)
+
+    def convert_units(self, out_units: Optional[str | dict[str, str]]) -> None:
+        results = self.results_in.copy()
+        out_units_dict = get_flutter_units(out_units)
+        kvel = _get_unit_factor(self.in_units, out_units_dict, 'velocity')[0]
+        keas = _get_unit_factor(self.in_units, out_units_dict, 'eas')[0]
+        kdensity = _get_unit_factor(self.in_units, out_units_dict, 'density')[0]
+        kpressure = _get_unit_factor(self.in_units, out_units_dict, 'dynamic_pressure')[0]
+        kalt = _get_unit_factor(self.in_units, out_units_dict, 'altitude')[0]
+
+        # (imode, istep, iresult)
+        results[:, :, self.ivelocity] *= kvel
+        if self.method in ['PK', 'KE']:
+            pass
+        elif self.method == 'PKNL':
+            results[:, :, self.idensity] *= kdensity
+            results[:, :, self.iq] *= kpressure
+            results[:, :, self.ieas] *= keas
+            results[:, :, self.ialt] *= kalt
+        else:  # pragma: no cover
+            raise NotImplementedError(self.method)
+        self.out_units = out_units_dict
+        self.results = results
+
+    def _set_pknl_results(self,
+                          in_units: dict[str, str],
+                          results: np.ndarray) -> np.ndarray:
+        assert results.shape[2] in [9, 11, 12], results.shape
+        density_units_in = in_units['density']
 
         # in/s
-        vel = results[:, :, self.ivelocity]#.ravel()
+        vel = results[:, :, self.ivelocity]
 
         # slinch/in^3 - in_units
-        rho = results[:, :, self.idensity]#.ravel()
+        rho = results[:, :, self.idensity]
 
         # good
         rho_ref = atm_density(0., R=1716., alt_units='ft',
                               density_units=density_units_in)
 
-        q = 0.5 * rho * vel**2
-        #eas  = (2 * q / rho_ref)**0.5
+        vel_units_in = in_units['velocity']
+        q_units_in = in_units['dynamic_pressure']
 
+        # eas  = (2 * q / rho_ref)**0.5
         # eas = V * sqrt(rho / rhoSL)
-        keas = self._get_unit_factor('eas')[0]
-        eas = vel * np.sqrt(rho / rho_ref) * keas
-        #density_units2 = self.out_units['density']
+        eas = vel * np.sqrt(rho / rho_ref)
+        # print('vel = ', vel)
+        # print('rho = ', rho)
+        # print('rho_ref = ', rho_ref)
 
-        altitude_units = self.out_units['altitude']
+        altitude_units = in_units['altitude']
 
-        #print('density_units_in=%r density_units2=%r' % (density_units_in, density_units2))
-        kdensityi = convert_density(1., density_units_in, 'slug/ft^3')
-        kvel = self._get_unit_factor('velocity')[0]
-        kdensity = self._get_unit_factor('density')[0]
-        kpressure = kdensityi * kvel ** 2
+        # print('density_units_in=%r density_units2=%r' % (density_units_in, density_units2))
+        resultsi = results[:, :, :9]
+        assert resultsi.shape[2] == 9, resultsi.shape
 
-        vel *= kvel
+        rho_in_slug_ft3 = rho_ref * rho
+        ft_to_alt_unit = convert_altitude(1., 'ft', altitude_units)
+
         if self.make_alt:
-            rho_in_slug_ft3 = rho * kdensityi
-            alt_ft = [get_alt_for_density(densityi, density_units='slug/ft^3',
-                                          alt_units='ft', nmax=20)
-                      for densityi in rho_in_slug_ft3.ravel()]
+            # sort the densities from max to min
+            # isort = np.argsort(rho_in_slug_ft3.ravel())[::-1]
+            # rho_slug_ft3 = rho_in_slug_ft3.ravel()[isort]
+            # print(f'rho_slug_ft3 [0]={rho_slug_ft3[0]} [-1]={rho_slug_ft3[-1]}')
+            nrho = rho.size
+            alt_ft = []
 
-            ft_to_alt_unit = convert_altitude(1., 'ft', altitude_units)
-            alt = np.array(alt_ft, dtype='float64').reshape(vel.shape) * ft_to_alt_unit
-
-            rho *= kdensity
-            results2 = np.dstack([results, eas, q * kpressure, alt])
+            # we start near 0 for improved stability and will
+            # march up in altitude as density falls off
+            # alt_fti = -0.01
+            for idensity, densityi in enumerate(rho_in_slug_ft3.ravel()):
+                # print(alt_fti, idensity, densityi)
+                try:
+                    alt_fti = get_alt_for_density(
+                        densityi, density_units='slug/ft^3',
+                        # alt0=alt_fti,
+                        alt_units='ft', nmax=100)
+                except Exception:
+                    raise RuntimeError(f'Case {idensity+1}/{nrho}: failed to find altitude for density='
+                                       f'{rho.ravel()[idensity]:g}; density_units_in={density_units_in!r} ({densityi:g} slug/ft^3)\n'
+                                       '  output_rho_range = rho_ref * input_rho_range\n'
+                                       f'  rho_ref:             {rho_ref:g} {density_units_in}\n'
+                                       f'  input_rho_range:     [{rho.min():g}, {rho.max()}] {density_units_in}\n'
+                                       f'  => output_rho_range: [{rho_in_slug_ft3.min():g}, {rho_in_slug_ft3.max()}] slug/ft^3')
+                alt_ft.append(alt_fti)
+            alt = np.array(alt_ft, dtype=rho.dtype).reshape(vel.shape) * ft_to_alt_unit
+            #alt = np.array(alt_ft, dtype=rho.dtype)[isort].reshape(vel.shape) * ft_to_alt_unit
         else:
-            #kpressure = 1.
-            rho *= kdensity
-            results2 = np.dstack([results, eas, q * kpressure])
+            alt = np.full(vel.shape, np.nan, dtype=vel.dtype)
 
-        results2[:, :, self.idensity] = rho
-        results2[:, :, self.ivelocity] = vel
-        self.results = results2
+        # get dynamic pressure
+        if _is_q_units_consistent(density_units_in, vel_units_in, q_units_in):
+            q = 0.5 * rho * vel**2
+        else:  # pragma: no cover
+            raise NotImplementedError((density_units_in, vel_units_in, q_units_in))
+        results2 = np.dstack([resultsi, eas, q, alt])
+        # results2[:, :, self.idensity] = rho
+        return results2
 
-    def generate_symbols(self, colors=None, symbols=None):
+    def generate_symbols(self, colors=None, symbols=None,
+                         imethod: int=0):
         """
         This symbol list is taken from a series of "good" colors (e.g. not yellow)
         and easily distinguishable shapes.  Far more combinations that is necessary
-        is defined
-        """
-        # max of 35 combinations
-        if colors is None:
-            colors = ['r', 'g', 'b', 'k', 'm'] # 5
-        if symbols is None:
-            symbols = ['o', '*', 'x', 'v', '>', '<', '^'] # 7
-        self._symbols = []
-        for symbol in symbols:
-            for color in colors:
-                self._symbols.append(color + symbol)
+        is defined.
 
-    def set_plot_options(self, noline=False):
-        # type: (bool) -> None
+        Parameters
+        ----------
+        colors : list[str]; default=None
+            colors for the plot; default -> C0-C9
+        symbols : list[str]; default=None
+            symbols for the plot; default ->  various symbols
+        imethod : int; default=0
+            imethod=0: loop over symbols and then colors
+            imethod=1: loop over colors and then symbols
+
+        """
+        # import matplotlib as mpl
+        # print(mpl.rcParams['image.cmap'])
+
+        cmap_name = 'tab10'
+        # cmap_name = 'tab20'
+        # cmap_name = 'tab20b'
+        # cmap_name = 'flag'
+        # cmap_name = 'black'
+        # cmap_name = 'viridis'
+        # cmap_name = 'jet'
+        setup_colormap(cmap_name, n=30)
+        colors_hex = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+        if colors is None:
+            # colors = ['r', 'g', 'b', 'k', 'm']  # 5
+            if len(colors_hex) > 0:
+                colors = [f'C{d}' for d in range(len(colors_hex))]
+            else:
+                colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']  # 10
+
+        if symbols is None:
+            symbols = ['o', '*', 'x', 'v', '>', '<', '^']  # 7
+        if imethod == 0:
+            for symbol in symbols:
+                for color in colors:
+                    self._symbols.append(symbol)
+                    self._colors.append(color)
+        else:
+            xmin = 0.0
+            xmax = 0.8
+            nmodes = len(self.modes)
+            colormap_name = 'viridis'
+            x = np.linspace(xmin, xmax, num=nmodes)[::-1]
+            colormap = plt.get_cmap(colormap_name)
+            colors = colormap(x)
+            for color in colors:
+                for symbol in symbols:
+                    self._symbols.append(symbol)
+                    self._colors.append(color)
+
+    def set_plot_options(self, noline: bool=False) -> None:
         self.noline = noline
 
-    def _get_unit_factor(self, name):
-        # type: (str) -> Tuple[float, str]
-        if not self.f06_units or not self.out_units:
-            msg = 'name=%r f06_units=%s out_units=%s' % (name, self.f06_units, self.out_units)
-            raise RuntimeError(msg)
-        unit_f06 = self.f06_units[name]
-        unit_out = self.out_units[name]
+    def plot_complex_modes(self):
+        fig2 = plt.figure(2)
+        fig2.clear()
+        axes = fig2.subplots(nrows=2, ncols=2)
+        assert axes.shape == (2, 2), axes.shape
+        ax11 = axes[0, 0]
+        ax12 = axes[1, 0]
 
-        #print('name=%s unit_f06=%r unit_out=%r' % (name, unit_f06, unit_out))
-        if name in ['velocity', 'eas']:
-            factor = convert_velocity(1., unit_f06, unit_out)
-        elif name == 'altitude':
-            factor = convert_altitude(1., unit_f06, unit_out)
-        elif name == 'density':
-            factor = convert_density(1., unit_f06, unit_out)
-        elif name in ['pressure', 'dynamic_pressure']:
-            factor = convert_pressure(1., unit_f06, unit_out)
-        else:
-            raise NotImplementedError(name)
+        ax21 = axes[1, 0]
+        ax22 = axes[1, 1]
+        # print(self.eigenvector)
+        nmodes1, nmodes2 = self.eigenvector.shape
+        nmodes = max(nmodes1, nmodes2)
 
-        if self.out_units is not None:
-            units = self.out_units[name]
-        else:
-            units = 'units'
-        return factor, units
+        for imode1 in range(nmodes1):
+            ax11.plot(self.eigenvector[imode1, :].real, label=f'iMode1={imode1+1}')
+            ax12.plot(self.eigenvector[imode1, :].imag, label=f'iMode1={imode1+1}')
 
-    @property
-    def symbols(self):
-        """gets the symbols for the lines"""
-        if not self.noline:
-            symbols = [symbol + '-' for symbol in self._symbols]  # type: List[str]
-        else:
-            symbols = self._symbols
-        return symbols
+        for imode2 in range(nmodes2):
+            ax21.plot(self.eigenvector[:, imode2].real, label=f'iMode2={imode2+1}')
+            ax22.plot(self.eigenvector[:, imode2].imag, label=f'iMode2={imode2+1}')
+        plt.legend()
+
+        ax11.set_ylabel('Real')  # , fontsize=self.font_size)
+        ax12.set_ylabel('Imaginary')  # , fontsize=self.font_size)
+        for ax in axes.ravel():
+            ax.grid(True)
+            ax.set_xlim([0, nmodes])
+        # ax2.set_ylim([0, nmodes])
+        plt.show()
 
     def plot_vg(self, fig=None, modes=None,
-                plot_type='tas',
+                plot_type: str='tas',
                 xlim=None, ylim_damping=None,
-                clear=False, legend=True,
-                png_filename=None, show=True, **kwargs):
+                v_lines: Optional[list[LineData]]=None,
+                ncol: int=0,
+                clear: bool=False, legend: bool=True,
+                freq_tol: float=-1.0,
+                freq_tol_remove: float=-1.0,
+                png_filename=None, show: bool=True,
+                **legend_kwargs) -> tuple[plt.Figure, plt.Axes]:
         """
         Make a V-g plot
 
         See ``plot_root_locus`` for arguments
         """
-        ix, xlabel = self._plot_type_to_ix_xlabel(plot_type)
-        ylabel = 'Damping'
+        ix, xlabel, xunit = self._plot_type_to_ix_xlabel(plot_type)
+        ylabel = 'Structural Damping'
         iy = self.idamping
         scatter = True
-        self._plot_x_y(ix, iy, xlabel, ylabel, scatter,
-                       modes=modes, fig=fig, xlim=xlim, ylim=ylim_damping,
-                       show=show, clear=clear, legend=legend,
-                       png_filename=png_filename,
-                       **kwargs)
+        fig, axes = self._plot_x_y(
+            ix, iy, xlabel, ylabel, scatter,
+            modes=modes, fig=fig, xlim=xlim, ylim=ylim_damping,
+            ncol=ncol,
+            show=show, clear=clear, legend=legend,
+            freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+            v_lines=v_lines, plot_type=plot_type, xunit=xunit,
+            png_filename=png_filename,
+            **legend_kwargs)
+        return fig, axes
 
-    #@property
-    #def flutter_speed(self, modes=None):
-        #"""gets the flutter speed"""
-        #if modes is None:
-            #modes = self.modes
-        #else:
-            #modes = np.asarray(modes)
+    def get_flutter_crossings(self,
+                              damping_crossings: Optional[dict[float, float]]=None,
+                              freq_crossings: Optional[list[tuple[float, float]]]=None,
+                              modes: Optional[list[int]]=None,
+                              eas_range: Optional[tuple[float, float]]=None,
+                              point_removal: Optional[list[tuple[float, float]]]=None,
+                              freq_round: int=2,
+                              eas_round: int=3,
+                              divergence_freq_tol: float=0.1,
+                              ) -> tuple[VCrossingDict, VCrossingDict]:
+        """
+        Gets the flutter crossings
+
+        Parameters
+        ----------
+        damping_crossings : dict[damping_target] : damping_required
+            A point will be created at the damping point if it meets the criterion
+            for damping_required. This is useful when you have slight spikes over the target damping
+            damping_target: float
+                the target damping for flutter (e.g., 0.0)
+            damping_required: float
+                the required damping for flutter (e.g., target_damping + 0.01)
+        freq_crossings : dict[freq_target] = freq_required
+            A point will be created at the frequency point if it meets the criterion
+            for freq_required. This is useful when you have slight spikes over the target frequency
+            freq_target: float
+                the target frequency for divergence (e.g., 5.0 Hz)
+            freq_required: float
+                the required frequency for divergence (e.g., target_freq - 1.0)
+        modes : (nmode,) int ndarray; default=None -> all modes
+            the modes to analyze
+        eas_range : [eas_min, eas_max]
+            the equivalent airspeed range of the plot to consider
+        point_removal : list[range1, ...]; default=None -> []
+            list of ranges for start/stop.
+            Points in this range will be removed.
+        freq_round : int; default=2
+            number of digits for the frequency
+        eas_round : int; default=3
+            number of digits for the equivalent airspeed
+        divergence_freq_tol : float; default=0.1
+            the definition of divergence in Hz
+
+        Returns
+        -------
+        vl_vf_crossing_dict: dict[percent_damping, dict[mode, [(freq, velocity), ...]]
+            the flutter crossings
+        vd_crossing_dict: dict[zero_frequency, dict[mode, [(freq, velocity), ...]]
+            the divergence crossings
+
+        TODO: handle case where mode doesn't exceed allowable (0.01) before going below limit (0.0) again
+              and then comes back up (e.g., garbage mode)
+        """
+        damping_crossings_dict, freq_crossings_dict = _setup_damping_freq_crossings(
+            damping_crossings, freq_crossings)
+        # print(f'damping_crossings_dict = {damping_crossings_dict}')
+        # print(f'freq_crossings_dict = {freq_crossings_dict}')
+        if eas_range is None:
+            eas_range = [None, None]
+        eas_min0, eas_max0 = eas_range
+
+        modes, imodes = _get_modes_imodes(self.modes, modes)
+
+        # TODO: this is weird...
+        min_damping = _get_min_damping(damping_crossings_dict)
+        # print(f'min_damping = {min_damping}')
+
+        vd_crossing_dict = _get_divergence(
+            self,
+            freq_crossings_dict,
+            imodes, point_removal,
+            eas_range,
+            eas_round, freq_round,
+            divergence_freq_tol=divergence_freq_tol,
+        )
+        # ----------------------------------------------
+        # preallocate
+        vl_vf_crossing_dict = {}
+        for damping_targeti in damping_crossings_dict:
+            vl_vf_crossing_dict[damping_targeti] = {}
+
+        for imode, mode in zip(imodes, modes):
+            # mode = imode + 1
+            dampi = self.results[imode, :, self.idamping].flatten()
+            if dampi.max() < min_damping:
+                # print(f'skip damp.max()={dampi.max()} min_damping={min_damping}')
+                continue
+            # print(f'damp.max()={dampi.max()} min_damping={min_damping}')
+            easi = self.results[imode, :, self.ieas].flatten()
+            freqi = self.results[imode, :, self.ifreq].flatten()
+            easi, dampi, freqi = remove_excluded_points(
+                easi, dampi, freqi, point_removal)
+            easi, dampi, freqi = remove_eas_range(
+                easi, dampi, freqi, eas_range)
+
+            if len(freqi) == 0:
+                continue
+
+            for damping_targeti, damping_requiredi in damping_crossings_dict.items():
+                if dampi.max() < damping_requiredi:
+                    # print(f'skip damp.max()={dampi.max()} damping_requiredi={damping_requiredi}')
+                    continue
+                # print(f'damp.max()={dampi.max()} damping_requiredi={damping_requiredi}')
+
+                # target different percent dampings
+                ddamping = dampi - damping_targeti
+                p1, p2, pmax = get_zero_crossings_hump(
+                    easi, freqi, ddamping,
+                    damping_targeti, damping_requiredi,
+                    x_round=eas_round, freq_round=freq_round,
+                )
+                # [i1, x1, 0., f1]
+                if np.allclose(p1[0], -1):
+                    # no up-crossing
+                    continue
+                # at least has an up-crossing
+                # print(f'damping_targeti={damping_targeti}, p1={p1} p2={p2} pmax={pmax}')
+                vl_vf_crossing_dict[damping_targeti][mode] = [(damping_targeti, p1, p2, pmax)]
+
+        # cleanup
+        for damping_targeti in list(damping_crossings_dict):
+            if len(vl_vf_crossing_dict[damping_targeti]) == 0:
+                del vl_vf_crossing_dict[damping_targeti]
+
+        # if include_divergence:
+        return vl_vf_crossing_dict, vd_crossing_dict
 
     def plot_root_locus(self, modes=None,
                         fig=None, axes=None,
-                        xlim=None, ylim=None,
-                        show=True, clear=False, close=False, legend=True,
+                        eigr_lim=None, eigi_lim=None,
+                        ivelocity=None,
+                        ncol: int=0,
+                        show: bool=True, clear: bool=False,
+                        close: bool=False, legend: bool=True,
+                        # noline: bool=False, nopoints: bool=False,
+                        freq_tol: float=-1.0,
+                        freq_tol_remove: float=-1.0,
                         png_filename=None,
-                        **kwargs):
+                        **legend_kwargs) -> tuple[plt.Figure, plt.Axes]:
         """
         Plots a root locus
 
         Parameters
         ----------
-        modes : List[int] / int ndarray; (default=None -> all)
+        modes : list[int] / int ndarray; (default=None -> all)
             the modes; typically 1 to N
-        fig : plt.figure
-            figure object
-        axes : plt.axes
-            axes object
-        xlim : list[float/None, float/None]
+        fig : plt.Figure
+            the figure object
+        axes : plt.Axes
+            the axes object
+        eigr_lim : list[float/None, float/None]
             the x plot limits
-        ylim : list[float/None, float/None]
+        eigi_lim : list[float/None, float/None]
             the y plot limits
         show : bool; default=True
             show the plot
@@ -342,235 +979,704 @@ class FlutterResponse:
         framealpha : float; 0.0 <= alpha <= 1.0
             1.0 - no transparency / opaque
             0.0 - fully transparent
+
         """
-        xlabel = 'Eigenvalue (Real)'
-        ylabel = 'Eigenvalue (Imaginary)'
+        assert isinstance(freq_tol, float_types), freq_tol
+        assert isinstance(freq_tol_remove, float_types), freq_tol_remove
+        xlabel = r'Eigenvalue (Real); $\omega \zeta$'
+        ylabel = r'Eigenvalue (Imaginary); $\omega$'
         ix = self.ieigr
         iy = self.ieigi
         scatter = True
-        self._plot_x_y(ix, iy, xlabel, ylabel, scatter,
-                       modes=modes, fig=fig, axes=axes, xlim=xlim, ylim=ylim,
-                       show=show, clear=clear, close=close, legend=legend,
-                       png_filename=png_filename,
-                       **kwargs)
+        fig, axes = self._plot_x_y(
+            ix, iy, xlabel, ylabel, scatter,
+            modes=modes, fig=fig, axes=axes,
+            ivelocity=ivelocity,
+            xlim=eigr_lim, ylim=eigi_lim,
+            ncol=ncol,
+            show=show, clear=clear, close=close, legend=legend,
+            freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+            png_filename=png_filename,
+            **legend_kwargs)
+        return fig, axes
 
-    def _plot_x_y(self, ix, iy, xlabel, ylabel, scatter, modes=None,
+    def plot_modal_participation(self, ivel: int, mode: int,
+                                 modes=None,
+                                 mag_tol: float=-1.0,
+                                 fig=None, axes=None,
+                                 # eigr_lim=None, eigi_lim=None,
+                                 ncol: int=0,
+                                 show: bool=True, clear: bool=False,
+                                 close: bool=False, legend: bool=True,
+                                 # noline: bool=False, nopoints: bool=False,
+                                 freq_tol: float=-1.0,
+                                 freq_tol_remove: float=-1.0,
+                                 png_filename=None,
+                                 **legend_kwargs):
+        """
+        Plots the modal participations factors
+
+        Parameters
+        ----------
+        modes : list[int] / int ndarray; (default=None -> all)
+            the modes; typically 1 to N
+        fig : plt.Figure
+            the figure object
+        axes : plt.Axes
+            the axes object
+        mag_tol: float; default=-1.0
+            filters eigenvectors that have a magnitude less than a target
+            <= 0.0 is ineffective
+        eigr_lim : list[float/None, float/None]
+            the x plot limits
+        eigi_lim : list[float/None, float/None]
+            the y plot limits
+        show : bool; default=True
+            show the plot
+        clear : bool; default=False
+            clear the plot
+        legend : bool; default=True
+            show the legend
+        kwargs : dict; default=None
+           key : various matplotlib parameters
+           value : depends
+
+        Legend kwargs
+        -------------
+        loc : str
+           'best'
+        fancybox : bool; default=False
+           makes the box look cool
+        framealpha : float; 0.0 <= alpha <= 1.0
+            1.0 - no transparency / opaque
+            0.0 - fully transparent
+
+        """
+        assert isinstance(ivel, int), ivel
+        assert isinstance(mode, int), mode
+        # if not isinstance(mag_tol, float_types):
+        #     warnings.warn(f'mag_tol={mag_tol!r} is not a float; default=-1.0')
+        #     mag_tol = -1.0
+        assert isinstance(mag_tol, float_types), mag_tol
+        modes, imodes = _get_modes_imodes(self.modes, modes)
+        legend_kwargs = get_legend_kwargs(self.font_size, legend_kwargs)
+        if fig is None:
+            fig = plt.figure()
+            # ax1 = fig.add_subplot(2, 1, 1)                      # Left subplot  (2 row, 1 columns, index 1)
+            # ax2 = fig.add_subplot(2, 1, 2, projection='polar')  # Right subplot (2 row, 1 columns, index 2)
+            # gs = fig.add_gridspec(2, 1, height_ratios=[1, 0.7])
+            # ax1 = fig.add_subplot(gs[0])
+            # ax2 = fig.add_subplot(gs[1], projection='polar')
+        else:
+            fig.clear()
+            # ax1 = fig.add_subplot(2, 1, 1)                      # Left subplot  (2 row, 1 columns, index 1)
+            # ax2 = fig.add_subplot(2, 1, 2, projection='polar')  # Right subplot (2 row, 1 columns, index 2)
+        gs = fig.add_gridspec(2, 1, height_ratios=[1, 0.5])
+        ax1 = fig.add_subplot(gs[0])
+        ax2 = fig.add_subplot(gs[1], projection='polar')
+
+
+        xlabel = r'Modal Participation (Real)'
+        ylabel = r'Modal Participation (Imaginary)'
+        # ix = self.ieigr
+        # iy = self.ieigi
+        # scatter = True
+
+        # print(f'eigr_eigi_velocity.shape: {self.eigr_eigi_velocity.shape}')
+        # print(f'eigenvector.shape: {self.eigenvector.shape}')
+        # print(f'eigr_eigi_velocity:\n{self.eigr_eigi_velocity}')
+
+        # MSC
+        # eigr_eigi_velocity:
+        # [[-9.88553e-02  1.71977e+01  1.52383e+02]
+        # [-1.71903e-01  6.60547e+01  1.52383e+02]]
+        assert self.eigr_eigi_velocity.ndim == 3, self.eigr_eigi_velocity.shape
+        nvel, nmode = self.eigr_eigi_velocity.shape[:2]
+        assert ivel < nvel, f'ivel={ivel} nvel={nvel}'
+        assert mode <= nmode, f'mode={mode} nmode={nmode}'
+
+        imode = mode - 1
+        assert isinstance(self.eigr_eigi_velocity, np.ndarray), type(self.eigr_eigi_velocity)
+        # print('self.eigr_eigi_velocity = ', self.eigr_eigi_velocity)
+        try:
+            eigr_eigi_velocity = self.eigr_eigi_velocity[ivel, imode, :]
+        except IndexError:
+            raise RuntimeError(f'eigr_eigi_velocity.shape=(ivel, imode, :)={self.eigr_eigi_velocity.shape}; ivel={ivel} nvel={nvel} imode={imode}')
+        # print(f'eigr_eigi_velocity = {eigr_eigi_velocity}')
+        eigri, eigii, velocityi = eigr_eigi_velocity
+
+        omega_damping = eigri
+        omega = eigii
+
+        # xlabel = r'Eigenvalue (Real); $\omega \gamma$'
+        # xlabel = r'Eigenvalue (Imaginary); $\omega$'
+        freq = omega / (2 * np.pi)
+
+        # filter division by 0
+        damping_g = np.zeros(omega.shape, dtype=omega.dtype)
+        iomega = (omega != 0.0)
+        damping_g[iomega] = 2 * omega_damping[iomega] / omega[iomega]
+
+        # standard eigenvalue (not flutter)
+        #
+        # For a complex eigenvalue λ = σ ± jω:
+        #   Natural frequency: ωₙ = |λ| = √(σ² + ω²)
+        #   Frequency in Hz: f = ωₙ / (2π)
+        #   Damping ratio: ζ = −σ / ωₙ
+        #   Damped frequency: ωd = ω (the imaginary part)
+        #
+        # eigenvalue = complex(-0.5, 10.0)  # example: σ + jω
+        # omega_n = abs(eigenvalue)  # natural frequency (rad/s)
+        # freq_hz = omega_n / (2 * np.pi)  # frequency (Hz)
+        # damping_ratio = -eigenvalue.real / omega_n  # ζ
+
+        title = self._get_title(nlines=1)
+        title += f'\nModal Participation Factors of Mode {mode}\n'
+        title += rf'$\omega$={omega:.2f}; freq={freq:.2f} Hz; g={damping_g:.3g}'
+
+        eas_units = self.out_units['eas']
+        if np.isfinite(velocityi):
+            title += f' V={velocityi:.1f} ({eas_units})'
+        # print(title)
+        fig.suptitle(title)  # , fontsize=self.font_size)
+        ax1.grid(True)
+        ax2.grid(True)
+        ax1.set_xlabel(xlabel)  # , fontsize=self.font_size)
+        ax1.set_ylabel(ylabel)  # , fontsize=self.font_size)
+
+        # TODO: this was on...what does it do???
+        # _set_ticks(self, ax1, 0)
+
+        # print(f'eigr_eigi_velocity:\n{self.eigr_eigi_velocity}')
+        # print(f'eigenvector:\n{self.eigenvector}')
+
+        eig = self.eigenvector[ivel, imode, :]
+        # print(f'imodes = {imodes}')
+        eigr = eig.real[imodes]
+        eigi = eig.imag[imodes]
+        # abs_eigr = np.linalg.norm(eigr)
+        # abs_eigi = np.linalg.norm(eigi)
+        # if abs_eigr == 0.0:
+        #     abs_eigr = 1.0
+        # if abs_eigi == 0.0:
+        #     abs_eigi = 1.0
+        mag = np.sqrt(eigr**2 + eigi**2)
+        phase = np.arctan2(eigi, eigr)
+        isort = np.argsort(mag)[::-1]
+        # print(f'eigr = {eigr}')
+        # print(f'mag = {mag}')
+
+        # TODO: is this the right axis?
+        mag_max = mag.max()  # was imodes
+        # print(f'mag_max = {mag_max}')
+
+        # normalize the magnitude, so it's a percentage
+        # TODO: is this the right axis?
+        mag /= mag_max  # [:, np.newaxis]
+        # print(f'mag2 = {mag}')
+        # print(f'mag_tol = {mag_tol!r}')
+
+        # filter out row (or col) for points that are
+        # too close to 0
+        ifilter0 = (mag > mag_tol)
+        # print(f'ifilter0 = {ifilter0}')
+        # TODO: is this the right axis?
+        # ifilter = np.any(ifilter0, axis=1)
+        # print(f'ifilter = {ifilter}')
+
+        # don't normalize
+        abs_eigr = 1.0
+        abs_eigi = 1.0
+
+        # reals = eigr / abs_eigr
+        # imags = eigi / abs_eigi
+
+        real_sort = eigr[isort] / abs_eigr
+        imag_sort = eigi[isort] / abs_eigi
+        # print(f'real_sort = {real_sort}')
+
+        mag_sort = mag[isort]
+        phase_sort = phase[isort]
+        modes = modes[isort]
+        imodes = imodes[isort]
+
+        symbols, colors = self._get_symbols_colors_from_modes(modes)
+        jcolor = 0
+        line_text_mags = []
+        min_max_list = []
+        for i, imodei, mode in zip(count(), imodes, modes):
+            symbol = symbols[jcolor]
+            color = colors[jcolor]
+
+            reali = real_sort[i]
+            imagi = imag_sort[i]
+            magi = mag_sort[i]
+            phasei = phase_sort[i]
+            if magi < mag_tol:
+                continue
+            text = str(mode)
+            eig_str = f'{reali:.2g}+{imagi:.2g}j; A={magi:.2g}'.replace('+-', '-')
+            label = f'Mode {mode:d}; {eig_str}'
+            # print(label)
+            # print(f'{i}: {reali}, {imagi}, {text!r}')
+            ax1.scatter(reali, imagi, label=label, alpha=0.7)
+            text1 = ax1.text(reali, imagi, text, ha='center', va='center')
+                      # fontsize=self.font_size)
+
+            ax2.plot([0, phasei], [0, magi], label=label, alpha=0.7)
+            ax2.scatter(magi, phasei, label=label, alpha=0.7)
+            text2 = ax2.text(phasei, magi, text, ha='center', va='center')  # (theta, r, text)
+            line_text_mags.append((text1, text2, magi))
+            min_max_list.append((reali, imagi))
+        min_max = np.array(min_max_list)
+        xmin = min_max[:, 0].min()
+        xmax = min_max[:, 0].max()
+        ymin = min_max[:, 1].min()
+        ymax = min_max[:, 1].max()
+        xmin = -0.5 if xmin > -0.5 else None
+        ymin = -0.5 if ymin > -0.5 else None
+        xmax = 0.5 if xmax < 0.5 else None
+        ymax = 0.5 if ymax < 0.5 else None
+
+        ax1.set_xlim(xmin, xmax)
+        ax1.set_ylim(ymin, ymax)
+
+
+        ax2.set_rlim(0, 1.1)
+
+        if 0:  # pragma: no cover
+            from matplotlib.widgets import TextBox
+            ax_box = fig.add_axes([0.7, 0.01, 0.1, 0.04])
+            text_box = TextBox(ax_box, 'Filter: ', initial='0')
+            def on_submit(text: str) -> float:
+                print('---------------')
+                print('on_submit')
+                try:
+                    filter_value = float(text)
+                except ValueError:
+                    filter_value = 0.
+                print(f'filter_value = {filter_value}')
+                is_visibles = []
+
+                print(f'nlines1 = {len(ax1.get_lines())}')
+                print(f'nlines2 = {len(ax2.get_lines())}')
+                for line in ax1.get_lines():
+                    reali = line.get_xdata()  # theta (radians)
+                    imagi = line.get_ydata()  # r (magnitude)
+                    mag = np.sqrt(reali**2 + imagi**2).max()
+                    is_visible = (mag > filter_value)
+                    line.set_visible(is_visible)
+                    is_visibles.append(is_visible)
+
+                nlines = len(ax2.get_lines())
+                print(f'is_visibles = {is_visibles}; nlines={nlines}')
+                for i, line in enumerate(ax2.get_lines()):
+                    xdata = line.get_xdata()  # theta (radians)
+                    ydata = line.get_ydata()  # r (magnitude)
+                    r = max(ydata)
+                    # print(f'r = {r}')
+                    is_visible = (r > filter_value)
+                    # is_visible = is_visibles[i]
+                    line.set_visible(is_visible)
+
+                for text1, text2, mag in line_text_mags:
+                    is_visible = (mag >= filter_value)
+                    text1.set_visible(is_visible)
+                    text2.set_visible(is_visible)
+
+                handles, labels = ax1.get_legend_handles_labels()
+                handles2 = []
+                labels2 = []
+                for is_visible, handle, label in zip(is_visibles, handles, labels):
+                    if not is_visible:
+                        continue
+                    handles.append(handle)
+                    labels.append(label)
+                ax1.legend(handles2, labels2)
+                fig.canvas.draw_idle()
+            text_box.on_submit(on_submit)
+
+        if legend:
+            # bbox_to_anchor=(1.125, 1.), ncol=ncol,
+            if 'bbox_to_anchor' not in legend_kwargs:
+                legend_kwargs['bbox_to_anchor'] = (1.02, 1)
+            if 'loc' not in legend_kwargs:
+                legend_kwargs['loc'] = 'upper left'
+            # if 'borderaxespad' not in legend_kwargs:
+            #     legend_kwargs['borderaxespad'] = 0
+            ax1.legend(**legend_kwargs)
+            # ax1.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='x-small', borderaxespad=0)
+            fig.subplots_adjust(right=0.7)
+        _show_save_clear_close(
+            fig, show, png_filename, clear, close)
+    # for imode1 in range(nmodes1):
+        #     ax11.plot(self.eigenvector[imode1, :].real, label=f'iMode1={imode1+1}')
+        #     ax12.plot(self.eigenvector[imode1, :].imag, label=f'iMode1={imode1+1}')
+
+    def _plot_x_y(self, ix: int, iy: int,
+                  xlabel: str, ylabel: str,
+                  scatter: bool,
+                  modes=None,
                   fig=None, axes=None,
+                  v_lines=None, plot_type: str='', xunit: str='',
                   xlim=None, ylim=None,
-                  show=True, clear=False, close=False, legend=True,
+                  ivelocity=None,
+                  ncol: int=0,
+                  show: bool=True, clear: bool=False,
+                  close: bool=False, legend: bool=True,
+                  freq_tol: float=-1.0,
+                  freq_tol_remove: float=-1.0,
                   png_filename=None,
-                  **kwargs):
-        """builds the plot"""
+                  **legend_kwargs) -> tuple[plt.Figure, plt.Axes]:
+        """
+        builds the plot for:
+         - Vg
+         - root-locus
+        """
+        legend_elements = []
         self.fix()
-        if kwargs is None:
-            kwargs = {}
+        # print('plot_xy')
+        legend_kwargs = get_legend_kwargs(self.font_size, legend_kwargs)
 
         modes, imodes = _get_modes_imodes(self.modes, modes)
+        nmodes = len(modes)
+        ncol = _update_ncol(nmodes, ncol)
+        # print(f'plot_xy: modes  = {modes}')
+        # print(f'plot_xy: imodes = {imodes}')
+        # print(f'plot_xy: ncol   = {ncol}')
 
         if fig is None:
             fig = plt.figure()
             axes = fig.add_subplot(111)
-        symbols = self.symbols
 
+        symbols, colors = self._get_symbols_colors_from_modes(modes)
+        linestyle = 'None' if self.noline else '-'
+
+        jcolor = 0
+        # print('starting plot part; jcolor=0')
         for i, imode, mode in zip(count(), imodes, modes):
-            symbol = symbols[i]
+            symbol = symbols[jcolor]
+            color = colors[jcolor]
+            eas = None
+            if hasattr(self, 'ieas'):
+                eas = self.results[imode, :, self.ieas].ravel()
             freq = self.results[imode, :, self.ifreq].ravel()
-            xs = self.results[imode, :, ix].ravel()
+            damping = self.results[imode, :, self.idamping].ravel()
+            if ix >= 0:
+                xs = self.results[imode, :, ix].ravel()
+            else:
+                raise RuntimeError(f'ix={ix} is out of bounds')
             ys = self.results[imode, :, iy].ravel()
+            # print('freq, xs, ys')
 
+            if len(freq) == 0:
+                # print('no points after remove_eas_range')
+                continue
+            jcolor, color2, linestyle2, symbol2, texti, is_removedi = _increment_jcolor(
+                mode, jcolor, color, linestyle, symbol,
+                eas, freq, damping, freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+                show_mode_number=self.show_mode_number)
+            if is_removedi:
+                continue
+            # print(f'plot_xy: jcolor={jcolor}; color={color2}; linstyle={linestyle2}; symbol={symbol2}')
+
+            # print(f'freq={freq}')
             iplot = np.where(freq != np.nan)
-            #iplot = np.where(freq > 0.0)
-            axes.plot(xs[iplot], ys[iplot], symbol, label='Mode %i' % mode, markersize=0)
+            # iplot = np.where(freq > 0.0)
+            label = _get_mode_freq_label(mode, freq[0], freq_ndigits=self.freq_ndigits)
+            # print(f'iplot={iplot}')
+            assert len(xs[iplot]) > 0
+            line = axes.plot(xs[iplot], ys[iplot],
+                             color=color2, marker=symbol2, label=label,
+                             linestyle=linestyle2, markersize=0)
+            legend_elements.append(line)
+
+            if ivelocity and symbol2 and ivelocity < len(xs):
+                # single point selected for modes plotting corresponding to ivelocity
+                markersize = 10
+                plot_kwargs = {
+                    'color': 'k', 'marker': 'o',
+                    's': markersize**2, 'alpha': 0.8}
+                line = axes.scatter(xs[ivelocity], ys[ivelocity], **plot_kwargs)
+                legend_elements.append(line)
 
             if scatter:
+                # used for the root locus
+                # velocity increases driving an incrase in the point size
                 scatteri = np.linspace(.75, 50., len(xs))
-                #assert symbol[2] == '-', symbol
-                axes.scatter(xs[iplot], ys[iplot], s=scatteri, color=symbol[0], marker=symbol[1])
+                # assert symbol[2] == '-', symbol
+                # axes.scatter(xs[iplot], ys[iplot], s=scatteri, color=symbol[0], marker=symbol[1])
+                line = axes.scatter(xs[iplot], ys[iplot], s=scatteri, color=color, marker=symbol2)
+                legend_elements.append(line)
+
+        legend_elementsi = _add_vertical_lines(
+            [axes], v_lines, plot_type, xunit)
+        legend_elements.extend(legend_elementsi)
 
         axes.grid(True)
-        axes.set_xlabel(xlabel)
-        axes.set_ylabel(ylabel)
-        if xlim:
-            axes.set_xlim(xlim)
-        if ylim:
-            axes.set_ylim(ylim)
+        # axes.set_xlabel(xlabel  + '; _plot_x_y', fontsize=self.font_size)
+        axes.set_xlabel(xlabel)  # , fontsize=self.font_size)
+        axes.set_ylabel(ylabel)  # , fontsize=self.font_size)
+        _set_ticks(self, axes, 0)
+        set_xlim(axes, xlim)
+        set_ylim(axes, ylim)
 
-        title = 'Subcase %i' % self.subcase
-        if png_filename:
-            title += '\n%s' % png_filename
+        title = self._get_title(nlines=2)
         fig.suptitle(title)
         if legend:
-            axes.legend(**kwargs)
+            # bbox_to_anchor=(1.125, 1.), ncol=ncol,
+            axes.legend(**legend_kwargs)
 
-        if show:
-            plt.show()
-        if png_filename:
-            plt.savefig(png_filename)
-        if clear:
-            fig.clear()
-        if close:
-            plt.close()
-        return axes
+        _show_save_clear_close(
+            fig, show, png_filename, clear, close)
+        return fig, axes
 
-    def _plot_x_y2(self, ix, iy1, iy2, xlabel, ylabel1, ylabel2, scatter, modes=None,
+    def _get_title(self, nlines: int=2) -> str:
+        basename = os.path.basename(self.f06_filename)
+        if nlines == 1:
+            title = f'Subcase {self.subcase}; {basename}'
+        else:
+            title = f'Subcase {self.subcase}\n{basename}'
+        return title
+
+    def _plot_x_y2(self, ix: int, iy1: int, iy2: int,
+                   xlabel: str, ylabel1: str, ylabel2: str,
+                   scatter: bool,
+                   modes=None,
                    fig=None, axes1=None, axes2=None,
                    xlim=None, ylim1=None, ylim2=None,
-                   nopoints=False, noline=False,
-                   show=True, clear=False, close=False, legend=True,
+                   ncol: int=0,
+                   show: bool=True, clear: bool=False,
+                   close: bool=False, legend: bool=True,
+                   freq_tol: float=-1.0,
+                   freq_tol_remove: float=-1.0,
                    png_filename=None,
-                   **kwargs):
-        """builds the plot"""
+                   **legend_kwargs) -> tuple[plt.Figure,
+                                             tuple[plt.Axes, plt.Axes]]:
+        """
+        Builds the plot with 2 subplots for:
+         - Vg, Vf
+         - Vg, Vk
+         - kg, kf
+
+        Parameters
+        ----------
+        scatter : bool
+            draw the points with growth along the x-axis
+
+        """
         self.fix()
-        if kwargs is None:
-            kwargs = {}
+        legend_kwargs = get_legend_kwargs(
+            self.font_size, legend_kwargs)
 
         modes, imodes = _get_modes_imodes(self.modes, modes)
+        nmodes = len(modes)
+        ncol = _update_ncol(nmodes, ncol)
 
         if fig is None:
             fig = plt.figure()
             gridspeci = gridspec.GridSpec(2, 4)
             axes1 = fig.add_subplot(gridspeci[0, :3])
             axes2 = fig.add_subplot(gridspeci[1, :3], sharex=axes1)
+        # else:
+            # self.log.info('got a fig')
 
-        if xlim:
-            axes1.set_xlim(xlim)
-        if ylim1:
-            axes1.set_ylim(ylim1)
-        if ylim2:
-            axes2.set_ylim(ylim2)
-        symbols = self.symbols
+        set_xlim(axes1, xlim)
+        set_xlim(axes2, xlim)
+        set_ylim(axes1, ylim1)
+        set_ylim(axes2, ylim2)
 
-        if nopoints: # and noline is False:
+        symbols, colors = self._get_symbols_colors_from_modes(modes)
+        # self.log.debug(f'symbols={symbols}')
+        # self.log.debug(f'colors={colors}')
+        linestyle = 'None' if self.noline else '-'
+        if self.nopoints:  # and noline is False:
             scatter = False
 
-        #showline = not noline
-        #showpoints = not nopoints
+        markersize = None
+        if self.noline:
+            markersize = 0
 
+        legend_elements = []
+        jcolor = 0
         for i, imode, mode in zip(count(), imodes, modes):
-            symbol = symbols[i]
-            if nopoints:
-                # ro-  ->  r-
-                #
-                # doesn't support dashed (--) lines
-                symbol = symbol[:-2] + symbol[-1:] # symbol[-2:-1]
-            if noline:
-                symbol = symbol.replace('-', '')
+            ioffset = jcolor % self.noffset
+            symbol = symbols[jcolor]
+            color = colors[jcolor]
 
             freq = self.results[imode, :, self.ifreq].ravel()
+            damping = self.results[imode, :, self.idamping].ravel()
             xs = self.results[imode, :, ix].ravel()
+            eas = None
+            if hasattr(self, 'eas'):
+                eas = self.results[imode, :, self.ieas].ravel()
             y1s = self.results[imode, :, iy1].ravel()
             y2s = self.results[imode, :, iy2].ravel()
 
+            if len(freq) == 0:
+                # print('no points after remove_eas_range')
+                continue
+            jcolor, color2, linestyle2, symbol2, texti, is_removedi = _increment_jcolor(
+                mode, jcolor, color, linestyle, symbol,
+                eas, freq, damping, freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+                show_mode_number=self.show_mode_number)
+            if is_removedi:
+                continue
+
             iplot = np.where(freq != np.nan)
-            #iplot = np.where(freq > 0.0)
-            axes1.plot(xs[iplot], y1s[iplot], symbol, label='Mode %i' % mode, markersize=0)
-            axes2.plot(xs[iplot], y2s[iplot], symbol, label='Mode %i' % mode, markersize=0)
+            # iplot = np.where(freq > 0.0)
 
-            #if symbols and showline and showpoints:
-                #symbol = symbols[i]
-                #axes1.plot(xs[iplot], y1s[iplot], symbol, label='Mode %i' % mode)
-                #axes2.plot(xs[iplot], y2s[iplot], symbol)
-            #elif symbols and showpoints:
-                ## show line, no points
-                #symbol = symbols[i].replace('-', '')
-                #axes1.plot(xs[iplot], y1s[iplot], symbol, label='Mode %i' % mode)
-                #axes2.plot(xs[iplot], y2s[iplot], symbol)
-            #else:
-                ## show line
-                #axes1.plot(xs[iplot], y1s[iplot], label='Mode %i' % mode)
-                #axes2.plot(xs[iplot], y2s[iplot])
+            # plot the line
+            label = _get_mode_freq_label(mode, freq[0], freq_ndigits=self.freq_ndigits)
+            legend_element = Line2D([0], [0], color=color2,
+                                    marker=symbol2, label=label, linestyle=linestyle2)
+            if self.nopoints:
+                symbol2 = 'None'
 
+            # self.log.info(f'scatter={scatter}; color={color2}; linestyle={linestyle2!r}'
+            #               ' symbol={symbol2!r}; markersize={markersize}')
+            # self.log.info(f'xs={xs[iplot]}')
+            # self.log.info(f'y1s={y1s[iplot]}')
+            # self.log.info(f'y2s={y2s[iplot]}')
             if scatter:
+                # when velocity increases, point size increases
                 scatteri = np.linspace(.75, 50., len(xs))
-                #assert symbol[2] == '-', symbol
+                # assert symbol[2] == '-', symbol
                 axes1.scatter(xs[iplot], y1s[iplot],
-                              s=scatteri, color=symbol[0], marker=symbol[1])
+                              s=scatteri, color=color2, marker=symbol2)
                 axes2.scatter(xs[iplot], y2s[iplot],
-                              s=scatteri, color=symbol[0], marker=symbol[1])
+                              s=scatteri, color=color2, marker=symbol2)
+
+                # Draw the line
+                axes1.plot(xs[iplot], y1s[iplot], marker=symbol2, label=label,
+                           color=color2, markersize=markersize, linestyle=linestyle2)
+                axes2.plot(xs[iplot], y2s[iplot], marker=symbol2,
+                           color=color2, markersize=markersize, linestyle=linestyle2)
+            else:
+                legend_elementsi = _plot_two_axes(
+                    axes1, axes2,
+                    xs[iplot], y1s[iplot], y2s[iplot],
+                    color, symbol2, linestyle, label, texti, ioffset,
+                    self.markevery, markersize=markersize,
+                )
+                # axes1.plot(xs[iplot], y1s[iplot], marker=symbol2, label=label,
+                #            color=color2, markersize=markersize, linestyle=linestyle2)
+                # axes2.plot(xs[iplot], y2s[iplot], marker=symbol2,
+                #            color=color2, markersize=markersize, linestyle=linestyle2)
+            legend_elements.append(legend_element)
 
         axes1.grid(True)
-        axes1.set_xlabel(xlabel)
-        axes1.set_ylabel(ylabel1)
+        axes1.set_xlabel(xlabel)  # , fontsize=self.font_size)
+        # axes1.set_xlabel(xlabel + '; _plot_x_y2', fontsize=self.font_size)
+        axes1.set_ylabel(ylabel1)  # , fontsize=self.font_size)
 
         axes2.grid(True)
-        axes2.set_xlabel(xlabel)
-        axes2.set_ylabel(ylabel2)
+        axes2.set_xlabel(xlabel)  # , fontsize=self.font_size)
+        axes2.set_ylabel(ylabel2)  # , fontsize=self.font_size)
+        _set_ticks(self, axes1, 0)
+        _set_ticks(self, axes2, 1)
 
-        title = 'Subcase %i' % self.subcase
-        if png_filename:
-            title += '\n%s' % png_filename
+        title = self._get_title(nlines=2)
         fig.suptitle(title)
         if legend:
-            axes1.legend(**kwargs)
+            # legend_kwargs = {}
+            # for key, value in legend_kwargs.items():
+            #     if key in {'ylim'}:
+            #         continue
+            #     legend_kwargs[key] = value
 
-        if show:
-            plt.show()
-        if png_filename:
-            plt.savefig(png_filename)
-        if clear:
-            fig.clear()
-        if close:
-            plt.close()
+            axes1.legend(handles=legend_elements, **legend_kwargs)              # TODO: switch to figure...
+            # axes1.legend(handles=legend_elements, ncol=ncol, **legend_kwargs)  # TODO: switch to figure...
+            # fig.legend(handles=legend_elements, ncol=ncol, **legend_kwargs)
+
+        _show_save_clear_close(
+            fig, show, png_filename, clear, close)
+        return fig, (axes1, axes2)
 
     def plot_kfreq_damping(self, modes=None,
-                           plot_type='tas',
+                           plot_type: str='tas',
                            fig=None, damp_axes=None, freq_axes=None,
                            xlim=None,
-                           show=True, clear=False, close=False, legend=True,
-                           png_filename=None,
                            ylim_damping=None,
                            ylim_kfreq=None,
-                           nopoints=False, noline=False,
-                           **kwargs):
+                           show: bool=True, clear: bool=False,
+                           close: bool=False, legend: bool=True,
+                           freq_tol: float=-1.0,
+                           freq_tol_remove: float=-1.0,
+                           png_filename=None,
+                           damping_limit=None,
+                           v_lines: list[LineData]=None,
+                           **kwargs) -> tuple[plt.Figure,
+                                              tuple[plt.Axes, plt.Axes]]:
         """
         Plots a kfreq vs. damping curve
 
         See ``plot_root_locus`` for arguments
         """
-        ylabel1 = 'Damping'
-        ylabel2 = 'KFreq [rad]'
+        assert damping_limit is None or isinstance(damping_limit, float_types), damping_limit
 
-        ix, xlabel = self._plot_type_to_ix_xlabel(plot_type)
+        ylabel1 = r'Structural Damping; $g = 2 \gamma $'
+        ylabel2 = r'KFreq [rad]; $ \omega c / (2 V)$'
+
+        ix, xlabel, xunit = self._plot_type_to_ix_xlabel(plot_type)
         iy1 = self.idamping
         iy2 = self.ikfreq
         scatter = True
-        self._plot_x_y2(ix, iy1, iy2, xlabel, ylabel1, ylabel2, scatter,
-                        modes=modes, fig=fig, axes1=damp_axes, axes2=freq_axes,
-                        xlim=xlim, ylim1=ylim_damping, ylim2=ylim_kfreq,
-                        nopoints=nopoints, noline=noline,
-                        show=show, clear=clear, close=close,
-                        legend=legend,
-                        png_filename=png_filename,
-                        **kwargs)
+        # print(f"plot_kfreq_damping; plot_type={plot_type}")
+        fig, axes2 = self._plot_x_y2(
+            ix, iy1, iy2, xlabel, ylabel1, ylabel2, scatter,
+            modes=modes, fig=fig, axes1=damp_axes, axes2=freq_axes,
+            xlim=xlim, ylim1=ylim_damping, ylim2=ylim_kfreq,
+            show=show, clear=clear, close=close,
+            legend=legend,
+            freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+            png_filename=png_filename,
+            **kwargs)
+
+        ax_damp, ax_kfreq = axes2
+        _add_damping_limit(plot_type, ax_damp, None, damping_limit)
+        _add_vertical_lines([ax_damp, ax_kfreq], v_lines, plot_type, xunit)
+        return fig, axes2
 
     def plot_kfreq_damping2(self, modes=None,
-                            fig=None,
-                            xlim=None, ylim=None,
-                            show=True, clear=False, close=False, legend=True,
+                            fig=None, damp_axes=None, freq_axes=None,
+                            xlim=None, ylim_damping=None, ylim_freq=None,
+                            show: bool=True, clear: bool=False,
+                            close: bool=False, legend: bool=True,
+                            freq_tol: float=-1.0,
+                            freq_tol_remove: float=-1.0,
                             png_filename=None,
-                            **kwargs):
+                            **kwargs) -> tuple[plt.Figure,
+                                               tuple[plt.Axes, plt.Axes]]:
         """
         Plots a kfreq vs. damping curve
 
         See ``plot_root_locus`` for arguments
+
         """
-        xlabel = 'KFreq [rad]'
-        ylabel1 = 'Damping'
-        ylabel2 = 'Frequency'
+        xlabel = r'KFreq [rad]; $ \omega c / (2 V)$'
+        ylabel1 = r'Structural Damping; $g = 2 \gamma $'
+        ylabel2 = 'Frequency [Hz]'
         ix = self.ikfreq
         iy1 = self.idamping
         iy2 = self.ifreq
         scatter = True
-        self._plot_x_y2(ix, iy1, iy2, xlabel, ylabel1, ylabel2, scatter,
-                        modes=modes, fig=fig, xlim=xlim, ylim=ylim,
-                        show=show, clear=clear, close=close,
-                        legend=legend,
-                        png_filename=png_filename,
-                        **kwargs)
+        fig, axes2 = self._plot_x_y2(
+            ix, iy1, iy2, xlabel, ylabel1, ylabel2, scatter,
+            modes=modes,
+            fig=fig, axes1=damp_axes, axes2=freq_axes,
+            xlim=xlim, ylim1=ylim_damping, ylim2=ylim_freq,
+            show=show, clear=clear, close=close,
+            legend=legend,
+            freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+            png_filename=png_filename,
+            **kwargs)
+        return fig, axes2
 
     def fix(self):
         """attempts to fix the mode switching"""
-        #print(self.names)
+        return
+        # print(self.names)
 
         # results[imode, ipoint, iresult]
         # 1. NaN all the invalid points
@@ -579,133 +1685,818 @@ class FlutterResponse:
         self.results[iplot, jplot, :] = np.nan
         return
 
-        #-----------------------------------------------------------------------
-        # 2. sort the results based on velocity so we're going low to high
-        #nmodes, npoints = self.results.shape[:2]
+        # -----------------------------------------------------------------------
+        # 2. sort the results based on velocity, so we're going low to high
+        # nmodes, npoints = self.results.shape[:2]
 
-        #for imode in range(nmodes):
-            #print(self.results[imode, :, self.ivelocity])
-            #isort = np.argsort(self.results[imode, :, self.ivelocity])
-            #self.results[imode, :, :] = self.results[imode, isort, :]
+        # for imode in range(nmodes):
+        #     print(self.results[imode, :, self.ivelocity])
+        #     isort = np.argsort(self.results[imode, :, self.ivelocity])
+        #     self.results[imode, :, :] = self.results[imode, isort, :]
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # 3. sort the results based on damping, so we're going abs(high) to low
-        #for ipoint in range(npoints):
-            #isort = np.argsort(self.results[:, ipoint, self.idamping])
-            #self.results[:, isort, :] = self.results[:, isort, :]
+        # for ipoint in range(npoints):
+        #     isort = np.argsort(self.results[:, ipoint, self.idamping])
+        #     self.results[:, isort, :] = self.results[:, isort, :]
 
         # 4. find the critical mode
         # 5. ???
 
-    def plot_vg_vf(self, fig=None, damp_axes=None, freq_axes=None, modes=None,
-                   plot_type='tas',
-                   clear=False, close=False, legend=True,
-                   xlim=None, ylim_damping=None, ylim_freq=None,
-                   nopoints=False, noline=False, png_filename=None, show=None):
+    def _get_symbols_colors_from_modes(self, modes: np.ndarray,
+                                       nopoints: Optional[bool]=None) -> tuple[list[str], list[str]]:
+        """
+        We need to make sure we have a symbol and color for each mode,
+        even if we repeat them.
+
+        For the colors, calculate how many more we need N = ceil(nmodes/ncolors)
+        and just duplicate colors N times.
+        """
+        if nopoints is None:
+            nopoints = self.nopoints
+        nmodes = len(modes)
+        symbols, colors = _symbols_colors_from_nlines(self._colors, self._symbols, nmodes)
+        if nopoints:
+            symbols = ['None'] * len(symbols)
+        return symbols, colors
+
+    def _result_by_mode(self, imode: int, ix: int) -> np.ndarray:
+        if ix == -1:  # index
+            nvel = len(self.results[imode, :, 0])
+            return np.arange(0, nvel, dtype='int32')
+        return self.results[imode, :, ix]
+
+    def calculate_zimmerman(self, imode1: int, imode2: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        https://ntrs.nasa.gov/api/citations/19830003800/downloads/19830003800.pdf
+        """
+        # lambda1 = beta1 +/- j*omega1
+        ireal = self.ieigr
+        iimag = self.ieigi
+        beta1 = self.results[imode1, :, ireal]
+        beta2 = self.results[imode2, :, ireal]
+        omega1 = self.results[imode1, :, iimag]
+        omega2 = self.results[imode2, :, iimag]
+
+        # beta_1p2 = (beta2 + beta1)
+        # a = (beta2 - beta1) / (beta2 + beta1)
+        # b = (omega2**2 - omega1**2) / 2
+        # c = (beta1 + beta2)**2
+        # d = omega2**2 + omega1**2
+        # e = (beta1 + beta2) / 2
+        # Fs = b ** 2
+        # Fs0 = Fs[0]
+        # F = 1 / Fs0 * (1 - a**2) * (b**2 + c * (d/2 + e**2))
+
+        # -------------------------------------------------
+        a = (beta2 - beta1) / (beta2 + beta1)
+        b = (omega2**2 - omega1**2) / 2
+        c = (beta1 + beta2)**2
+        d = (omega2**2 + omega1**2) / 2
+        e = (beta1 + beta2) / 2
+        Fs = b ** 2
+        Fs0 = Fs[0]
+        if Fs0 == 0.0:
+            warnings.warn(f'Fs0=0 imode1={imode1:d} imode2={imode2:d}')
+            Fs0 = 1.0
+
+        F = 1/Fs0 * (1 - a**2) * (b**2 + c * (d + e**2))
+        return F, Fs
+
+    def plot_zimmerman(self, modes=None,
+                       fig=None, axes=None,
+                       plot_type: str='tas',
+                       show: bool=True) -> plt.Figure:
+        """
+
+        Parameters
+        ----------
+        fig : plt.Figure; default=None
+            the fig object
+        axes : plt.Axes; default=None
+            the ax object
+        plot_type : str; default='tas'
+           tas, eas, alt, kfreq, 1/kfreq, freq, damp, eigr, eigi, q, mach
+        """
+        # print('plot_zimmerman')
+        modes, imodes = _get_modes_imodes(self.modes, modes)
+        imodes = np.array([0, 1, 0, 1])
+        nmodes = len(imodes)
+        # print(f'nmodes = {nmodes}')
+        if nmodes < 2:
+            print(f'less than 2 modes specified; modes={modes}')
+            return
+
+        if fig is None or 1:
+            fig = plt.figure()  # figsize=(12,9), self.subcase
+            if nmodes == 2:
+                # print('nmodesA')
+                ax = fig.gca()
+                axes = np.array([[fig.gca()]])
+            else:
+                # print('nmodesB')
+                # print(nmodes, '*******')
+                fig, axes = plt.subplots(ncols=nmodes-1, nrows=nmodes-1)
+                # print(axes[0])
+                # print(axes[1])
+                # print(axes[2])
+                # print(axes[3])
+        # fig.clear()
+
+        ix, xlabel, xunit = self._plot_type_to_ix_xlabel(plot_type)
+        ix = self.ieas
+        xvalues = self.results[0, :, ix]
+        print(f'zimmerman imodes={imodes}')
+        for i, imodei, modei in zip(count(), imodes, modes):
+            for j, jmodei, modej in zip(count(), imodes[i+1:], modes[i+1:]):
+                if modei == modej:
+                    continue
+                # if imodei == jmodei:
+                #     continue
+                Fi, Fsi = self.calculate_zimmerman(imodei, jmodei)
+                # print(axes)
+                print((i, j), (int(jmodei), int(jmodei)), f'shape={axes.shape}')
+                ax = axes[i, j]
+                ax.plot(xvalues, Fi, label=f'F({modei}, {modej})')
+                ax.plot(xvalues, Fsi, label=f'Fs({modei}, {modej})')
+
+        for ax in axes.ravel():
+            ax.grid(True)
+            ax.set_ylim([-0.2, None])
+            ax.legend()
+
+        if len(modes) == 2:
+            # ax = axes[0, 0]
+            # axes.plot(xvalues, Fi, label='F')
+            ax.set_ylabel('Zimmerman Flutter Margin Criterion')
+            ax.set_xlabel(xlabel)
+
+            title = self._get_title(nlines=1)
+            title += f'\nModes: {modes[0]}, {modes[1]}'
+            plt.suptitle(title)
+
+        else:
+            fig.suptitle('Zimmerman Flutter Margin Criterion')
+            # fig = plt.figure()
+            # gs = fig.add_gridspec(2, 2, hspace=0, wspace=0)
+            # (ax1, ax2), (ax3, ax4) = gs.subplots(sharex='col', sharey='row')
+            # fig.suptitle('Sharing x per column, y per row')
+            # ax1.plot(x, y)
+            # ax2.plot(x, y ** 2, 'tab:orange')
+            # ax3.plot(x + 1, -y, 'tab:green')
+            # ax4.plot(x + 2, -y ** 2, 'tab:red')
+            # for ax in axes.ravel():
+            #     ax.label_outer()
+        if show:
+            plt.show()
+        return fig
+
+    def _apply_mode_switch_method(self, mode_switch_method: str):
+        """
+        Performs mode switching
+
+        Parameters
+        ----------
+        mode_switch_method: str
+            None, Frequency, Damping
+
+        """
+        mode_switch_method = mode_switch_method.lower()
+        if mode_switch_method in ['', 'na', 'n/a', 'none']:
+            pass
+        elif mode_switch_method in ['frequency', 'freq']:
+            self.sort_modes_by_freq()
+        elif mode_switch_method in ['damping']:
+            self.sort_modes_by_damping()
+        else:
+            raise RuntimeError(f'mode_switch_method={mode_switch_method!r} '
+                               f'and must be [none, frequency, damping]')
+
+    def plot_vg_vf(self, fig=None, damp_axes=None, freq_axes=None,
+                   modes=None,
+                   plot_type: str='tas',
+                   clear: bool=False, close: bool=False, legend: bool=True,
+                   xlim: Optional[Limit]=None,
+                   ylim_damping: Optional[Limit]=None,
+                   ylim_freq: Optional[Limit]=None,
+                   ivelocity: Optional[int]=None,
+                   v_lines: list[LineData]=None,
+                   damping_required: Optional[float]=None,
+                   damping_limit: Optional[float]=None,
+                   ncol: int=0,
+                   freq_tol: float=-1.0,
+                   freq_tol_remove: float=-1.0,
+                   filter_freq: bool=False,
+                   damping_crossings: list[dict[float, float]]=None,
+                   show_detailed_mode_info: bool=False,
+                   divergence_legend_loc: str='best',
+                   flutter_bbox_to_anchor: Optional[tuple[float, float]]=None,
+                   filter_damping: bool=False,
+                   eas_range: Optional[tuple[float, float]]=None,
+                   png_filename=None, show: bool=False,
+                   point_removal: Optional[list[tuple[float, float]]]=None,
+                   mode_switch_method: str='') -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
         """
         Make a V-g and V-f plot
 
         Parameters
         ----------
-        modes : List[int] / int ndarray; (default=None -> all)
+        fig : plt.Figure; default=None
+            the fig object
+        damp_axes : plt.Axes; default=None
+            the ax object
+        freq_axes : plt.Axes; default=None
+            the ax object
+        fig : plt.Figure; default=None
+            the fig object
+        modes : list[int] / int ndarray; (default=None -> all)
             the modes; typically 1 to N
+        plot_type : str; default='tas'
+           tas, eas, alt, kfreq, 1/kfreq, freq, damp, eigr, eigi, q, mach
         legend : bool; default=True
             should the legend be shown
+        show : bool; default=False
+            show/don't show the plot
+        filter_freq : bool; default=False
+            filter modes entirely outside the plot range
+            useful for cleaning up the legend; False for interactive mode
+        damping_crossings : list[(damping_target, damping_required)]
+            A point will be created at the damping point if it meets the criterion
+            for damping_required. This is useful when you have slight spikes over the target damping
+            target_damping: float
+                the target damping for flutter
+            damping_required: float
+                the required damping for flutter
+        filter_damping : bool; default=False
+            filter crossings entirely outside the plot range
+            useful for cleaning up the legend
+        v_lines : list[(name, velocity, vcolor, linestyle)]
+            name : str
+                name of the line
+            velocity : float
+                equivalent airspeed
+            color : str
+                color of the line
+            linestyle : str
+                '-', '--', 'dotted'
+        point_removal : list[range]
+            range : tuple[float, float]
+            points in the range will be removed; useful for deleting a single point based on EAS
+            point_removal = [(400.0, 410.0),]
+        mode_switch_method : str
+            None, Frequency
+        xlim : Limit
+            limits for x-axis
+        ylim_damping : Limit
+            limits for damping-axis
+        ylim_freq : Limit
+            limits for freq-axis
+        ncol : int; default=0 -> auto
+            number of columns for the legend
+        ivelocity : int
+            indices to plot
+        show_detailed_mode_info : bool; default=False
+            show hump mode information
+        freq_tol :  float; default=-1.0
+            set lines to dashed if they fall under the tolerance
+            -1.0: no filtering (default)
+            >0.0: filter is active
+        freq_tol_remove : float; default=-1.0
+            hide lines to if they fall under the tolerance
+            a line must be dashed for it to be hidden (i.e., freq_tol_remove <= freq_tol)
+            -1.0: no filtering (default)
+            >0.0: filter is active
+        png_filename : Optional[PathLike]; default=None
+            path to png file; None -> no file
+        close : bool; default=False
+            should the plot be closed after being saved
+
         """
-        #self.fix()
+        if damping_crossings:
+            assert isinstance(damping_crossings, dict), damping_crossings
+        # print(f'damping_limit = {damping_limit}')
+        # print(f'damping_required = {damping_required}')
+        # print(f'damping_crossings = {damping_crossings}')
+        # print(f'filter_freq = {filter_freq}')
+
+        ncol = 0 if ncol is None else ncol
+        if flutter_bbox_to_anchor is None:
+            flutter_bbox_to_anchor = (1.02, 1.)
+        self._apply_mode_switch_method(mode_switch_method)
+
+        # assert vl_limit is None or isinstance(vl_limit, float_types), vl_limit
+        assert damping_limit is None or isinstance(damping_limit, float_types), damping_limit
+        # self.fix()
         if fig is None:
-            fig = plt.figure() # figsize=(12,9), self.subcase
+            fig = plt.figure()  # figsize=(12,9), self.subcase
             gridspeci = gridspec.GridSpec(2, 4)
             damp_axes = fig.add_subplot(gridspeci[0, :3])
             freq_axes = fig.add_subplot(gridspeci[1, :3], sharex=damp_axes)
 
-        #self._set_xy_limits(xlim, ylim)
+        # self._set_xy_limits(xlim, ylim)
         modes, imodes = _get_modes_imodes(self.modes, modes)
-        symbols = self.symbols
+        symbols, colors = self._get_symbols_colors_from_modes(modes)
+        symbols_show, colors_show = self._get_symbols_colors_from_modes(modes, nopoints=False)
+        linestyle = 'None' if self.noline else '-'
 
-        legend_items = ['Mode %i' % mode for mode in modes]
-        ix, xlabel = self._plot_type_to_ix_xlabel(plot_type)
+        # plot_type = ['tas', 'eas', 'alt', 'kfreq', '1/kfreq', 'freq', 'damp', 'eigr', 'eigi', 'q', 'mach']
+        ix, xlabel, xunit = self._plot_type_to_ix_xlabel(plot_type)
+
+        jcolor = 0
+        imodes_crossing = []
+        vl_vf_crossing_dict = {}
+        vd_crossing_dict = {}
+        if hasattr(self, 'ieas') and plot_type == 'eas':
+            vl_vf_crossing_dict, vd_crossing_dict = self.get_flutter_crossings(
+                damping_crossings=damping_crossings, modes=modes,
+                eas_range=eas_range)
+
+        if ylim_freq is None or not isinstance(ylim_freq[0], float_types) or not isinstance(ylim_freq[0], float_types):
+            filter_freq = False
+
+        if filter_freq:
+            yfreq_min, yfreq_max = ylim_freq
+
+        legend_elements_damp = []
+        legend_elements_freq = []
+        # print(f'imodes={imodes}')
+        # print(f'modes={modes}')
+        nmodes = 0
         for i, imode, mode in zip(count(), imodes, modes):
-            vel = self.results[imode, :, ix].ravel()
-            damping = self.results[imode, :, self.idamping].ravel()
-            freq = self.results[imode, :, self.ifreq].ravel()
+            ioffset = jcolor % self.noffset
+            # print(f'ith_mode = {i}, imode = {imode}, mode = {mode}')
+            color = colors[jcolor]
+            symbol = symbols[jcolor]
 
-            #iplot = np.where(freq > 0.0)
-            #damp_axes.plot(vel, damping, symbols[i], label='Mode %i' % mode)
-            #freq_axes.plot(vel, freq, symbols[i])
+            vel = self._result_by_mode(imode, ix).ravel()
+            damping = self._result_by_mode(imode, self.idamping).ravel()
+            freq = self._result_by_mode(imode, self.ifreq).ravel()
+            if mode > self.nrigid_body_modes and self.x_cutoff is not None:
+                # self.log.debug('skipping ')
+                irigid = np.where(vel < self.x_cutoff)[0]
+                vel = vel[irigid]
+                damping = damping[irigid]
+                freq = freq[irigid]
 
-            #iplot = np.where(freq != np.nan)
-            #damp_axes.plot(vel[iplot], damping[iplot], symbols[i], label='Mode %i' % mode)
-            #freq_axes.plot(vel[iplot], freq[iplot], symbols[i])
-            showline = not noline
-            showpoints = not nopoints
-            if symbols and showline and showpoints:
-                symbol = symbols[i]
-                damp_axes.plot(vel, damping, symbol, label='Mode %i' % mode)
-                freq_axes.plot(vel, freq, symbol)
-            elif symbols and showpoints:
-                # show line, no points
-                symbol = symbols[i].replace('-', '')
-                damp_axes.plot(vel, damping, symbol, label='Mode %i' % mode)
-                freq_axes.plot(vel, freq, symbol)
-            else:
-                # show line
-                damp_axes.plot(vel, damping, label='Mode %i' % mode)
-                freq_axes.plot(vel, freq)
+            vel, damping, freq = remove_excluded_points(
+                vel, damping, freq, point_removal)
+            if len(freq) == 0:
+                # print('no points after remove_excluded_points')
+                continue
 
-        damp_axes.set_xlabel(xlabel)
-        freq_axes.set_xlabel(xlabel)
-        damp_axes.set_ylabel('Damping')
+            vel_calc, damping_calc, freq_calc = remove_eas_range(
+                vel, damping, freq, eas_range)
+
+            if len(freq) == 0:
+                # print('no points after remove_eas_range')
+                continue
+            if len(freq_calc) == 0:
+                # print('no points after remove_eas_range')
+                continue
+            jcolor, color, linestyle2, symbol2, texti, is_removedi = _increment_jcolor(
+                mode, jcolor, color, linestyle, symbol,
+                vel_calc, freq_calc, damping_calc, freq_tol=freq_tol, freq_tol_remove=freq_tol_remove,
+                show_mode_number=self.show_mode_number)
+            if is_removedi:
+                # print("removed?")
+                continue
+
+            if color != 'gray':
+                imodes_crossing.append(imode)
+
+            # iplot = np.where(freq > 0.0)
+            # damp_axes.plot(vel, damping, symbols[i], label='Mode %i' % mode)
+            # freq_axes.plot(vel, freq, symbols[i])
+
+            # iplot = np.where(freq != np.nan)
+            # damp_axes.plot(vel[iplot], damping[iplot], symbols[i], label='Mode %i' % mode)
+            # freq_axes.plot(vel[iplot], freq[iplot], symbols[i])
+            # print(color, symbol, linestyle)
+            # dfreq = freq.max() - freq.min()
+            is_freq1 = ylim_freq is not None and ylim_freq[1] is not None
+            if filter_freq and (is_freq1 and freq_calc.min() > ylim_freq[1]) and damping_calc.max() < 0.0:
+                # if we're entirely greater than the max, skip line
+                #print(f'greater than the max ylim_freq; filter_freq={filter_freq} ylim_freq={ylim_freq}; '
+                #      f'freq_calc_min={freq_calc.min()} damping_max={damping_calc.max()}')
+                continue
+
+            is_freq0 = ylim_freq is not None and ylim_freq[0] is not None
+            if filter_freq and (is_freq0 and freq_calc.max() < ylim_freq[0]) and damping_calc.max() < 0.0:
+                # if we're entirely below than the min, skip line
+                #print('below than the min ylim_freq')
+                continue
+            label = _get_mode_freq_label(mode, freq[0], freq_ndigits=self.freq_ndigits)
+            # print(mode, color, symbol, linestyle, dfreq, freq)
+
+            # _plot_axes(damp_axes,
+            #            vel, damping,
+            #            color, symbol2, linestyle2,
+            #            label, texti)
+
+            # if texti == '':
+            #     msgi = str([texti, symbol2, linestyle2]) + 'was unexpected...'
+            #     warnings.warn(msgi)
+            nmodes += 1
+            legend_elementsi = _plot_two_axes(
+                damp_axes, freq_axes,
+                vel, damping, freq,
+                color, symbol2, linestyle2,
+                label, texti, ioffset,
+                self.markevery,
+                markersize=None)
+            legend_elements_damp.extend(legend_elementsi)
+            if ivelocity and symbol2 and ivelocity < len(vel):
+                markersize = 10
+                plot_kwargs = {
+                    'color': 'k', 'marker': 'o',
+                    's': markersize**2, 'alpha': 0.8}
+                damp_axes.scatter(vel[ivelocity], damping[ivelocity], **plot_kwargs)
+                freq_axes.scatter(vel[ivelocity], freq[ivelocity], **plot_kwargs)
+
+        # add horizontal line
+        legend_elementsi = _add_damping_limit(
+            plot_type, damp_axes, damping_required, damping_limit)
+        legend_elements_damp.extend(legend_elementsi)
+
+        legend_elementsi = _add_vertical_lines(
+            [damp_axes, freq_axes], v_lines, plot_type, xunit)
+        legend_elements_damp.extend(legend_elementsi)
+
+        # crossings go on top (aka at the end)
+        eas_max = None if (xlim is None or xlim[1] is None) else xlim[1]
+        legend_elements_dampi, legend_elements_freqi = self._plot_crossings(
+            damp_axes, freq_axes,
+            imodes, modes,
+            imodes_crossing, vl_vf_crossing_dict, vd_crossing_dict,
+            colors_show, symbols_show,
+            eas_max=eas_max,
+            filter_damping=filter_damping,
+            show_detailed_mode_info=show_detailed_mode_info)
+        legend_elements_damp.extend(legend_elements_dampi)
+        legend_elements_freq.extend(legend_elements_freqi)
+
+        damp_axes.set_xlabel(xlabel)  # , size=self.font_size)
+        freq_axes.set_xlabel(xlabel)  # , size=self.font_size)
+        damp_axes.set_ylabel(r'Structural Damping; $g = 2 \gamma $')  # , fontsize=self.font_size)
         freq_axes.set_ybound(lower=0.)
 
         damp_axes.grid(True)
-        if xlim is not None:
-            damp_axes.set_xlim(xlim)
-        if ylim_damping is not None:
-            damp_axes.set_ylim(ylim_damping)
-
-        freq_axes.set_ylabel('Frequency [Hz]')
+        set_xlim(damp_axes, xlim)
+        set_ylim(damp_axes, ylim_damping)
+        freq_axes.set_ylabel('Frequency [Hz]')  # , fontsize=self.font_size)
         freq_axes.grid(True)
 
-        if xlim is not None:
-            freq_axes.set_xlim(xlim)
-        if ylim_freq is not None:
-            freq_axes.set_ylim(ylim_freq)
+        set_xlim(freq_axes, xlim)
+        set_ylim(freq_axes, ylim_freq)
 
-        title = 'Subcase %i' % self.subcase
-        if png_filename:
-            title += '\n%s' % png_filename
+        _set_ticks(self, damp_axes, 0)
+        _set_ticks(self, freq_axes, 1)
 
-        damp_axes.set_title(title)
-        #plt.suptitle(title)
+        title = self._get_title(nlines=2)
+        damp_axes.set_title(title)  # , fontsize=self.font_size)
+        # plt.suptitle(title)
 
+        ncol = _update_ncol(nmodes, ncol)
+        # print(f'legend_elements_freq = {legend_elements_freq}')
+        # print(f'legend_elements_damp = {legend_elements_damp}')
         if legend:
-            damp_axes.legend(legend_items, fontsize=10, bbox_to_anchor=(1.125, 1.), loc=2)
-            #fig.subplots_adjust(hspace=0.25)
-            #fig.subplots_adjust(hspace=.5)
-            #plt.legend()
-            #damp_axes.legend(legend_items, bbox_to_anchor=anchor, ncol=2)
-            #fig.subplots_adjust(hspace=0.25)
-            #fig.subplots_adjust(hspace=.5)
+            if legend_elements_freq and divergence_legend_loc != 'none':
+                # print('making freq axes legend')
+                freq_axes.legend(
+                    handles=legend_elements_freq,
+                    loc=divergence_legend_loc,
+                )
+            if legend_elements_damp:
+                # print('making damp axes legend')
+                damp_axes.legend(
+                    handles=legend_elements_damp,
+                    # bbox_to_anchor=(1.125, 1.), loc=2, ncol=ncol,  # OG
+                    bbox_to_anchor=flutter_bbox_to_anchor, loc=2, ncol=ncol,  # tighter gap for legend
+                    # fontsize=10,
+                )
+            # damp_axes.legend(fontsize=10, bbox_to_anchor=(1.125, 1.), loc=2, ncol=ncol)
+            # fig.subplots_adjust(hspace=0.25)
+            # fig.subplots_adjust(hspace=.5)
+            # plt.legend()
+            # damp_axes.legend(legend_items, bbox_to_anchor=anchor, ncol=2)
+            # fig.subplots_adjust(hspace=0.25)
+            # fig.subplots_adjust(hspace=.5)
 
-        if show:
-            plt.show()
-        if png_filename:
-            plt.savefig(png_filename)
-        if clear:
-            fig.clear()
-        if close:
-            plt.close()
+        _show_save_clear_close(
+            fig, show, png_filename, clear, close)
+        return fig, (damp_axes, freq_axes)
 
-    def export_to_veas(self, veas_filename: str, modes: Optional[List[int]]=None) -> None:
+    def sort_modes_by_damping(self, debug: bool=True):
+        index = self._result_by_mode(0, -1)
+        nresult = self.results.shape[2]
+        for ivel in index:
+            # freqs = self.results[:, ivel, self.idamping] * self.results[:, ivel, self.ifreq]
+            damping = self.results[:, ivel, self.idamping]
+            idamp_sort = np.argsort(damping)
+            for ires in range(nresult):
+                self.results[:, ivel, ires] = self.results[idamp_sort, ivel, ires]
+
+    def sort_modes_by_freq(self, debug: bool=True):
+        index = self._result_by_mode(0, -1)
+        nresult = self.results.shape[2]
+        for ivel in index:
+            # freqs = self.results[:, ivel, self.idamping] * self.results[:, ivel, self.ifreq]
+            freqs = self.results[:, ivel, self.ifreq]
+            ifreq_sort = np.argsort(freqs)
+            for ires in range(nresult):
+                self.results[:, ivel, ires] = self.results[ifreq_sort, ivel, ires]
+        modes = self.get_delta_modes(dfreq=1.0)
+
+    def polyfit_modes(self, modes) -> None:
+        modes, imodes = _get_modes_imodes(self.modes, modes)
+        # ------------------------------------------------------
+        # setup a linear extrapolation of the first 2 points
+        # to bump the polynomial degree
+        deg = 1  # linear
+        i0 = 0
+        i1 = deg + 1
+        i2 = i1 + 1
+        nmodes, nvel, nresults = self.results.shape
+        del nresults
+        ivel = 0
+        # eas_estimated = np.zeros(nmodes)
+        eas_estimated = self.results[:, ivel, self.ieas].copy()
+        for imode in imodes:
+            eas = self.results[imode, :, self.ieas]
+            freqs = self.results[imode, :, self.ifreq]
+            temp = eas[i0:i1]
+            assert len((temp)) == deg + 1, (temp, deg)
+            func = np.poly1d(np.polyfit(eas[i0:i1], freqs[i0:i1], deg))
+            eas_estimated[imode] = func(eas[i2])
+
+        # ------------------------------------------------------
+        # compare to predicted and flip if necessary
+
+        # ------------------------------------------------------
+        # setup a quadratic extrapolation of the first 3 points
+        deg = 2
+        for i1 in range(nvel-2):  # TODO: I think -2, maybe -3???
+            i1 = deg + 1
+            i2 = i1 + 2
+
+            # testing i1/i2
+            eas1 = self.results[0, i1, self.ieas]
+            eas2 = self.results[0, i2, self.ieas]
+
+            # loop over modes and do the thing...
+
+            # compare to predicted and flip
+
+        # ------------------------------------------------------
+        # I think we're done
+
+    def get_delta_modes(self, modes=None, dfreq: float=-1.0) -> np.ndarray:
+        modes, imodes = _get_modes_imodes(self.modes, modes)
+        freqs = self.results[imodes, :, self.ifreq]
+        dfs = freqs.max(axis=1) - freqs.min(axis=1)
+        assert len(dfs) == len(imodes), (len(dfs), len(imodes))
+        # print(dfs.tolist())
+        idfreq = dfs < dfreq
+        return modes[idfreq]
+        # for imode in range(imodes):
+        #     freqs = self.results[imode, :, self.ifreq]
+        #     df = freqs.max() - freqs.min()
+        #     if df <
+
+    def _plot_crossings(self,
+                        damp_axes: plt.Axes,
+                        freq_axes: plt.Axes,
+                        imodes: np.ndarray,
+                        modes: np.ndarray,
+                        imodes_crossing: np.ndarray,
+                        vl_vf_crossing_dict: VCrossingDict,
+                        vd_crossing_dict: VCrossingDict,
+                        colors: list[str],
+                        symbols: list[str],
+                        eas_max: Optional[float]=None,
+                        filter_damping: bool=False,
+                        show_detailed_mode_info: bool=False,
+                        ndiverg_max: int=7) -> tuple[list[Line2D], list[Line2D]]:
         """
-        Exports a ZONA .veas file
+        Parameters
+        ----------
+        filter_damping: bool; default=False
+            filter crossings entirely outside the plot range
+            useful for cleaning up the legend
+        eas_max : float; default=None
+            requires filter_damping
+            if velocity is greater than the allowable range, don't plot it
+        ndiverg_max: int; default=7
+            the loweset N modes will be plotted; N=0 -> no filtering
+
+        """
+        show_simple_mode_info = not show_detailed_mode_info
+        min_damping = 0.
+        if len(vl_vf_crossing_dict) > 0:
+            min_damping = min(vl_vf_crossing_dict)
+
+        vl_vf_crossing_dict_modes_sort = _sort_vl_vf_crossings_by_mode(vl_vf_crossing_dict)
+        vd_crossing_dict_modes_sort = _sort_vd_crossings_by_mode(
+            vd_crossing_dict, ndiverg_max=ndiverg_max)
+        del vl_vf_crossing_dict, vd_crossing_dict
+        # print(f'vd_crossing_dict_modes_sort = {vd_crossing_dict_modes_sort}')
+
+        # -------------------------------------------------------------
+        plot_type = 'eas'
+        legend_elements_damp = []
+        legend_elements_freq = []
+        assert isinstance(vd_crossing_dict_modes_sort, dict), vd_crossing_dict_modes_sort
+        assert isinstance(vl_vf_crossing_dict_modes_sort, dict), vl_vf_crossing_dict_modes_sort
+        if len(vl_vf_crossing_dict_modes_sort) == 0 and len(vd_crossing_dict_modes_sort) == 0:
+            return legend_elements_damp, legend_elements_freq
+        jcolor = 0
+        xunit = self.out_units[plot_type]
+        # TODO: fix the colors...what's wrong?
+        # print(f"imodes_crossing = {imodes_crossing}")
+        for i, imode, mode in zip(count(), imodes, modes):
+            if imode not in imodes_crossing:
+                continue
+            # if mode not in vl_vf_crossing_dict:  # TODO: what does this do?
+            #     continue
+
+            is_vd = (mode in vd_crossing_dict_modes_sort)
+            is_vl_vf = (mode in vl_vf_crossing_dict_modes_sort)
+            color = colors[jcolor]
+            symbol2 = symbols[jcolor]
+            # (freq0, eas0), (freq3, eas3) = vl_vf_crossing_dict[mode]
+            # freq = self.results[imode, :, self.ifreq].ravel()
+            # jcolor, color, linestyle2, symbol2, is_removedi = _increment_jcolor(
+            #     jcolor, color, linestyle, symbol,
+            #     freq, damping, freq_tol, freq_tol_remove)
+            # if is_removedi:
+            #     continue
+
+            if is_vd:
+                # print(f'**crossings2 = {vd_crossing_dict[mode]}')
+                for case in vd_crossing_dict_modes_sort[mode]:
+                    # print(f'case = {case}')
+                    damping0, freq0, eas0 = case
+                    # print(f'mode={mode} damping={damping0} freq={freq0} eas={eas0}')
+                    if np.isnan(eas0):
+                        continue
+                    if filter_damping and eas0 > eas_max:
+                        continue
+                    damping_str = f'{damping0*100:.0f}%'
+                    label = f'Divergence Mode {mode}: {damping_str}; {eas0:.0f} {xunit}; {freq0:.1f} Hz'
+                    # print(label)
+                    legend_element = Line2D([0], [0],
+                                            marker=symbol2, color=color, label=label, linestyle='')
+                    freq_axes.plot(eas0, damping0, color=color,
+                                   marker=symbol2, linestyle='', label=label)
+                    legend_elements_freq.append(legend_element)
+
+            if is_vl_vf:
+                for case in vl_vf_crossing_dict_modes_sort[mode]:
+                    # print(case)
+                    damping0, p1, p2, pmax = case
+                    # i1, x1, ytarget, f1
+                    iy1, eas1, damp1, freq1 = p1
+                    # iy2, eas2, damp2, freq2 = p2
+                    # iymax, easmax, dampmax, freqmax = pmax
+
+                    if np.isnan(eas1) or filter_damping and eas1 > eas_max:
+                        continue
+
+                    label = _crossing_label(
+                        mode, damping0, min_damping, xunit,
+                        p1, p2, pmax,
+                        show_simple_mode_info=show_simple_mode_info)
+
+                    legend_element = Line2D([0], [0],
+                                            marker=symbol2, color=color, label=label, linestyle='')
+                    damp_axes.plot(eas1, damping0, color=color,
+                                   marker=symbol2, linestyle='', label=label)
+
+                    # Freq Range
+                    damping_str = f'{damping0*100:.0f}%'
+                    label = f'Mode {mode}: g={damping_str}; {eas1:.0f} {xunit}; {freq1:.1f} Hz'
+                    legend_element1 = Line2D([0], [0],
+                                             marker=symbol2, color=color, label=label, linestyle='')
+                    damp_axes.plot(eas1, damping0, color=color,
+                                   marker=symbol2, linestyle='', label=label)
+                    legend_elements_damp.append(legend_element)
+            if is_vd or is_vl_vf:
+                jcolor += 1
+
+        # print(f'legend_elements_damp = {legend_elements_damp}')
+        # print(f'legend_elements_freqi = {legend_elements_freq}')
+        return legend_elements_damp, legend_elements_freq
+
+    def get_hump_mode_messages(self, vl_vf_crossing_dict,
+                               modes: Optional[list[int]]=None,
+                               eas_range: Optional[Limit]=None,
+                               filter_damping: bool=False,
+                               plot_type: str='eas') -> list[str]:
+        labels = []
+        eas_min, eas_max = _get_eas_range(eas_range)
+        ix, unused_xlabel, xunit = self._plot_type_to_ix_xlabel(plot_type)
+        min_damping = 0.
+        if len(vl_vf_crossing_dict) > 0:
+            min_damping = min(vl_vf_crossing_dict)
+
+        show_simple_mode_info = False
+        modes, imodes = _get_modes_imodes(self.modes, modes)
+        vl_vf_crossing_dict_modes_sort = _sort_vl_vf_crossings_by_mode(vl_vf_crossing_dict)
+        for i, imode, mode in zip(count(), imodes, modes):
+            # if imode not in imodes_crossing:
+            #     continue
+            # if mode not in vl_vf_crossing_dict:  # TODO: what does this do?
+            #     continue
+
+            is_vl_vf = (mode in vl_vf_crossing_dict_modes_sort)
+            if not is_vl_vf:
+                continue
+
+            for case in vl_vf_crossing_dict_modes_sort[mode]:
+                damping0, p1, p2, pmax = case
+                # i1, x1, ytarget, f1
+                iy1, eas1, damp1, freq1 = p1
+                iy2, eas2, damp2, freq2 = p2
+                iymax, easmax, dampmax, freqmax = pmax
+
+                if np.isnan(eas1) or filter_damping and eas1 > eas_max:
+                    continue
+
+                # iy, eas, damping, freq
+                if not in_range(p1[1], eas_min, eas_max):
+                    continue
+
+                label = _crossing_label(
+                    mode, damping0, min_damping, xunit,
+                    p1, p2, pmax,
+                    show_simple_mode_info=show_simple_mode_info)
+                # if '831-841 knots' in label:
+                #     print(f'eas_range = {eas_range}')
+                #     print(f'p1 = {p1}')
+                #     print(f'p2 = {p2}')
+                #     print(f'pmax = {pmax}')
+                #     raise RuntimeError('check data')
+                labels.append(label)
+        return labels
+
+    def export_to_csv(self, csv_filename: PathLike,
+                      modes: Optional[list[int]]=None) -> None:
+        """
+        Exports a ZAERO .veas file
+
+        Parameters
+        ----------
+        csv_filename : str
+            the filename to write
+        modes : list[int] / int ndarray; (default=None -> all)
+            the modes; typically 1 to N
+
+        *.VEAS
+
+        ' DAMPING & FREQUENCY X-Y PLOT FILE OF PLTVG SETID=     714 FOR FLUTTER/ASE ID=     714 NMODE=   12'
+        '  IPOINT,  VEL_1,       VEL_2,       RHO_1,       RHO_2, ...'
+        '  1,       0.0000E+00,  0.0000E+00,  0.0000E+00,  0.0000E+00'
+        '  2,       4.9374E-01, -1.6398E-03, -5.4768E-04, -2.3136E-04'
+        """
+        imodes = _imodes(self.results.shape, modes)
+        assert len(imodes) > 0, imodes
+        headers = ['ipoint']
+        for name in self.names:
+            headersi = [f'{name}_imode={imode}' for imode in imodes]
+            headers += headersi
+        # print(headers)
+
+        nspeed = self.results.shape[1]
+        ipoint = np.arange(1, nspeed+1, 1, dtype='int32')
+
+        csv_filename2 = _apply_subcase_to_filename(csv_filename, self.subcase)
+        with open(csv_filename2, 'w') as csv_file:
+            csv_file.write(f'# subcase = {self.subcase}\n')
+            for key, unit in self.out_units.items():
+                csv_file.write(f'# {key} = {unit}\n')
+            csv_file.write('# ' + ','.join(headers) + '\n')
+
+            results = [ipoint]
+            for iresult, name in enumerate(self.names):
+                for imode in imodes:
+                    result = self.results[imode, :, iresult]
+                    results.append(result)
+            results_array = np.column_stack(results)
+            np.savetxt(csv_file, results_array, delimiter=',')
+
+            # for i in range(nspeeds):
+            #    damping = self.results[:, i, self.idamping]
+
+    def export_to_veas(self, veas_filename: PathLike,
+                       modes: Optional[list[int]]=None) -> None:
+        """
+        Exports a ZAERO .veas file
 
         Parameters
         ----------
         veas_filename : str
             the filename to write
-        modes : List[int] / int ndarray; (default=None -> all)
+        modes : list[int] / int ndarray; (default=None -> all)
             the modes; typically 1 to N
 
         *.VEAS
@@ -715,101 +2506,98 @@ class FlutterResponse:
         '  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  1.4277E+01  7.7705E+01  8.8016E+01  2.2346E+02  2.4656E+02  3.2366E+02  4.5518E+02  4.9613E+02  6.7245E+02  7.3197E+02  8.0646E+02  0.0000E+00'
         '  4.9374E-01 -1.6398E-03 -5.4768E-04 -2.3136E-04 -3.5776E-04 -6.2358E-05 -3.0348E-04 -7.7492E-05 -2.0301E-05 -1.7733E-04 -9.2383E-05 -1.2849E-05 -2.8854E-05  4.9374E-01  1.4272E+01  7.7726E+01  8.8010E+01  2.2347E+02  2.4655E+02  3.2364E+02  4.5516E+02  4.9612E+02  6.7245E+02  7.3195E+02  8.0646E+02  0.0000E+00'
         """
-        modes, nmodes = self._modes_nmodes(modes)
+        modes, nmodes = _modes_nmodes(self.results.shape, modes)
 
         damping_modes = []
         omega_modes = []
         for mode in modes:
-            if mode < 10:
-                gmode = '   G,MODE--%i' % mode
-                wmode = ' WHZ,MODE--%i' % mode
-            elif mode < 100:
-                gmode = '   G,MODE-%2i' % mode
-                wmode = ' WHZ,MODE-%2i' % mode
-            else:
-                gmode = '   G,MODE%3i' % mode
-                wmode = ' WHZ,MODE%3i' % mode
+            gmode = f'   G,MODE{mode:->3}'  # 3 characters; pad with -
+            wmode = f' WHZ,MODE{mode:->3}'
             damping_modes.append(gmode)
             omega_modes.append(wmode)
 
         headers = ['EQUIVALENT V'] + damping_modes + ['EQUIVALENT V'] + omega_modes
-        with open(veas_filename, 'w') as veas_file:
+        veas_filename2 = _apply_subcase_to_filename(veas_filename, self.subcase)
+        with open(veas_filename2, 'w') as veas_file:
             veas_file.write(' DAMPING & FREQUENCY X-Y PLOT FILE OF PLTVG '
-                            'SETID=       1 FOR FLUTTER/ASE ID=       1 NMODE=  %3i\n' % nmodes)
+                            f'SETID=       1 FOR FLUTTER/ASE ID=       1 NMODE= {nmodes:4d}\n')
             veas_file.write(''.join(headers) + '\n')
             nspeeds = self.results.shape[1]
             for i in range(nspeeds):
                 damping = self.results[:, i, self.idamping]
                 eas = self.results[0, i, self.ieas]
-                omega = self.results[:, i, self.ifreq] # in Hz (what WHZ means)
+                omega = self.results[:, i, self.ifreq]  # in Hz (what WHZ means)
 
                 values = [eas] + damping.tolist() + [eas] + omega.tolist()
                 str_values = (' %11.4E' % value for value in values)
                 veas_file.write(''.join(str_values) + '\n')
 
-    def _imodes(self, modes):
-        """gets the imodes from the modes"""
-        if modes is None:
-            nmodes = self.results.shape[0]
-            imodes = range(nmodes)
-        else:
-            imodes = modes - 1
-        return imodes
-
-    def _modes_nmodes(self, modes: Optional[Iterable[int]]) -> Tuple[Iterable[int], int]:
-        """gets the modes and nmodes"""
-        if modes is None:
-            nmodes = self.results.shape[0]
-            modes = range(1, nmodes + 1)
-        else:
-            nmodes = max(modes)
-        return modes, nmodes
-
-    def export_to_f06(self, f06_filename: str,
-                      modes: Optional[List[int]]=None,
-                      page_stamp: Optional[str]=None,
-                      page_num: int=1) -> int:
-        if page_stamp is None:
-            page_stamp = 'PAGE %i'
-        # nmodes, vel, res
-        imodes = self._imodes(modes)
-
-        with open(f06_filename, 'w') as f06_file:
-            for imode in imodes:
-                #'      MACH 0.0                                                                                                                      '
-                f06_file.write('0                                                                                                            SUBCASE %i\n' % self.subcase)
-                f06_file.write('0                                                       FLUTTER  SUMMARY\n')
-                f06_file.write('                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC     XZ-SYMMETRY = ASYMMETRIC\n')
-                f06_file.write('       POINT = %4i     METHOD = %s\n' % (imode + 1, self.method))
-                f06_file.write('\n')
-                f06_file.write('\n')
-
-                f06_file.write('    KFREQ          1./KFREQ       DENSITY     MACH NO.      VELOCITY       DAMPING     FREQUENCY      COMPLEX   EIGENVALUE\n')
-                for res in self.results[imode, :, :9]:
-                    #print(res)
-                    kfreq, kfreqi, rho, mach, vel, damp, freq, eigr, eigi = res
-                    #                 kfreq      ikfreq  rho      mach     vel    damp   freq    eigr       eigi
-                    f06_file.write(' %8.4f      %12.5E  %12.5E  %12.5E  %12.5E  %12.5E  %12.5E  %12.5E  %12.5E\n' % (
-                        kfreq, kfreqi, rho, mach, vel, damp, freq, eigr, eigi,
-                    ))
-                #'1                                                                          DECEMBER  14, 2018  MSC.NASTRAN  6/17/05   PAGE    12\n'
-                f06_file.write(page_stamp % page_num)
-                page_num += 1
+    # self.page_num = result.write_f06(
+    #     f06, header, page_stamp, page_num=self.page_num,
+    #     is_mag_phase=is_mag_phase, is_sort1=is_sort1)
+    def write_f06(self, f06_file: TextIO,
+                  header: list[str],
+                  page_stamp: Optional[str]=None,
+                  page_num: int=1, **kwargs) -> int:
+        page_num = self.export_to_f06_file(
+            f06_file,  # modes=modes,
+            page_stamp=page_stamp, page_num=page_num)
+        # return self.export_to_f06(f06_filename,
+        #                           page_stamp=page_stamp, page_num=page_num)
         return page_num
 
-    def export_to_zona(self, zona_filename: str,
-                       modes: Optional[List[int]]=None,
-                       xlim: Optional[List[float]]=None,
-                       plot_type: str='tas',
-                       damping_ratios: Optional[List[float]]=None) -> str:
+    def export_to_f06(self, f06_filename: PathLike,
+                      modes: Optional[list[int]]=None,
+                      page_stamp: Optional[str]=None,
+                      page_num: int=1) -> int:
+        f06_filename2 = _apply_subcase_to_filename(f06_filename, self.subcase)
+        with open(f06_filename2, 'w') as f06_file:
+            page_num = self.export_to_f06_file(
+                f06_file, modes=modes,
+                page_stamp=page_stamp, page_num=page_num)
+        return page_num
+
+    def export_to_f06_file(self, f06_file: TextIO,
+                           modes: Optional[list[int]]=None,
+                           page_stamp: Optional[str]=None,
+                           page_num: int=1) -> int:
+        imodes = _imodes(self.results.shape, modes)
+        if page_stamp is None:
+            page_stamp = 'PAGE %i'
+        for imode in imodes:
+            # '      MACH 0.0                                                                                                                      '
+            f06_file.write(f'0                                                                                                            SUBCASE {self.subcase:d}\n')
+            f06_file.write('0                                                       FLUTTER  SUMMARY\n')
+            f06_file.write('                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC     XZ-SYMMETRY = ASYMMETRIC\n')
+            f06_file.write(f'       POINT = {imode+1:4d}     METHOD = {self.method}\n')
+            f06_file.write('\n')
+            f06_file.write('\n')
+
+            f06_file.write('    KFREQ          1./KFREQ       DENSITY     MACH NO.      VELOCITY       DAMPING     FREQUENCY      COMPLEX   EIGENVALUE\n')
+            for res in self.results[imode, :, :9]:
+                kfreq, kfreqi, rho, mach, vel, damp, freq, eigr, eigi = res
+                #                 kfreq      ikfreq  rho      mach     vel    damp   freq    eigr       eigi
+                f06_file.write(' %8.4f      %12.5E  %12.5E  %12.5E  %12.5E  %12.5E  %12.5E  %12.5E  %12.5E\n' % (
+                    kfreq, kfreqi, rho, mach, vel, damp, freq, eigr, eigi,
+                ))
+            # '1                                                                          DECEMBER  14, 2018  MSC.NASTRAN  6/17/05   PAGE    12\n'
+            f06_file.write(page_stamp % page_num)
+            page_num += 1
+        return page_num
+
+    def export_to_zaero(self, zaero_filename: PathLike,
+                        modes: Optional[list[int]]=None,
+                        xlim: Optional[list[float]]=None,
+                        plot_type: str='tas',
+                        damping_ratios: Optional[list[float]]=None) -> str:
         """
-        Writes a custom ZONA flutter file
+        Writes a custom ZAERO flutter file
 
         Parameters
         ----------
-        zona_filename : str
+        zaero_filename : str
             the filename to write
-        modes : List[int] / int ndarray; (default=None -> all)
+        modes : list[int] / int ndarray; (default=None -> all)
             the modes; typically 1 to N
 
         TODO: not done
@@ -820,8 +2608,8 @@ class FlutterResponse:
             xlim = [None, None]
 
         modes, imodes = _get_modes_imodes(self.modes, modes)
-        #unused_legend_items = ['Mode %i' % mode for mode in modes]
-        ix, unused_xlabel = self._plot_type_to_ix_xlabel(plot_type)
+        # unused_legend_items = ['Mode %i' % mode for mode in modes]
+        ix, unused_xlabel, xunit = self._plot_type_to_ix_xlabel(plot_type)
 
         # these are the required damping levels to plot
         msg = ''
@@ -875,54 +2663,80 @@ class FlutterResponse:
                 msg += 'mode, V, damp, freq: (damping ratio=%s)\n%s\n' % (damping_ratio, msgi)
 
         ## TODO: doesn't always have data...
-        with open(zona_filename, 'w') as zona_file:
-            zona_file.write(msg)
+        zaero_filename2 = _apply_subcase_to_filename(zaero_filename, self.subcase)
+        with open(zaero_filename2, 'w') as zaero_file:
+            zaero_file.write(msg)
         return msg
 
-    def _plot_type_to_ix_xlabel(self, plot_type):
+    def _plot_type_to_ix_xlabel(self, plot_type: str) -> tuple[int, str, str]:
         """helper method for ``plot_vg_vf``"""
         plot_type = plot_type.lower()
+        # print(f'plot_type={plot_type!r} out_units={self.out_units!r}')
+        assert isinstance(self.out_units, dict), f'out_units={self.out_units!r}'
         if plot_type == 'tas':
             ix = self.ivelocity
             velocity_units = self.out_units['velocity']
-            xlabel = 'Velocity [%s]' % velocity_units
+            xlabel = f'Velocity [{velocity_units}]'
+            xunit = velocity_units
         elif plot_type == 'eas':
             ix = self.ieas
             velocity_units = self.out_units['eas']
-            xlabel = 'Equivalent Airspeed [%s]' % velocity_units
+            xlabel = f'Equivalent Airspeed [{velocity_units}]'
+            xunit = velocity_units
         elif plot_type == 'alt':
             ix = self.ialt
             alt_units = self.out_units['altitude']
-            xlabel = 'Altitude [%s]' % alt_units
+            xlabel = f'Altitude [{alt_units}]'
+            xunit = alt_units
         elif plot_type == 'kfreq':
             ix = self.ikfreq
-            xlabel = 'Reduced Frequency [rad]'
+            xlabel = r'Reduced Frequency [rad]; $\omega c / (2V) $'
+            xunit = 'rad'
         elif plot_type == 'rho':
             ix = self.idensity
             density_units = self.out_units['density']
-            xlabel = 'Density [%s]' % density_units
+            xlabel = f'Density [{density_units}]'
+            xunit = density_units
+        elif plot_type == 'q':
+            ix = self.iq
+            pressure_unit = self.out_units['dynamic_pressure']
+            xlabel = f'Dynamic Pressure [{pressure_unit}]'
+            xunit = pressure_unit
+        elif plot_type == 'mach':
+            ix = self.imach
+            xlabel = 'Mach'
+            xunit = ''
         elif plot_type == 'freq':
             ix = self.ifreq
             xlabel = 'Frequency [Hz]'
-        elif plot_type in ['1/kfreq', 'ikfreq']:
+            xunit = 'Hz'
+        elif plot_type in ['1/kfreq', 'ikfreq', 'inv_kfreq', 'kfreq_inv']:
             ix = self.ikfreq_inv
-            xlabel = '1/KFreq [1/rad]'
+            xlabel = r'1/KFreq [1/rad]; $2V / (\omega c) $'
+            xunit = '1/rad'
         elif plot_type == 'eigr':
             ix = self.ieigr
-            xlabel = 'Eigenvalue (Real)'
-        elif plot_type == 'eigr':
+            xlabel = r'Eigenvalue (Real); $\omega \gamma$'
+            xunit = 'rad'
+        elif plot_type == 'eigi':
             ix = self.ieigi
-            xlabel = 'Eigenvalue (Imaginary)'
+            xlabel = r'Eigenvalue (Imaginary); $\omega$'
+            xunit = 'rad'
         elif plot_type in ['damp', 'damping']:
             ix = self.idamping
-            xlabel = 'Damping'
-        else:
-            raise NotImplementedError("plot_type=%r not in ['tas', 'eas', 'alt', 'kfreq', "
-                                      "'1/kfreq', 'freq', 'damp', 'eigr', 'eigi']")
-        return ix, xlabel
+            xlabel = r'Structural Damping; $g = 2 \gamma $'
+            xunit = 'g'
+        elif plot_type == 'index':
+            ix = -1
+            xlabel = r'Index'
+            xunit = ''
+        else:  # pramga: no cover
+            raise NotImplementedError(f"plot_type={plot_type!r} not in ['tas', 'eas', 'alt', 'kfreq', "
+                                      "'1/kfreq', 'freq', 'damp', 'eigr', 'eigi', 'q', 'mach', 'alt', 'index']")
+        return ix, xlabel, xunit
 
-    def object_attributes(self, mode='public', keys_to_skip=None,
-                          filter_properties=False):
+    def object_attributes(self, mode: str='public', keys_to_skip=None,
+                          filter_properties: bool=False):
         """
         List the names of attributes of a class as strings. Returns public
         attributes as default.
@@ -937,19 +2751,19 @@ class FlutterResponse:
             * 'private' - names that begin with single underscore
             * 'both' - private and public
             * 'all' - all attributes that are defined for the object
-        keys_to_skip : List[str]; default=None -> []
+        keys_to_skip : list[str]; default=None -> []
             names to not consider to avoid deprecation warnings
 
         Returns
         -------
-        attribute_names : List[str]
+        attribute_names : list[str]
             sorted list of the names of attributes of a given type or None
             if the mode is wrong
         """
         return object_attributes(self, mode=mode, keys_to_skip=keys_to_skip,
                                  filter_properties=filter_properties)
 
-    def object_methods(self, mode='public', keys_to_skip=None):
+    def object_methods(self, mode: str='public', keys_to_skip=None):
         """
         List the names of methods of a class as strings. Returns public methods
         as default.
@@ -964,56 +2778,417 @@ class FlutterResponse:
             * "private" - names that begin with single underscore
             * "both" - private and public
             * "all" - all methods that are defined for the object
-        keys_to_skip : List[str]; default=None -> []
+        keys_to_skip : list[str]; default=None -> []
             names to not consider to avoid deprecation warnings
 
         Returns
         -------
-        method : List[str]
+        method : list[str]
             sorted list of the names of methods of a given type
             or None if the mode is wrong
         """
         return object_methods(self, mode=mode, keys_to_skip=keys_to_skip)
 
+    # def hump_modes_from_VL_VF_dict(self,
+    #                                vl_vf_crossing_dict: dict[int, list[Crossing]],
+    #                                vl_hump: float,
+    #                                vf_hump: float,
+    #                                Vbaseline_hump: float, log: SimpleLogger):
+    #     """
+    #     Parameters
+    #     ----------
+    #     vl_vf_crossing_dict: dict[int, list[Crossing]]
+    #         mode_num: int
+    #             mode number
+    #         Crossing: (damping, freq, vel)
+    #             3 floats
+    #     vl_hump : float
+    #         report all points below this
+    #     vf_hump : float
+    #         report all points below this
+    #     V_baseline : float
+    #         the value for VL/VF if no crossing occurs
+    #     """
+    #     # vbaseline_hump = vl_hump
+    #     vl_array, vf_array = _get_vl_vf_array(
+    #         vl_vf_crossing_dict,
+    #         vl_hump, vf_hump,
+    #         Vbaseline_hump, log)
+    #     vl_array2 = vl_array[1:, :]
+    #     vf_array2 = vf_array[1:, :]
+    #
+    #     # [mode, velocity, freq]
+    #     iv0 = np.where(vl_array2[:, 1] < vl_hump)[0]
+    #     iv3 = np.where(vf_array2[:, 1] < vf_hump)[0]
+    #
+    #     vl_array3 = vl_array2[iv0, :]
+    #     vf_array3 = vf_array2[iv3, :]
+    #     return vl_array3, vf_array3
 
-def _get_modes_imodes(all_modes, modes):
+    @staticmethod
+    def xcrossing_dict_to_VL_VF_VD(vl_vf_crossing_dict: VCrossingDict,
+                                   vd_crossing_dict: VCrossingDict,
+                                   log: SimpleLogger,
+                                   freq_target: float,
+                                   vl_target: float,
+                                   vf_target: float,
+                                   v_baseline: float=1000.,
+                                   ) -> tuple[npt.floating, npt.floating,
+                                              npt.floating, npt.floating,
+                                              npt.floating, npt.floating,
+                                              npt.floating, npt.floating, npt.floating]:
+        """
+        Parameters
+        ----------
+        vl_vf_crossing_dict: VCrossingDict
+            mode_num: int
+                mode number
+            Crossing: (damping, freq, vel)
+                3 floats
+        vd_crossing_dict: VCrossingDict
+            mode_num: int
+                mode number
+            Crossing: (damping, freq, vel)
+                3 floats
+        log : float
+            the logger
+        freq_target : float
+            desired freq; throws warning if not satisfied
+        vl_target : float
+            desired VL; throws warning if not satisfied
+        vf_target : float
+            desired VF; throws warning if not satisfied
+        v_baseline : float; default=1000.
+            the value for VL/VF if no crossing occurs
+
+        Returns
+        -------
+        vl : float
+            limit speed (typically 0% crossing)
+        freql : float
+            limit frequency
+        vf : float
+            flutter speed (typically 3% crossing)
+        freqf : float
+            flutter frequency
+        vd : float
+            divergence speed
+        freqd : float
+            divergence frequency
+        mode0 : int
+            critical mode number for VL
+        mode3 : int
+            critical mode number for VF
+        moded : int
+            critical mode number for VD
+        """
+        # print('mode\tdamping\tfreq\tvel')
+        vd_array = _get_vd_array(
+            vd_crossing_dict, v_baseline, freq_target, log)
+        vl_array, vf_array = _get_vl_vf_array(
+            vl_vf_crossing_dict,
+            vl_target, vf_target,
+            v_baseline, log)
+
+        # find minimum velocity in [mode, velocity, frequency] table
+        # skip sentinel row (index 0) which has mode=-1
+        vl_real = vl_array[1:]
+        vf_real = vf_array[1:]
+        vd_real = vd_array[1:]
+
+        # if the array is not empty, pull the lowest value
+        vl = v_baseline
+        vf = v_baseline
+        vd = v_baseline
+        freql = np.nan
+        freqf = np.nan
+        freqd = np.nan
+        mode0 = -1
+        mode3 = -1
+        moded = -1
+        if len(vl_real):
+            ivl = np.argmin(vl_real[:, 1])
+            mode0, vl, freql = vl_real[ivl, :]  # limit
+        if len(vf_real):
+            ivf = np.argmin(vf_real[:, 1])
+            mode3, vf, freqf = vf_real[ivf, :]  # flutter
+        if len(vd_real):
+            ivd = np.argmin(vd_real[:, 1])
+            moded, vd, freqd = vd_real[ivd, :]  # divergence
+
+        return vl, freql, vf, freqf, vd, freqd, mode0, mode3, moded
+
+
+def _imodes(results_shape: tuple[int, int],
+            modes: Optional[np.ndarray, slice[int] |
+                            tuple[int] | list[int]]) -> np.ndarray:
+    """gets the imodes from the modes"""
+    if modes is None:
+        nmodes = results_shape[0]
+        imodes = range(nmodes)
+    elif isinstance(modes, slice):
+        nmodes = results_shape[0]
+        all_modes = np.arange(0, nmodes, dtype='int32')
+        imodes = all_modes[modes]
+    elif isinstance(modes, (list, tuple)):
+        modes = np.array(modes, dtype='int32')
+        imodes = modes - 1
+    else:
+        imodes = modes - 1
+    return imodes
+
+
+def _modes_nmodes(results_shape: tuple[int, int],
+                  modes: Optional[Iterable[int]]) -> tuple[Iterable[int], int]:
+    """gets the modes and nmodes"""
+    if modes is None:
+        nmodes = results_shape[0]
+        modes = range(1, nmodes + 1)
+    else:
+        nmodes = max(modes)
+    return modes, nmodes
+
+
+def _get_modes_imodes(all_modes: np.ndaray,
+                      modes: Optional[slice | np.ndarray]):
     """gets the index of the modes to plot"""
     if modes is None:
         modes = all_modes
     elif isinstance(modes, slice):
         start = modes.start
-        if modes.stop is None:
-            stop = len(all_modes) + 1
+        # if modes.stop is None:
+        #     stop = len(all_modes) + 1
         stop = modes.stop
         step = modes.step
         if step is None:
             step = 1
         modes = np.unique(range(start, stop, step))
-    elif len(modes) == 0:
+    elif len(modes) == 0:  # pragma: no cover
         raise RuntimeError('modes = %s' % modes)
     else:
+        assert 0 not in modes, modes
         modes = np.unique(modes)
     assert 0 not in modes, modes
 
     if modes.max() > all_modes.max():
         imodes = np.where(modes <= all_modes.max())
         modes = modes[imodes]
-    if len(modes) == 0:
+    if len(modes) == 0:  # pragma: no cover
         raise RuntimeError('No modes to plot...')
     imodes = np.searchsorted(all_modes, modes)
     return modes, imodes
 
-def _asarray(results):
+
+def get_zero_crossings(x: np.ndarray,
+                       freq: np.ndarray,
+                       y: np.ndarray,
+                       x_round: int=-1,
+                       freq_round: int=-1) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    x, freq, iy = _get_zero_crossings(x, freq, y)
+    if x_round:
+        x = round(x, x_round)
+    if freq_round:
+        freq = round(freq, freq_round)
+    p1 = np.array([iy, x, 0., freq])
+    p2 = np.array([-1, np.nan, np.nan, np.nan], dtype='float64')
+    pmax = np.array([-1, np.nan, np.nan, np.nan], dtype='float64')
+    return p1, p2, pmax
+
+
+def _get_zero_crossings(x: np.ndarray,
+                        freq: np.ndarray,
+                        y: np.ndarray,
+                        index0: int=-1) -> tuple[int, npt.floating, npt.floating]:
+    """Finds the zero crossings where zero crossings must be increasing
+    (or decreaseing if index0 >= 0)
+
+    Parameters
+    ----------
+    x : (n,) float np.ndarray
+        equivalent airspeed
+    freq : (n,) float np.ndarray
+        frequency
+    y : (n,) float np.ndarray
+        damping
+    index0 : int; default=-1
+        sets the flag on the sign
+        -1: first pass (for upslope)
+        N:  second pass (for downslope)
+
+    https://stackoverflow.com/questions/3843017/efficiently-detect-sign-changes-in-python
+    """
+    diff = np.diff(np.sign(y) >= 0)
+    debug = index0 >= 0
+    if index0 == -1:
+        # get the crossing where the sign becomes positive
+        zero_crossings = np.where(np.diff(np.sign(y) >= 0))[0]
+    else:
+        # get the crossing where the sign becomes negative after an initial positive crossing
+        indices = np.arange(len(y) - 1, dtype='int32')
+        zero_crossings = np.where(diff & (indices > index0))[0]
+        # if debug:
+        #     where_diff = np.where(np.diff(np.sign(y) >= 0))
+        #     print('debugging')
+        #     print(f'  diff = {diff}')
+        #     print(f'  where(diff >= 0) = {where_diff}')
+        #     print(f'  index0 = {index0}')
+        #     print(f'  indices = {indices}')
+        #     print(f'  zero_crossings = {zero_crossings}')
+
+    # assert len(zero_crossings) == 1, zero_crossings
+    if len(zero_crossings) == 0:
+        return -1, np.nan, np.nan
+
+    iy = zero_crossings[0]
+    yii = y[iy]
+    if yii < 0 or 1:
+        x0 = x[iy]
+        x1 = x[iy+1]
+        y0 = y[iy]
+        y1 = y[iy + 1]
+        # y2 = (y1-y0) / (x1-x0) * (x-x0) + y0
+        x2 = (x1-x0) / (y1-y0) * (0.-y0) + x0
+
+        f0 = freq[iy]
+        f1 = freq[iy+1]
+        f2 = (f1-f0) / (y1-y0) * (0.-y0) + f0
+    else:
+        # print(f' ??? yii={yii} iy={iy}')
+        return -1, np.nan, np.nan
+    # if debug:
+    #     print(f'iy = {iy}')
+    #     print(f'  yii = {yii}')
+    #     print(f'  x2  = {x2}')
+    #     print(f'  f2  = {f2}')
+    return iy, x2, f2
+
+
+def get_zero_crossings_hump(x: np.ndarray,
+                            freq: np.ndarray,
+                            y: np.ndarray,
+                            ytarget: float,
+                            ytarget_tol: float,
+                            x_round: int=-1,
+                            freq_round: int=-1) -> tuple[np.ndarray,
+                                                         np.ndarray,
+                                                         np.ndarray]:
+    """Finds the zero crossings where zero crossings must be increasing
+
+    Parameters
+    ----------
+    x : (n,) float np.ndarray
+        equivalent airspeed
+    freq : (n,) float np.ndarray
+        frequency
+    y : (n,) float np.ndarray
+        damping that's been shifted, so we can compare to 0%
+    ytarget: float
+        0% or 3% typically
+    ytarget_tol : float
+        1% or 3% typically, so ytol is 1% or 0%
+    x_round : int; default=-1
+        eas rounding
+    freq_round : int; default=1
+        frequency rounding
+
+    https://stackoverflow.com/questions/3843017/efficiently-detect-sign-changes-in-python
+    TODO: handle xmin/xmax
+    """
+    # first crossing at y=0
+    i1, x1, f1 = _get_zero_crossings(x, freq, y, index0=-1)
+
+    if i1 == -1:
+        # no up-crossing
+        # vrange, frange, vcenter, fcenter
+        # (p1, p2, pmax)
+        # if x_round:
+        #     x1 = round(x1, x_round)
+        # if freq_round:
+        #     f1 = round(f1, freq_round)
+        p1 = np.array([-1, x1, ytarget, f1])
+        p2 = np.array([-1, np.nan, ytarget, np.nan])
+        pmax = np.array([-1, np.nan, ytarget, np.nan])
+        return p1, p2, pmax
+
+    i2, x2, f2 = _get_zero_crossings(x, freq, y, index0=i1)
+    # print(f'i1={i1} i2={i2} x2={x2} f2={f2}')
+    if i2 == -1:
+        i2 = len(y) - 1
+        # no down-crossing
+        # -> assume f2 is at max velocity
+        x2 = x[i2]
+        f2 = freq[i2]
+    # iy1, eas1, damp1, freq1
+    p1 = np.array([i1, x1, ytarget, f1])
+    p2 = np.array([i2, x2, ytarget, f2])
+
+    # print(f'i1={i1}; i2={i2}; len(x)={len(x)} xrange=[{x.min()}, {x.max()}] x2={x2}')
+    ys = y[i1:i2]
+    ymax = ys.max()
+    ytol = ytarget_tol - ytarget
+    if ymax < ytol:
+        # hump mode is les than the tolerance
+        yend = y[i2:]
+        if yend.max() >= ytol:
+            # the end exceeds the tolrance
+            p1, p2, pmax = get_zero_crossings_hump(
+                x[i2:], freq[i2:], y[i2:],
+                ytarget, ytarget_tol,
+                x_round=x_round,
+                freq_round=freq_round)
+            p1[0] += i2
+            p2[0] += i2
+            pmax[0] += i2
+        else:
+            # not a crossing
+            p1 = np.array([-1, np.nan, ytarget, np.nan])
+            p2 = np.array([-1, np.nan, ytarget, np.nan])
+            pmax = np.array([-1, np.nan, ytarget, np.nan])
+        return p1, p2, pmax
+
+    xs = x[i1:i2]
+    freqs = freq[i1:i2]
+    imaxs = np.where(ys == ymax)[0]
+    # print(f'imaxs = {imaxs}')
+    imax0 = imaxs[0]
+    imax1 = imaxs[-1]
+    imax = np.squeeze(imax0 + imax1) // 2
+    xmax = xs[imax]
+    fmax = freqs[imax]
+
+    # print(f'xmax = {xmax}')
+    # print(f'fmax = {fmax}')
+    if x_round:
+        # iy, eas, damp, freq
+        p1[1] = round(p1[1], x_round)
+        p2[1] = round(p2[1], x_round)
+        xmax = round(xmax, x_round)
+    if freq_round:
+        # iy, eas, damp, freq
+        p1[3] = round(p1[3], freq_round)
+        p2[3] = round(p2[3], freq_round)
+        fmax = round(fmax, freq_round)
+    pmax = np.array([i1 + imax, xmax, ymax, fmax])
+    return p1, p2, pmax
+
+
+def _asarray(results: list[list[str]],
+             allow_fix_kfreq: bool=True) -> np.ndarray:
     """casts the results array"""
+    allow_fix_kfreq = True
+    if not allow_fix_kfreq:
+        results = np.asarray(results, dtype='float64')
+        return results
+
     try:
         results = np.asarray(results, dtype='float64')
-    except:
+    except Exception:
         results2 = []
         fix_kfreq = False
         for mode_result in results:
             mode_result2 = []
             for row in mode_result:
-                #print(row)
+                # print(row)
                 row2 = []
                 for i, row_entry in enumerate(row):
                     if i == 0 and '****' in row_entry:
@@ -1026,24 +3201,1294 @@ def _asarray(results):
                     else:
                         try:
                             row_entry2 = float(row_entry)
-                        except:
+                        except Exception:  # pragma: no cover
                             raise ValueError(f'i={i} row_entry={row_entry!r}')
                     row2.append(row_entry2)
                 mode_result2.append(row2)
             results2.append(mode_result2)
-        results = np.array(results2, dtype='float64')
+        try:
+            results = np.array(results2, dtype='float64')
+        except ValueError:  # pragma: no cover
+            for imode, resi in enumerate(results2):
+                try:
+                    resi_array = np.array(resi, dtype='float64')
+                    # print(resi_array.shape)
+                except ValueError:
+                    # print(resi)
+                    raise RuntimeError(f'check your file for an incomplete download on mode={imode+1:d}')
+            raise
 
         if fix_kfreq:
-            #inan = np.isnan(results[:, :, :])
-            #kfreq_inv = results[:, :, 1]
-            #print('kfreq.shape', kfreq_inv.shape)
-            #print('inan.shape', inan.shape)
-            #results[inan] = 1 / kfreq_inv[inan]
+            # inan = np.isnan(results[:, :, :])
+            # kfreq_inv = results[:, :, 1]
+            # print('kfreq.shape', kfreq_inv.shape)
+            # print('inan.shape', inan.shape)
+            # results[inan] = 1 / kfreq_inv[inan]
             nmodes = results.shape[0]
             for imode in range(nmodes):
                 inan = np.isnan(results[imode, :, 0])
                 if len(inan) == 0:
                     continue
-                #print(inan)
+                # print(inan)
                 results[imode, inan, 0] = 1. / results[imode, inan, 1]
     return results
+
+
+def _add_damping_limit(plot_type: str,
+                       damp_axes: Axes,
+                       required_damping: Optional[float],
+                       damping_limit: Optional[float],
+                       linewidth: int=2) -> list[Line2D]:
+    # damp_label = f'Damping={damping_limit*100:.1f}'
+    # plt.axhline(y=1.0, color="black", linestyle="--")
+    legend_elements = []
+    if required_damping is not None and isinstance(required_damping, integer_float_types) and required_damping > -0.99:
+        line1 = damp_axes.axhline(
+            y=required_damping, color='k', linestyle='--', linewidth=linewidth,
+            label=f'Required {required_damping*100:.0f}% Damping')
+        legend_elements.append(line1)
+    if damping_limit is not None and isinstance(damping_limit, integer_float_types) and damping_limit > -0.99:
+        line2 = damp_axes.axhline(
+            y=damping_limit, color='k', linestyle='-', linewidth=linewidth,
+            label=f'{damping_limit*100:.0f}% Damping')
+        legend_elements.append(line2)
+    return legend_elements
+
+
+def get_flutter_units(units: Optional[str | dict[str, str]]) -> dict[str, str]:
+    """gets the units"""
+    if units is None:
+        units = 'english_in'
+        # units = {
+        #     'velocity' : 'in/s', 'density' : 'slug/ft^3',
+        #     'altitude' : 'ft', 'dynamic_pressure' : 'psf', 'eas':'ft/s'}
+
+    if isinstance(units, str):
+        units = units.lower()
+        # https://www.dynasupport.com/howtos/general/consistent-units
+        # mm, Mg, s / si_ton
+        # mm, Mg, s
+        # units = {
+        #     'velocity' : 'mm/s', 'density' : 'Mg/mm^3',
+        #     'altitude' : 'm', 'dynamic_pressure' : 'MPa', 'eas':'m/s'}
+
+        # units should be consistent
+        # what's going on with altitude having inconsistent units?
+        if units == 'si':
+            units_dict = {
+                'velocity': 'm/s', 'density': 'kg/m^3',
+                'altitude': 'm', 'dynamic_pressure': 'Pa', 'eas': 'm/s'}
+        elif units == 'si_mm':
+            units_dict = {
+                'velocity': 'mm/s', 'density': 'Mg/mm^3',
+                'altitude': 'm', 'dynamic_pressure': 'MPa', 'eas': 'mm/s'}
+        # elif units == 'si_cmgs':
+        #     units = {'velocity': 'cm/s', 'density': 'g/cm^3',
+        #              'altitude': 'm', 'dynamic_pressure': 'Pa', 'eas': 'cm/s'}
+        elif units == 'english_in':
+            units_dict = {
+                'velocity': 'in/s', 'density': 'slinch/in^3',
+                'altitude': 'ft', 'dynamic_pressure': 'psi', 'eas': 'in/s'}
+        elif units == 'english_ft':
+            units_dict = {
+                'velocity': 'ft/s', 'density': 'slug/ft^3',
+                'altitude': 'ft', 'dynamic_pressure': 'psf', 'eas': 'ft/s'}
+        elif units == 'english_kt':
+            units_dict = {
+                'velocity': 'knots', 'density': 'slug/ft^3',
+                'altitude': 'ft', 'dynamic_pressure': 'psf', 'eas': 'knots'}
+        else:  # pragma: no cover
+            raise NotImplementedError(f'units={units!r} must be in [si, si_mm, '
+                                      'english_in, english_ft, english_kt]')
+    else:  # pragma: no cover
+        assert isinstance(units, dict), f'units={units!r}'
+        required_keys = ['altitude', 'velocity', 'eas', 'density', 'dynamic_pressure']
+        for key in required_keys:
+            assert key in units, 'key=%r not in units=%s' % (key, units)
+        units_dict = units
+    return units_dict
+
+
+def _apply_subcase_to_filename(filename: PathLike, subcase: int) -> str:
+    """helper for filename management"""
+    if isinstance(filename, PurePath):
+        filename = str(filename)
+
+    filename_out = filename
+    if '%' in filename:
+        filename_out = filename % subcase
+    return filename_out
+
+
+def _update_ncol(nmodes: int, ncol: int=0,
+                 nmodes_per_column: int=40) -> int:
+    """Updates ncol to be a valid number"""
+    if ncol > 0:
+        return ncol
+
+    nmodes = max(1, nmodes)
+    ncol = nmodes // nmodes_per_column
+    if nmodes % nmodes_per_column > 0:
+        ncol += 1
+    ncol = min(ncol, nmodes)
+    return ncol
+
+def _symbols_colors_from_nlines(colors: list[str], symbols: list[str],
+                                nlines: int) -> tuple[list[str], list[str]]:
+    """
+    Repeats colors/symbols if there are too many lines
+
+    colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6',
+              'C7', 'C8', 'C9', 'C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C0', 'C1', 'C2', 'C3',
+              'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C0',
+              'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7',
+              'C8', 'C9']
+    symbols = ['o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', '*', '*', '*', '*', '*', '*', '*', '*', '*', '*',
+               'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v',
+               '>', '>', '>', '>', '>', '>', '>', '>', '>', '>', '<', '<', '<', '<', '<', '<', '<', '<', '<', '<',
+               '^', '^', '^', '^', '^', '^', '^', '^', '^', '^']
+    """
+    ncolors = len(colors)
+    nsymbols = len(symbols)
+    if ncolors < nlines:
+        kcolor = int(np.ceil(nlines / ncolors))
+        colors = colors * kcolor
+
+    if nsymbols < nlines:
+        ksymbol = int(np.ceil(nlines / nsymbols))
+        symbols = symbols * ksymbol
+    return symbols, colors
+
+
+def _get_mode_freq_label(mode: int, freq: float,
+                         freq_ndigits: int=1) -> str:
+    if abs(freq) > 1.0:
+        # don't write big numbers in scientific
+        freq_ndigitsi = max(1, freq_ndigits)
+        freq_num = f'{freq:.{freq_ndigitsi}f}'
+    else:
+        # write tiny numbers
+        freq_ndigitsi = max(3, freq_ndigits)
+        freq_num = f'{freq:.{freq_ndigitsi}g}'
+        # strip silly scientific notation
+        freq_num = freq_num.replace('-0', '-').replace('-0', '-').replace('+0', '+')
+    label = f'Mode {mode:d}; {freq_num} Hz'
+    return label
+
+
+def _increment_jcolor(mode: int,
+                      jcolor: int, color: str,
+                      linestyle: str, symbol: str,
+                      eas: np.ndarray, freq: np.ndarray, damping: np.ndarray,
+                      freq_tol: float=-1.0,
+                      freq_tol_remove: float=-1.0,
+                      show_mode_number: bool=False,
+                      # jcolor, color, linestyle2, symbol2, text, is_removedi
+                      ) -> tuple[int, Color, str, str, str, bool]:
+    """
+    Filters a line if it doesn't change by more than freq_tol.
+    Changes the line color and removes the symbol.
+
+    Parameters
+    ----------
+    linestyle : str
+        '-', '--', 'None'
+    freq : np.ndarray
+        the frequency data
+    freq_tol :  float; default=-1.0
+        set lines to dashed if they fall under the tolerance
+        -1.0: no filtering (default)
+        >0.0: filter is active
+    freq_tol_remove : float; default=-1.0
+        hide lines to if they fall under the tolerance
+        a line must be dashed for it to be hidden (i.e., freq_tol_remove <= freq_tol)
+        -1.0: no filtering (default)
+        >0.0: filter is active
+
+    Returns
+    -------
+    linestyle2: str
+        the updated style
+
+    """
+    # print(f'freq = {freq}')
+    # print(f'freq_tol = {freq_tol!r}')
+    assert isinstance(freq, np.ndarray), freq
+    assert isinstance(freq_tol, float_types), freq_tol
+    assert isinstance(freq_tol_remove, float_types), freq_tol_remove
+    is_filtered = False
+    dfreq = freq.max() - freq.min()
+    #print(f'mode={mode:d} eas_range=[{eas.min():.3f},{eas.max():.3f}] freq_range=[{freq.min():.3f},{freq.max():.3f}] damping.max()={damping.max()} freq_tol={freq_tol}')
+    if dfreq <= freq_tol and damping.max() <= 0.:
+        color = 'gray'
+        is_filtered = True
+        jcolor -= 1
+    linestyle2 = '--' if is_filtered else linestyle
+    symbol2 = '' if is_filtered else symbol
+
+    text = ''
+    if show_mode_number and symbol2:
+        symbol2 = ''
+        text = str(mode)
+
+    is_removed = False
+    if is_filtered and dfreq <= freq_tol_remove:
+        linestyle2 = ''
+        text = ''
+        is_removed = True
+        #print(f'removing due to dfreq={dfreq} freq_tol_remove={freq_tol_remove}')
+
+    jcolor += 1
+    return jcolor, color, linestyle2, symbol2, text, is_removed
+
+
+def set_xlim(axes: plt.Axes, xlim: Limit) -> None:
+    if xlim == [None, None] or xlim == (None, None):
+        xlim = None
+    if xlim is not None:
+        axes.set_xlim(xlim)
+
+
+def set_ylim(axes: plt.Axes, ylim: Limit) -> None:
+    if ylim == [None, None] or ylim == (None, None):
+        ylim = None
+    if ylim is not None:
+        axes.set_ylim(ylim)
+
+
+def _get_unit_factor(in_units: dict[str, str],
+                     out_units: dict[str, str],
+                     name: str) -> tuple[float, str]:
+    if not in_units or not out_units:
+        msg = f'name={name!r} in_units={in_units} out_units={out_units}'
+        raise RuntimeError(msg)
+    unit_f06 = in_units[name]
+    unit_out = out_units[name]
+
+    # print('name=%s unit_f06=%r unit_out=%r' % (name, unit_f06, unit_out))
+    if name in ['velocity', 'eas']:
+        factor = convert_velocity(1., unit_f06, unit_out)
+    elif name == 'altitude':
+        factor = convert_altitude(1., unit_f06, unit_out)
+    elif name == 'density':
+        factor = convert_density(1., unit_f06, unit_out)
+    elif name in ['pressure', 'dynamic_pressure']:
+        factor = convert_pressure(1., unit_f06, unit_out)
+    else:  # pragma: no cover
+        raise NotImplementedError(name)
+
+    if out_units is not None:
+        units = out_units[name]
+    else:
+        units = 'units'
+    return factor, units
+
+
+def get_legend_kwargs(font_size: int,
+                      legend_kwargs: Optional[dict[str, Any]],
+                      ) -> dict[str, Any]:
+    if legend_kwargs is None:
+        legend_kwargs = {}
+    assert isinstance(legend_kwargs, dict), legend_kwargs
+
+    legend_kwargs_check = ['loc', 'fancybox', 'framealpha']
+    for key in legend_kwargs:
+        assert key in legend_kwargs_check, key
+
+    # if 'prop' not in legend_kwargs:
+    #     legend_kwargs['prop'] = {'size': font_size}
+    # if 'fontsize' not in legend_kwargs:
+    #     legend_kwargs['fontsize'] = font_size
+
+    return legend_kwargs
+
+
+def _is_q_units_consistent(rho_units: str, vel_units: str,
+                           q_units: str) -> bool:
+    units = [
+        ('kg/m^3', 'm/s', 'Pa'),
+        ('Mg/mm^3', 'mm/s', 'MPa'),
+        ('slug/ft^3', 'ft/s', 'psf'),
+        ('slinch/in^3', 'in/s', 'psi'),
+    ]
+    is_consistent = (rho_units, vel_units, q_units) in units
+    return is_consistent
+
+
+def check_range(eas_min0: float, eas_max0: float,
+                freq: float, eas: float) -> tuple[float, float]:
+    """
+    Flutter is only valid if it's between eas_min0 and eas_max0.  In
+    other words, why does it matter if flutter is outside the flight
+    envelope?
+    """
+    if np.isnan(eas):
+        return eas, freq
+    if eas_min0 is not None and eas < eas_min0:
+        eas = np.nan
+        freq = np.nan
+        return eas, freq
+
+    if eas_max0 is not None and eas > eas_max0:
+        eas = np.nan
+        freq = np.nan
+    return eas, freq
+
+
+def _get_min_damping(damping_crossings: dict[float, float]) -> float:
+    """
+    Get min required damping for 0% and 3%, such that flutter exists.
+    The goal of this is to filter all points that are below 4% to
+    limit identifying an excessive number of flutter crossings.
+
+    damping_crossings = [
+        (0.00, 0.01),
+        (0.03, 0.04),
+    ]
+    damping = _get_min_damping(damping_crossings)
+    >>> 0.04
+    """
+    min_damping = min(damping_crossings.values())
+    for dampingi, requiredi in damping_crossings.items():
+        min_damping = min(min_damping, requiredi)
+    return min_damping
+
+
+def _plot_two_axes(damp_axes: plt.Axes, freq_axes: plt.Axes,
+                   vel: np.ndarray, damping: np.ndarray, freq: np.ndarray,
+                   color: str, symbol: str, linestyle: str,
+                   label: str, text: str, ioffset: int,
+                   markevery: Optional[int]=None,
+                   markersize=None) -> list[Line2D]:
+    legend_element = Line2D([0], [0], color=color,
+                            marker=symbol, label=label, linestyle=linestyle)
+    legend_elements = [legend_element]
+
+    # setup for plotting every Nth point
+    markevery2 = None if markevery in {0, None} else markevery + 1
+    vel2 = vel[::markevery2]
+    damping2 = damping[::markevery2]
+    freq2 = freq[::markevery2]
+
+    if markevery2 is None:
+        # plot all points and lines (default)
+        line = damp_axes.plot(
+            vel, damping, color=color, marker=symbol, markersize=markersize,
+            linestyle=linestyle, label=label)
+        freq_axes.plot(vel, freq, color=color, marker=symbol, markersize=markersize,
+                       linestyle=linestyle)
+    elif symbol or text or linestyle:
+        # draw lines with all points
+        line = damp_axes.plot(vel, damping, color=color, linestyle=linestyle, label=label)
+        freq_axes.plot(vel, freq, color=color, linestyle=linestyle)
+
+        if symbol:
+            # plot every other point (for reduced clutter)
+            damp_axes.scatter(vel2, damping2, color=color, marker=symbol, s=markersize)
+            freq_axes.scatter(vel2, freq2, color=color, marker=symbol, s=markersize)
+    if text:
+        # annotate the mode number
+        for xi, y1i, y2i in zip(vel2[ioffset:], damping2[ioffset:], freq2[ioffset:]):
+            damp_axes.text(xi, y1i, text, color=color, clip_on=True)
+            freq_axes.text(xi, y2i, text, color=color, clip_on=True)
+    return legend_elements
+
+
+def _show_save_clear_close(fig: plt.Figure,
+                           show: bool,
+                           png_filename: Optional[str],
+                           clear: bool,
+                           close: bool) -> None:
+    #print('_show_save_clear_close')
+    if show:
+        plt.show()
+    if png_filename:
+        plt.savefig(png_filename)
+    if clear:
+        fig.clear()
+    if close:
+        plt.close()
+
+
+def _reshape_eigenvectors(eigenvectors: np.array,
+                          eigr_eigi_vel: np.array,
+                          incorrect_shape: bool=False) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Parameters
+    ----------
+    incorrect_shape: bool
+        helper for testing
+    """
+    nmodes1, nmodes_nvel = eigenvectors.shape
+    nmodes = nmodes1 - 1 if incorrect_shape else nmodes1
+    nvel = nmodes_nvel // nmodes
+    if nvel == 0:  # pragma: no cover
+        print(f'nmodes1={nmodes1} nmodes={nmodes}; incorrect_shape={incorrect_shape}')
+        print(f'nmodes*nvel={nmodes_nvel} nmodes={nmodes} -> nvel={nvel}')
+        print(f'eigenvectors.shape = {eigenvectors.shape}')
+        # print(eigenvectors)
+        print(f'eigr_eigi_vel.shape = {eigr_eigi_vel.shape}:')
+        print(eigr_eigi_vel)
+        print(f'nmodes={nmodes}; nvel={nvel}')
+    assert nvel > 0, nvel
+
+    # i = 0
+    # eigenvectors2 = np.zeros((nmodes, nmodes, nvel), dtype=eigenvectors.dtype)
+    # for ivel in range(nvel):
+    #     for imode in range(nmodes):
+    #         eigenvectors2[:, imode, ivel] = eigenvectors[:, i]
+    #         i += 1
+
+    # was 1,2
+    try:
+        reshaped_eigenvectors = eigenvectors.reshape(nmodes1, nvel, nmodes)
+    except ValueError:
+        warnings.warn('cannot reshape eigenvectors; expected output shape of '
+                      f'(nmodes1={nmodes1}, nvel={nvel}, nmodes={nmodes}); got {eigenvectors.shape}')
+        raise
+    eigenvectors3 = reshaped_eigenvectors.swapaxes(0, 1).swapaxes(1, 2)
+    eigr_eigi_vel3 = eigr_eigi_vel.reshape((nvel, nmodes, 3))
+    # assert eigenvectors2.shape == eigenvectors3.shape, (eigenvectors2.shape, eigenvectors3.shape)
+    #assert np.allclose(eigenvectors2, eigenvectors3)
+    # print(data3[:, :, 0])
+    # print(data3[:, :, 1])
+    # print(data3[:, :, 2])
+    # print(data3[:, :, 3])
+    # for ivel in range(nvel):
+    #     print(f'ivel={ivel}')
+    #     print(eigenvectors2[:, :, ivel])
+    #     assert np.allclose(eigenvectors2[:, :, ivel], eigenvectors3[:, :, ivel])
+
+    # we want the rows
+    # ivel = 0
+    # imode = 1
+    # print(eigenvectors.shape)
+    # mpf = eigenvectors[:, imode, ivel]
+    # eig.scale(mpf)
+    return eigenvectors3, eigr_eigi_vel3
+
+
+def _add_vertical_lines(axes_list: list[Axes],
+                        v_lines: Optional[list[LineData]],
+                        plot_type: str, xunit: str,
+                        linewidth: int=2) -> list[Line2D]:
+    """the first plot gets the label
+
+    Parameters
+    ----------
+    v_lines : list[(name, velocity, vcolor, linestyle)]
+        name : str
+            name of the line
+        velocity : float
+            equivalent airspeed
+        color : str
+            color of the line
+        linestyle : str
+            '-', '--', 'dotted'
+    """
+    legend_elements = []
+    if v_lines is None or plot_type not in {'tas', 'eas'}:
+        return legend_elements
+
+    for v_line in v_lines:
+        name, velocity, vcolor, linestyle = v_line
+        assert linestyle in LINESTYLES, (name, linestyle)
+        for iaxis, axes in enumerate(axes_list):
+
+            # put the label on the first plot
+            if iaxis == 0:
+                if velocity == int(velocity):
+                    label = f'{name}={velocity:.0f} [{xunit}]'
+                else:
+                    label = f'{name}={velocity:.1f} [{xunit}]'
+                legend_element = axes.axvline(
+                    x=velocity, color=vcolor, linestyle=linestyle,
+                    linewidth=linewidth, label=label)
+                legend_elements.append(legend_element)
+            else:
+                axes.axvline(
+                    x=velocity, color=vcolor, linestyle=linestyle,
+                    linewidth=linewidth)
+    return legend_elements
+
+
+def _set_ticks(self, axes: plt.Axes, iaxis: int) -> None:
+    axes.tick_params(axis='both', which='major')  # , labelsize=self.font_size)
+    if _is_tick(self._xtick_major_locator_multiple, iaxis):
+        axes.xaxis.set_major_locator(MultipleLocator(self._xtick_major_locator_multiple[iaxis]))
+    if _is_tick(self._ytick_major_locator_multiple, iaxis):
+        axes.yaxis.set_major_locator(MultipleLocator(self._ytick_major_locator_multiple[iaxis]))
+
+
+def _is_tick(values: Optional[tuple[float, ...]], index: int):
+    out = values is not None and values[index] is not None
+    return out
+
+
+def _ieas_range(eas: np.ndarray, eas_range) -> np.ndarray:
+    eas_min0, eas_max0 = _get_eas_range(eas_range)
+    if eas_min0 is None and eas_max0 is None:
+        return None
+
+    if eas_min0 is not None and eas_max0 is not None:
+        ieas = np.where((eas_min0 <= eas) & (eas <= eas_max0))
+    elif eas_min0 is not None:
+        ieas = np.where(eas_min0 <= eas)
+    elif eas_max0 is not None:
+        ieas = np.where(eas <= eas_max0)
+    else:
+        raise RuntimeError(f'eas error; eas_min0={eas_min0} eas_max0={eas_max0}')
+    return ieas
+
+
+def remove_eas_range(eas: np.ndarray,
+                     damping: np.ndarray,
+                     freq: np.ndarray,
+                     eas_range: Optional[tuple[Optional[float]], Optional[float]]=None,
+                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ieas = _ieas_range(eas, eas_range)
+    if ieas is None:
+        return eas, damping, freq
+    eas = eas[ieas]
+    damping = damping[ieas]
+    freq = freq[ieas]
+    return eas, damping, freq
+
+
+def remove_excluded_points(vel: np.ndarray, damping: np.ndarray, freq: np.ndarray,
+                           point_removal: list[tuple[float, float]],
+                           ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Removes points in a given velocity range
+
+    Parameters
+    ----------
+    vel, damping, freq : (nvel,)
+        the data for the plot
+    point_removal : list[range]
+        range : tuple[float, float]
+        points in the range will be removed; useful for deleting a single point based on EAS
+        point_removal = [(400.0, 410.0),]
+
+    """
+    if point_removal is None or len(point_removal) == 0:
+        return vel, damping, freq
+
+    istack_list = []
+    for (a, b) in point_removal:
+        if a > 0 and b > 0:
+            i = ((vel <= a) | (b <= vel))
+        elif a > 0:
+            i = (vel <= a)
+        elif b > 0:
+            i = (b <= vel)
+        else:
+            continue
+        istack_list.append(i)
+    istack = np.column_stack(istack_list)
+    islice = np.all(istack, axis=1)
+    assert len(i) == len(islice), (len(i), len(islice))
+
+    vel = vel[islice]
+    damping = damping[islice]
+    freq = freq[islice]
+    return vel, damping, freq
+
+
+def _get_eas_range(eas_range: Optional[Limit]) -> Limit:
+    if eas_range is None:
+        eas_range = (None, None)
+    eas_min0, eas_max0 = eas_range
+    return eas_min0, eas_max0
+
+
+def _sort_vl_vf_crossings_by_mode(vl_vf_crossing_dict: dict[float, dict[int, list[Crossing]]],
+                                  ) -> dict[int, list[Crossing]]:
+        # print(f'vd_crossing_dict2 = {vd_crossing_dict}')
+        vl_vf_crossing_dict_modes_sort = {}
+        for damping, modes_crossings_dict in vl_vf_crossing_dict.items():
+            for mode, crossings in modes_crossings_dict.items():
+                # assert isinstance(crossings, tuple)
+                # crossings = [crossings]
+                assert len(crossings) == 1, crossings
+                if mode not in vl_vf_crossing_dict_modes_sort:
+                    vl_vf_crossing_dict_modes_sort[mode] = []
+                for crossing in crossings:
+                    # damping0, freq0, eas0 = crossing
+                    # [(damping_targeti, p1, p2, pmax)]
+                    vl_vf_crossing_dict_modes_sort[mode].append(crossing)
+        return vl_vf_crossing_dict_modes_sort
+
+
+def _sort_vd_crossings_by_mode(vd_crossing_dict: dict[float, dict[int, list[Crossing]]],
+                               ndiverg_max: int=7) -> dict[int, list[Crossing]]:
+    filter_vds = (ndiverg_max > 0)
+    # sort by modes - back to the old format
+    vd_crossing_dict_modes_sort = {}
+    # print(f'vd_crossing_dict = {vd_crossing_dict}')
+
+    # for freq_targeti, freq_requiredi in freq_crossings_dict.items():
+    #     vd_crossing_dict_freq = vd_crossing_dict[freq_targeti]
+    #     vd_crossing_dict_freq[mode] = crossing
+    if filter_vds:
+        for damping, modes_crossings_dict in vd_crossing_dict.items():
+            modes_vd = []
+            vds = []
+            # print(f'modes_crossings_dict = {modes_crossings_dict}')
+            # (freq_targeti, float(freq0), float(eas0))
+            for mode, crossings in modes_crossings_dict.items():
+                assert len(crossings) == 3, crossings
+                crossings = [crossings]
+                assert len(crossings) == 1, crossings
+                for crossing in crossings:
+                    damping0, freq0, eas0 = crossing
+                    modes_vd.append(mode)
+                    vds.append(eas0)
+            modes_vd_array = np.array(modes_vd)
+            vds_array = np.array(vds)
+            isort = np.argsort(vds_array)[:ndiverg_max]
+            lowest_modes = modes_vd_array[isort]
+            # print(f'modes_vd_array = {modes_vd_array}')
+            # print(f'lowest_modes = {lowest_modes}')
+            del modes_vd_array, isort, vds_array
+            # lowest_vds = vds_array[isort]
+            for mode in lowest_modes:
+                crossings = modes_crossings_dict[mode]
+                assert len(crossings) == 3, crossings
+                crossings = [crossings]
+                assert len(crossings) == 1, crossings
+                if mode not in vd_crossing_dict_modes_sort:
+                    vd_crossing_dict_modes_sort[mode] = []
+                for crossing in crossings:
+                    # damping0, freq0, eas0 = crossing
+                    vd_crossing_dict_modes_sort[mode].append(crossing)
+        # print(f'plot_crossings A = {vd_crossing_dict_modes_sort}')
+    else:
+        for damping, modes_crossings_dict in vd_crossing_dict.items():
+            for mode, crossings in modes_crossings_dict.items():
+                assert len(crossings) == 3, crossings
+                crossings = [crossings]
+                assert len(crossings) == 1, crossings
+                if mode not in vd_crossing_dict_modes_sort:
+                    vd_crossing_dict_modes_sort[mode] = []
+                for crossing in crossings:
+                    # damping0, freq0, eas0 = crossing
+                    vd_crossing_dict_modes_sort[mode].append(crossing)
+        # print(f'plot_crossings B = {vd_crossing_dict_modes_sort}')
+    return vd_crossing_dict_modes_sort
+
+
+def _get_vd_array(vd_crossing_dict: VCrossingDict,
+                  V_baseline: float, freq_target: float,
+                  log: SimpleLogger) -> np.ndarray:
+    vd_list = [(-1, V_baseline, np.nan)]
+    # log.info(f'V_baseline={V_baseline} KEAS')
+    for freq, mode_vd_crossings in vd_crossing_dict.items():
+        for mode, vd_crossing in mode_vd_crossings.items():
+            (damping, freq, vel) = vd_crossing
+            # if freq < freq_target and vel <= V_baseline:
+            #     log.error(f'VD: mode={mode} damping={damping} freq={freq} VD={vel}')
+            vd_list.append((mode, vel, freq))
+    vd_array = np.array(vd_list)
+
+    if len(vd_array) > 1:
+        log.error(f'VD (freq={freq_target})\nmode, vel, freq\n{_to_csv(vd_array[1:,])}')
+    return vd_array
+
+
+def _get_vl_vf_array(vl_vf_crossing_dict: VCrossingDict,
+                     VL_target: float, VF_target: float,
+                     V_baseline: float,
+                     log: SimpleLogger) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Converts the VCrossingDict into an array
+
+    Parameters
+    ----------
+    vl_vf_crossing_dict: dict[percent_damping, dict[mode, [(freq, velocity), ...]]
+        the flutter crossings
+    VL_target : float
+        definition of the 0% crossing
+    VF_target : float
+        definition of the 3% crossing
+    V_baseline : float
+        fake flutter speed for when there's no crossing
+    log : SimpleLogger
+        a logger
+
+    Returns
+    -------
+    v0_array :  (ncrossing_vl, 3) float ndarray
+        The 0% crossings
+        (-1, V_baseline, np.nan)  # null crossing
+        (10, 200.0,      30.2)    mode 10 crosses 0% at 200 KEAS and 30.2 Hz
+    v3_array : (ncrossing_vf, 3) float ndarray
+        The 3% crossings
+
+    """
+    V0s = [(-1, V_baseline, np.nan)]
+    V3s = [(-1, V_baseline, np.nan)]
+    for damping_target, vl_vf_crossings in vl_vf_crossing_dict.items():
+        if damping_target == 0.0:  # VL
+            for mode, crossings in vl_vf_crossings.items():
+                # [(
+                #     0.0,
+                #     array([116., 686.01, 0., 0.]),
+                #     array([118., 691., 0., 0.]),
+                #     array([117., 686.007, 0., 0.]),
+                #  ),]
+                #
+                # iy, eas, damping, freq
+                for (damping, p1, p2, pmax) in crossings:
+                    iy, vel, damping, freq = p1
+                    # log.info(f'VL_target={VL_target} V_baseline={V_baseline}; vel={vel}')
+                    # log.info(f'A={vel < VL_target} B={vel <= V_baseline}')
+                    if vel <= V_baseline:
+                        V0s.append((mode, vel, freq))
+        else:
+            assert damping_target == 0.03, damping_target  # VF
+            for mode, crossings in vl_vf_crossings.items():
+                for (damping, p1, p2, pmax) in crossings:
+                    iy, vel, damping, freq = p1
+                    if vel <= V_baseline:
+                        V3s.append((mode, vel, freq))
+
+    v0_array = np.array(V0s)
+    v3_array = np.array(V3s)
+
+    if len(v0_array) > 1:
+        log.error(f'VL (damping=0.00)\nmode, vel, freq\n{_to_csv(v0_array[1:,])}')
+    if len(v3_array) > 1:
+        log.error(f'VF (damping=0.03)\nmode, vel, freq\n{_to_csv(v3_array[1:,])}')
+    return v0_array, v3_array
+
+
+def _to_csv(myarray: np.ndarray) -> str:
+    msg_list = []
+    for mode, vel, freq in myarray:
+        msg_list.append(f'{mode:.0f},{vel:.3f},{freq:.3g}')
+    return '\n'.join(msg_list)
+
+def _setup_damping_freq_crossings(damping_crossings: Optional[dict[float, float]]=None,
+                                  freq_crossings: Optional[list[tuple[float, float]]]=None) -> tuple[dict[float, float],
+                                                                                                     dict[float, float]]:
+    if isinstance(damping_crossings, dict):
+        damping_crossings_dict = damping_crossings
+    # elif isinstance(damping_crossings, list):
+    #     damping_crossings_dict = {}
+    #     for target, required in damping_crossings:
+    #         damping_crossings_dict[target] = required
+    elif damping_crossings is None:
+        damping_crossings_dict = {
+            0.00: 0.01,
+            0.03: 0.03,
+        }
+    else:  # pragma: no cover
+        raise TypeError(damping_crossings)
+
+    # ----------------------------------------------
+    if isinstance(freq_crossings, dict):
+        freq_crossings_dict = freq_crossings
+    elif freq_crossings is None:
+        assert freq_crossings is None, freq_crossings
+        freq_crossings_dict = {
+            0.0: 1.0,
+        }
+    else:  # pragma: no cover
+        raise TypeError(freq_crossings)
+    return damping_crossings_dict, freq_crossings_dict
+
+
+def _get_divergence(self,
+                    freq_crossings_dict: dict[float, float],
+                    imodes: np.ndarray,
+                    point_removal: Optional[list[tuple[float, float]]],
+                    eas_range: Limit,
+                    eas_round: int, freq_round: int,
+                    divergence_freq_tol: float=0.1) -> dict[float, dict[int, list[Crossing]]]:
+    eas_min0, eas_max0 = eas_range
+
+    # preallocate
+    vd_crossing_dict = {}
+    for freq_targeti in freq_crossings_dict:
+        vd_crossing_dict[freq_targeti] = {}
+
+    # get Vdivergence
+    for imode in imodes:
+        mode = imode + 1
+        dampi = self.results[imode, :, self.idamping].flatten()
+        easi = self.results[imode, :, self.ieas].flatten()
+        freqi = self.results[imode, :, self.ifreq].flatten()
+        easi, dampi, freqi = remove_excluded_points(
+            easi, dampi, freqi, point_removal)
+        easi, dampi, freqi = remove_eas_range(
+            easi, dampi, freqi, eas_range)
+
+        if len(freqi) == 0:
+            continue
+
+        for freq_targeti, freq_requiredi in freq_crossings_dict.items():
+            try:
+                freqi_min = freqi.min()
+            except:
+                warnings.warn(f'mode={mode}; freqi={freqi}')
+                raise
+
+            if freqi_min > freq_requiredi:
+                continue
+
+            # dfreq sign is flipped because get_zero_crossings
+            # requires a positive crossing
+            dfreq = freqi - freq_targeti
+            # v1
+            # ifreqs = np.where(dfreq > 0)[0]
+            # ifreq = ifreqs[-1] + 1
+
+            # v2
+            # ifreqs = np.where(dfreq.min() == dfreq)[0]
+            # ifreq = ifreqs[-1] + 1
+
+            # TODO: check divergence to not call it a point
+            #       if it's "flat" for 2 points before
+            ifreqs = np.where(dfreq < divergence_freq_tol)[0]
+            if len(ifreqs) == 0:
+                continue
+            ifreq = ifreqs[0]
+            if not isinstance(ifreq, integer_types):
+                raise RuntimeError(f'ifreq={ifreq!r} and must be an integer; type={str(type(ifreq))}')
+
+            if ifreq >= len(freqi):
+                continue
+
+            # Divergence requires g >= 0 (static instability).
+            # freq -> 0 with g < 0 is stable overdamped (supercritical damping).
+            if dampi[ifreq] < 0:
+                continue
+            freq0 = freqi[ifreq]
+            eas0 = easi[ifreq]
+            # if imode == 17:
+            #     print(f'eas0  = {eas0}')
+            #     print(f'freq0 = {freq0}')
+
+            freq0 = round(freq0, freq_round)
+            eas0 = round(eas0, eas_round)
+            eas0, freq0 = check_range(eas_min0, eas_max0, freq0, eas0)
+            if np.isnan(eas0):
+                continue
+            crossing = (freq_targeti, float(freq0), float(eas0))
+            # print(f'found a crossing...mode={mode}; {crossing}')
+            vd_crossing_dict_freq = vd_crossing_dict[freq_targeti]
+            vd_crossing_dict_freq[mode] = crossing
+    return vd_crossing_dict
+
+
+def _format_damping(damping: float) -> str:
+    damping100 = damping * 100.
+    if damping >= 1.0:
+        return f'{damping100:.1f}'
+    return f'{damping100:.2f}'
+
+
+def _crossing_label(mode: int, damping0: float, min_damping: float, xunit: str,
+                    p1: np.ndarray, p2: np.ndarray, pmax: np.ndarray,
+                    show_simple_mode_info: bool=True,
+                    ) -> str:
+    iy1, eas1, damp1, freq1 = p1
+    iy2, eas2, damp2, freq2 = p2
+    iymax, easmax, dampmax, freqmax = pmax
+
+    # crossing
+    damping_str = f'{damping0 * 100:.0f}%'
+    if damping0 > min_damping or show_simple_mode_info:
+        label = f'Mode {mode:d}: g={damping_str}; {eas1:.0f} {xunit}; {freq1:.1f} Hz'
+    else:
+        # only do this for hump modes; 0%
+        if iy2 == -1:
+            label = f'Mode {mode:d}: g={damping_str}; {eas1:.0f} {xunit}; {freq1:.1f} Hz'
+        else:
+            assert eas2 >= eas1, (eas1, eas2)
+
+            # squash hump modes if the strings are the same
+            eas12 = f'{eas1:.0f}' if f'{eas1:.0f}' == f'{eas2:.0f}' else f'{eas1:.0f}-{eas2:.0f}'
+            freq12 = f'{freq1:.1f}' if f'{freq1:.1f}' == f'{freq2:.1f}' else f'{freq1:.1f}-{freq2:.1f}'
+
+            label = f'Mode {mode:d}: g={damping_str}; {eas12} {xunit}; {freq12} Hz'
+            if iymax != -1:
+                label += f'\nMax={easmax:.0f} {xunit} ({freqmax:.1f} Hz; g={_format_damping(dampmax)}%)'
+    return label
+
+def in_range(value: float, mini: Optional[float], maxi: Optional[float]) -> bool:
+    if mini is None and maxi is None:
+        return True
+    if mini is not None and maxi is not None:
+        return mini <= value <= maxi
+    if mini is not None:
+        return mini <= value
+    return value <= maxi
+
+
+
+def get_damping_crossings(damping_required: float,
+                          damping_required_tol: Optional[float],
+                          damping_limit: float,
+                          ) -> tuple[dict[float, float], float]:
+    damping_crossings = {}
+    # print(f'damping_required={damping_required}, damping_required_tol={damping_required_tol}, damping_limit={damping_limit}')
+    if damping_required_tol is None or damping_required_tol < 0.:
+        damping_required_tol = 0.0
+
+    if damping_required is not None and damping_required > -1.0:
+        # VL
+        damping_required_tol = max(0., damping_required_tol)
+        damping_crossings[damping_required] = damping_required + damping_required_tol
+    if damping_limit is not None and damping_limit > -1.0:
+        # VF
+        damping_crossings[damping_limit] = damping_limit
+    # print(f'damping_crossings, damping_required_tol = {damping_crossings}, {damping_required_tol}')
+    return damping_crossings, damping_required_tol
+
+
+def _sort_eigenvectors(self,
+                       eigenvector, eigr_eigi_velocity,
+                       eigr, eigi):
+    """
+    eigenvectors/eigr_eigi_velocity is unsorted, which causes havoc when doing MPFs
+
+    Parameters
+    ----------
+    eigenvector : (nvel_request, nmodes, nmodes)
+        The modal participation factors
+        corresponding to the -1 velocities
+    eigr_eigi_velocity : (nvel_request, nmodes, 3)
+        the [eigr, eigi, velocity] table (velocity is nan for NX)
+        corresponding to the -1 velocities
+    eigr : (nmodes, nvel)
+        real eigenvalues for all points
+    eigi : (nmodes, nvel)
+        imag eigenvalues for all points
+    """
+    # return eigenvector, eigr_eigi_velocity
+    debug = False
+    eigenvectors_out = eigenvector.copy()
+    eigr_eigi_velocity_out = eigr_eigi_velocity.copy()
+    # eigenvector.shape       =(nvel_request, nmodes, nmodes)
+    # eigr_eigi_velocity.shape=(nvel_request, nmodes, 3)
+    # eigr.shape=(nmodes, nvel)
+
+    # eigenvector.shape       =(2, 81, 81)
+    # eigr_eigi_velocity.shape=(2, 81, 3)
+    # eigr.shape=(81, 201)
+
+    # eigenvector.shape       =(4, 40, 40)
+    # eigr_eigi_velocity.shape=(4, 40, 3)
+    # eigr.shape=(40, 7)
+
+    # mode "1" factors
+    # eigrs = eigrs_eigis[:, 0]
+    # for ivel in range(nvel):
+    #     log.warning(f'creating ivel={ivel}')
+    #     # (nmodes, nmodes) where each column is a complex mode shape
+    #     eigenvector = response.eigenvector[ivel, :nmodes_to_keep, :].T
+
+    nvel_request, nmodes = eigenvector.shape[:2] # (2, 81, 81)
+    # nmodes2 = nmodes * 2
+
+    if debug:
+        print(f'eigenvector.shape={eigenvector.shape}')
+        print(f'eigr_eigi_velocity.shape={eigr_eigi_velocity.shape}')
+
+        #self.results[imode, :, self.ieigr]
+        print(f'eigr.shape={eigr.shape}')
+
+        # print(f'eigr_eigi_velocity={eigr_eigi_velocity}')
+        # print(f'eigr={eigr}')
+        print(f'nmodes={nmodes}')
+
+    eigr_eigi = eigr_eigi_velocity[:, :, [0, 1]]
+    ivels_out, vels_out = _get_velocity_sort(
+        self, eigr_eigi_velocity,
+        eigr, eigi,
+        nvel_request, nmodes)
+
+    # velocities are identified now
+    #------------------------------------------------------------
+
+    debug = False
+    irow0 = 0
+    if debug:
+        print(f'vels_out (KEAS) = {vels_out}')
+        print('sort_the_modes')
+        print(f'ivels_out = {ivels_out}')
+
+    # sort the modes
+    for ivel_request, ivel0 in enumerate(ivels_out):
+        if debug:
+            print(f'ivel_request={ivel_request}; ivel0={ivel0}')
+            print(f'eigr.shape = {eigr.shape}')
+
+        eig_data = eigr_eigi[ivel_request, :, :]
+        if debug:
+            print(f'eig_data.shape = {eig_data.shape}')
+        # print(eigr.shape)  # (81, 201)
+        # eigr_vel = eigr[:, ivel0]
+        # eigi_vel = eigi[:, ivel0]
+
+        eigr_vel = self.results[:, ivel0, self.ieigr]
+        eigi_vel = self.results[:, ivel0, self.ieigi]
+        if debug:
+            print(f'eigr_vel = {eigr_vel}')
+
+        row_map = _get_modal_sort(
+            eigr_vel, eigi_vel,
+            eig_data, irow0, debug=False)
+
+        # print(f'row_map[{ivel_request}]:')
+        # for irow, imode_full in sorted(row_map.items()):
+        #     if irow != imode_full:
+        #         print(f' *{irow}: {imode_full}')
+        #     else:
+        #         print(f'  {irow}: {imode_full}')
+
+        # eigenvectors_array = np.column_stack(eigenvectors)
+        # eigenvector = response.eigenvector[ivel, :nmodes_to_keep, :].T
+
+        eigenvectors_in = eigenvector[ivel_request, :, :]
+        eigr_eigi_velocity_in = eigr_eigi_velocity[ivel_request, :, :]
+        if debug:
+            print(f'eigenvector.shape = {eigenvector.shape}')
+            print(f'eigenvectors_in.shape = {eigenvectors_in.shape}')
+            print(f'eigr_eigi_velocity.shape = {eigr_eigi_velocity.shape}')
+            print(f'eigr_eigi_velocity_in.shape = {eigr_eigi_velocity_in.shape}')
+            print('----------')
+        eigenvector_outi, eigr_eigi_velocity_outi = _post_eigenvectors(
+            eigenvectors_in, eigr_eigi_velocity_in, row_map)
+        eigenvectors_out[ivel_request, :, :] = eigenvector_outi
+        eigr_eigi_velocity_out[ivel_request, :, :] = eigr_eigi_velocity_outi
+        if debug:
+            print('back..')
+
+        irow = nmodes
+        irow0 += irow
+
+    # imodes: nmodes that trigger the eigr/eigi check
+        # counts_imode = Counter(imodes)
+        # print(f'counts_imode = {counts_imode}')
+
+    # print(f'eigrs:\n{eigr_eigi_velocity[:, :, 0]}')
+    # print(f'eigis:\n{eigr_eigi_velocity[:, :, 1]}')
+    # print(f'eigen_velocity:\n{eigr_eigi_velocity[:, :, 2]}')
+
+    # aaaa
+    return eigenvectors_out, eigr_eigi_velocity_out
+
+def _post_eigenvectors(eigenvectors_in: np.ndarray,
+                       eigr_eigi_velocity_in: np.ndarray,
+                       row_map: dict[int, int]) -> np.ndarray:
+    debug = False
+    if debug:
+        print(f'_post_eigenvectors: eigenvectors_in.shape = {eigenvectors_in.shape}')
+        print(f'_post_eigenvectors: eigr_eigi_velocity_in.shape = {eigr_eigi_velocity_in.shape}')
+
+    # eigenvector.shape       =(nvel_request, nmodes, nmodes)
+    # eigr_eigi_velocity.shape=(nvel_request, nmodes, 3)
+    # eigr.shape=(nmodes, nvel)
+    reverse_row_map = {value: key for key, value in row_map.items()}
+
+    assert eigenvectors_in.ndim == 2, eigenvectors_in.shape
+    nmodes_a, nmodes_b = eigenvectors_in.shape
+    assert nmodes_a == nmodes_b, (nmodes_a, nmodes_b)
+
+    # debugging to check that we produce the same result with the same sort
+    # should be false
+    is_same = False
+
+    eigenvector_out_list = []
+    eigr_eigi_velocity_out_list = []
+    for imode_in in range(nmodes_a):
+        imode_out = reverse_row_map[imode_in]
+        if is_same:
+            imode_out = imode_in
+        # eigenvector = response.eigenvector[ivel, :nmodes_to_keep, :].T
+        eigenvector_out = eigenvectors_in[:, imode_out]
+        eigr_eigi_velocityi = eigr_eigi_velocity_in[imode_out]
+        eigr_eigi_velocity_out_list.append(eigr_eigi_velocityi)
+        eigenvector_out_list.append(eigenvector_out)
+
+    eigenvector_out = np.column_stack(eigenvector_out_list)
+    eigr_eigi_velocity_out = np.array(eigr_eigi_velocity_out_list)
+    if is_same:
+        assert np.array_equal(eigenvectors_in, eigenvector_out)
+
+    assert eigenvector_out.shape == eigenvectors_in.shape, (eigenvector_out.shape, eigenvectors_in.shape)
+    assert eigr_eigi_velocity_out.shape == eigr_eigi_velocity_in.shape, (eigr_eigi_velocity_out.shape, eigr_eigi_velocity_in.shape)
+    return eigenvector_out, eigr_eigi_velocity_out
+
+
+def _get_velocity_sort(self,
+                       eigr_eigi_velocity,
+                       eigr, eigi,
+                       nvel_request: int,
+                       nmodes: int):
+    debug = False
+    nmodes2 = 2 * nmodes
+    eigr_eigi = eigr_eigi_velocity[:, :, [0, 1]]
+    eigen_velocity = eigr_eigi_velocity[:, :, 2]
+    nvel_requestb, nmodes_, two = eigr_eigi.shape
+    # print(eigr_eigi_velocity)
+    assert nvel_request == nvel_requestb
+    assert two == 2, two
+
+    irow_target = 10
+    irow0 = 0
+    ivels_out = []
+    vels_out = []
+    for ivel_request in range(nvel_request):
+        irow = 0
+        if debug:
+            print(f'ivel = {ivel_request}/{nvel_request}')
+            # print(f'  eigr_eigi_velocity={eigr_eigi_velocity[ivel, :, :]}')
+        imodes = []
+        ivels = []
+
+        # neigr = 2; eigr_eigi.shape=(2, 81, 2) eig_data.shape=(81, 2)
+        eig_data = eigr_eigi[ivel_request, :, :]
+        if debug:
+            print(f'  eigr_eigi.shape={eigr_eigi.shape} eig_data.shape={eig_data.shape}')
+        for irow, (eigri, eigii) in enumerate(eig_data):
+            ieigr_mode, ieigr_vel = np.where(eigr == eigri)
+            ieigi_mode, ieigi_vel = np.where(eigi == eigii)
+            imode = np.hstack([ieigr_mode, ieigi_mode]).flatten()
+            ivel = np.hstack([ieigr_vel, ieigi_vel]).flatten()
+            if debug:
+                if irow0+irow == irow_target:
+                    print('    ', irow0+irow, eigri, eigii, (imode, ivel))
+                # else:
+                #     print('    ', irow0 + irow, eigri, eigii)
+            # imodes.extend(imode.tolist())
+            ivels.extend(ivel.tolist())
+
+        # ivel: nmodes that trigger the eigr/eigi check
+        counts_ivel = Counter(ivels)
+
+        # nmodes2: 2*nmodes; we have eigr and eigi checks
+        # print(f'counts = {counts}')
+        # print(f'nmodes2 = {nmodes2}')
+        counts2_ivel = {key: value for key, value in counts_ivel.items() if value >= nmodes}
+        if debug:
+            print(f'  counts2_ivel = {counts2_ivel}')
+
+        if len(counts2_ivel) == 1:
+            pass
+        elif len(counts2_ivel) > 1:
+            counts2_ivel = {key: value for key, value in counts2_ivel.items() if value == nmodes2}
+            if debug:
+                print(f'  counts2_ivel = {counts2_ivel}')
+        else:
+            warnings.warn(f'  Invalid Velocity Sort (length != 1); counts2_ivel={counts2_ivel}; n={len(counts2_ivel)}')
+
+        assert len(counts2_ivel) == 1, counts2_ivel
+        ivel0 = list(counts2_ivel)[0]
+        # veli = results_velocity[0, ivel0]
+        veli = self.results[0, ivel0, self.ieas]
+        if debug:
+            print(f'  ivel_request={ivel_request} ivel0={ivel0}; veli (KEAS)={veli}')  #, {self.out_units}')
+            print(eigen_velocity.shape)  # (nvel_request, nmodes)
+        eigen_velocity[ivel_request, :] = veli
+        # print(counts)
+        # print(counts2)
+
+        # imodes_count = np.hstack()
+        # break
+        irow0 = irow
+        ivels_out.append(ivel0)
+        vels_out.append(veli)
+    return ivels_out, vels_out
+
+def _get_modal_sort(eigr_vel, eigi_vel,
+                    eig_data, irow0, debug=False):
+    # print(len(eigi_vel))
+    imodes = []
+    irow_map = {}
+    irow_map_bad = {}
+    for irow, (eigri, eigii) in enumerate(eig_data):
+        # print('    ', irow0 + irow, eigri, eigii)
+        deigr = np.abs(eigr_vel - eigri)
+        deigi = np.abs(eigi_vel - eigii)
+        ieigr_mode = np.where(deigr == deigr.min())
+        ieigi_mode = np.where(deigi == deigi.min())
+        imode = np.hstack([ieigr_mode, ieigi_mode]).flatten()
+        # ivel = np.hstack([ieigr_vel, ieigi_vel]).flatten()
+        # print('    ', irow0+irow, eigri, eigii)
+        # if irow0+irow == irow_target:
+        # print('    ', irow0+irow, eigri, eigii, imode)
+        # else:
+        #     print('    ', irow0 + irow, eigri, eigii)
+        # print('    ', irow0+irow, eigri, eigii, (imode, ivel))
+        imodes.extend(imode.tolist())
+        # ivels.extend(ivel.tolist())
+        if len(imode) == 2:
+            imode0 = int(imode[0])
+            if debug:
+                print('    ', irow0 + irow, eigri, eigii, [imode0])
+            irow_map[irow] = imode0
+        else:
+            irow_map_bad[irow] = imode
+            if debug:
+                print('    ', irow0 + irow, eigri, eigii, imode.tolist())
+    if debug:
+        print(f'irow_map = {irow_map}')
+        print(f'irow_map_bad = {irow_map_bad}')
+
+    imap_values = list(irow_map.values())
+    for irow, imode_full in irow_map_bad.items():
+        imode_filtered = [int(imode) for imode in imode_full if imode not in imap_values]
+        counts_imode = Counter(imode_filtered)
+        if debug:
+            print(f'irow={irow} imode_full={imode_full}')
+            print(f'  imode_filtered = {imode_filtered}')
+            print(f'  counts_imode = {counts_imode}')
+
+        for key, value in counts_imode.items():
+            if value == 2:
+                imode0 = key
+                irow_map[irow] = imode0
+                # print(f'  -> imode0 = {imode0}')
+                break
+        else:
+            raise RuntimeError('bad')
+    return irow_map
+
+def setup_colormap(cmap_name: str, n: int=30) -> None:
+    """
+    import matplotlib as mpl
+    # mpl.set_prop_cycle('color', plt.cm.tab20.colors)
+    # plt.rcParams['axes.prop_cycle'] = plt.cycler('color', ['black'])
+    # plt.rcParams['axes.prop_cycle'] = plt.cycler('color', plt.cm.viridis.colors)
+    plt.rcParams['axes.prop_cycle'] = plt.cycler('color', plt.cm.tab10.colors)  # default
+
+    # Get the cycle as a list of colors
+    cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    """
+    if cmap_name == 'black':
+        plt.rcParams['axes.prop_cycle'] = plt.cycler('color', [cmap_name])
+    else:
+        cmap = getattr(plt.cm, cmap_name)
+
+        # prevent viridis/flag from making 255 colors...
+        mode = 2 if cmap_name in ['viridis', 'flag'] else 1
+
+        if hasattr(cmap, 'colors') and mode == 1:
+            # tab10, tab20, tab20b
+            colors_list = cmap.colors
+            if cmap_name == 'tab20':
+                # cut out 15,16
+                colors_list = colors_list[:14] + colors_list[16:]
+
+            # plt.rcParams['axes.prop_cycle'] = plt.cycler('color', plt.cm.tab20.colors)
+            plt.rcParams['axes.prop_cycle'] = plt.cycler('color', colors_list)
+        else:
+            # viridis, flag
+            colors_list = cmap(np.linspace(0, 1, n))
+            # plt.rc('axes', prop_cycle=cycler(color=custom_colors))
+            plt.rcParams['axes.prop_cycle'] = plt.cycler('color', colors_list)
+

@@ -9,8 +9,13 @@ Defines:
    - OP2
 
 """
+from __future__ import annotations
 from pickle import dump
-from typing import List, Optional, Any
+from pathlib import PurePath
+from typing import Optional, Any, TYPE_CHECKING
+import numpy as np
+
+from pyNastran.op2.tables.geom.geom_common import GeomCommon
 from pyNastran.op2.tables.geom.geom1 import GEOM1
 from pyNastran.op2.tables.geom.geom2 import GEOM2
 from pyNastran.op2.tables.geom.geom3 import GEOM3
@@ -20,25 +25,29 @@ from pyNastran.op2.tables.geom.ept import EPT
 from pyNastran.op2.tables.geom.mpt import MPT
 from pyNastran.op2.tables.geom.edt import EDT
 from pyNastran.op2.tables.geom.edom import EDOM
+from pyNastran.op2.tables.geom.contact import CONTACT
 
 from pyNastran.op2.tables.geom.dit import DIT
 from pyNastran.op2.tables.geom.dynamics import DYNAMICS
-from pyNastran.op2.tables.geom.axic import AXIC
+from pyNastran.op2.tables.geom.axic import AXIC  # removed
 
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.errors import DuplicateIDsError
 from pyNastran.op2.op2 import OP2, FatalError, SortCodeError, DeviceCodeError, FortranMarkerError
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.utils import PathLike
+    from cpylog import SimpleLogger
 
 
-def read_op2_geom(op2_filename: Optional[str]=None,
+def read_op2_geom(op2_filename: Optional[PathLike]=None,
                   combine: bool=True,
-                  subcases: Optional[List[int]]=None,
-                  exclude_results: Optional[List[str]]=None,
-                  include_results: Optional[List[str]]=None,
+                  subcases: Optional[list[int]]=None,
+                  exclude_results: Optional[list[str]]=None,
+                  include_results: Optional[list[str]]=None,
                   validate: bool=True, xref: bool=True,
                   build_dataframe: bool=False, skip_undefined_matrices: bool=True,
-                  mode: str='msc', log: Any=None, debug: bool=True,
-                  debug_file: Optional[str]=None,
+                  mode: str='msc', log: SimpleLogger=None, debug: bool=True,
+                  debug_file: Optional[PathLike]=None,
                   encoding: Optional[str]=None):
     """
     Creates the OP2 object without calling the OP2 class.
@@ -51,9 +60,9 @@ def read_op2_geom(op2_filename: Optional[str]=None,
         True : objects are isubcase based
         False : objects are (isubcase, subtitle) based;
                 will be used for superelements regardless of the option
-    subcases : List[int, ...] / int; default=None->all subcases
+    subcases : list[int, ...] / int; default=None->all subcases
         list of [subcase1_ID,subcase2_ID]
-    exclude_results / include_results : List[str] / str; default=None
+    exclude_results / include_results : list[str] / str; default=None
         a list of result types to exclude/include
         one of these must be None
     validate : bool
@@ -87,15 +96,8 @@ def read_op2_geom(op2_filename: Optional[str]=None,
     """
     model = OP2Geom(log=log, debug=debug, debug_file=debug_file, mode=mode)
     model.set_subcases(subcases)
-    if exclude_results and include_results:
-        msg = 'exclude_results or include_results must be None\n'
-        msg += 'exclude_results=%r\n' % exclude_results
-        msg += 'include_results=%r\n' % include_results
-        raise RuntimeError(msg)
-    elif exclude_results:
-        model.remove_results(exclude_results)
-    elif include_results:
-        model.set_results(include_results)
+    model.include_exclude_results(exclude_results=exclude_results,
+                                  include_results=include_results)
 
     model.read_op2(op2_filename=op2_filename, build_dataframe=build_dataframe,
                    skip_undefined_matrices=skip_undefined_matrices, combine=combine,
@@ -107,10 +109,12 @@ def read_op2_geom(op2_filename: Optional[str]=None,
     return model
 
 
-class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, DYNAMICS, AXIC):
+class OP2GeomCommon(OP2, GeomCommon):
     """interface for the OP2Geom class for to loading subclasses"""
     def __init__(self, make_geom: bool=True,
-                 debug: bool=False, log: Any=None, debug_file: Optional[str]=None, mode: Optional[str]=None):
+                 debug: bool=False, log: Any=None,
+                 debug_file: Optional[str]=None,
+                 mode: Optional[str]=None, revision: str=''):
         """
         Initializes the OP2 object
 
@@ -127,47 +131,29 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, D
             sets the filename that will be written to
         mode : str; default=None -> 'msc'
             {msc, nx}
+        revision : str; default=''
+            the nastran revision (e.g., XXXXXXXX, 2412.5)
 
         """
-        GEOM1.__init__(self)
-        GEOM2.__init__(self)
-        GEOM3.__init__(self)
-        GEOM4.__init__(self)
+        #self.big_properties = {}
+        self.big_materials = {}
+        self.reader_geom2 = GEOM2(self)
+        self.reader_geom1 = GEOM1(self)
+        self.reader_geom3 = GEOM3(self)
+        self.reader_geom4 = GEOM4(self)
 
-        EPT.__init__(self)
-        MPT.__init__(self)
-        EDT.__init__(self)
-        EDOM.__init__(self)
-        DIT.__init__(self)
-        DYNAMICS.__init__(self)
-        AXIC.__init__(self)
+        self.reader_ept = EPT(self)
+        self.reader_mpt = MPT(self)
+        self.reader_edt = EDT(self)
+        self.reader_edom = EDOM(self)
+        self.reader_contact = CONTACT(self)
+        self.reader_dit = DIT(self)
+        self.reader_dynamic = DYNAMICS(self)
+        self.reader_axic = AXIC(self)
 
-        OP2.__init__(self, debug=debug, log=log, debug_file=debug_file, mode=mode)
+        OP2.__init__(self, debug=debug, log=log, debug_file=debug_file,
+                     mode=mode, revision=revision)
         self.make_geom = True
-
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_boltsold11b.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_conedg01b.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_conprop06.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_glueac103a.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_conedg01s.op2
-        # F:\work\pyNastran\pyNastran\master2\pyNastran\bdf\test\nx_spike\out_sline5.op2
-        self._contact_map = {
-            (224, 2, 436) : ['???', self._read_fake],
-            (724, 7, 441) : ['???', self._read_fake],
-            (1224, 12, 446) : ['???', self._read_fake],
-            (7110, 71, 588) : ['???', self._read_fake],
-            (7210, 72, 589) : ['???', self._read_fake],
-            (7410, 74, 591) : ['???', self._read_fake],
-            (7510, 75, 592) : ['???', self._read_fake],
-            (7710, 77, 594) : ['???', self._read_fake],
-            (8110, 81, 598) : ['???', self._read_fake],
-            (8301, 83, 605) : ['???', self._read_fake],
-            (8710, 87, 449) : ['???', self._read_fake],
-            (8810, 88, 603) : ['???', self._read_fake],
-            (8920, 89, 614) : ['???', self._read_fake],
-            (124, 1, 435) : ['???', self._read_fake],
-            (424, 4, 438) : ['???', self._read_fake],
-        }
 
         # F:\work\pyNastran\examples\Dropbox\move_tpl\beamp10.op2
         # F:\work\pyNastran\examples\Dropbox\move_tpl\ifsr22r.op2
@@ -183,8 +169,8 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, D
             (14300, 143, 14) : ['TETRAP', self._read_fake],
             #(10500, 105, 14) : ['???', self._read_fake],
             #(10500, 105, 14) : ['???', self._read_fake],
-
         }
+
     def _read_view_hexa(self, data, n):
         """
         Word Name Type Description
@@ -194,14 +180,14 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, D
         4 NY          I View mesh subdivision -- from VIEW field
         5 NZ          I View mesh subdivision -- from VIEW field
         6 MTH     CHAR4 Method -- 'DIRE' means direct
-        7 MINEID      I Mininum VUHEXA identification number for this element
+        7 MINEID      I Minimum VUHEXA identification number for this element
         8 MAXEID      I Maximum VUHEXA identification number for this element
         9 MINGID      I Minimum grid identification number for this element
         10 MAXGID     I Maximum grid identification number for this element
         11 G(8)       I Corner grid identification numbers
+
         """
         # C:\NASA\m4\formats\git\examples\move_tpl\ifsv34b.op2
-        import numpy as np
         ints = np.frombuffer(data[n:], self.idtype) # .tolist()
         nelements = len(ints) // 18
         assert len(ints) % 18 == 0
@@ -216,8 +202,7 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, D
             n += 72
         return n
 
-    def save(self, obj_filename='model.obj', unxref=True):
-        # type: (str, bool) -> None
+    def save(self, obj_filename: str='model.obj', unxref: bool=True) -> None:
         """Saves a pickleable object"""
         #del self.log
         #del self._card_parser, self._card_parser_prepare
@@ -229,65 +214,64 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, D
     def _get_table_mapper(self):
         table_mapper = OP2._get_table_mapper(self)
 
-        table_mapper[b'CONTACT'] = [self._read_contact_4, self._read_contact_4]
-        table_mapper[b'CONTACTS'] = [self._read_contact_4, self._read_contact_4]
+        table_mapper[b'CONTACT'] = [self.reader_contact.read_contact_4, self.reader_contact.read_contact_4]
+        table_mapper[b'CONTACTS'] = [self.reader_contact.read_contact_4, self.reader_contact.read_contact_4]
         table_mapper[b'VIEWTB'] = [self._read_viewtb_4, self._read_viewtb_4]
-        table_mapper[b'EDT'] = [self._read_edt_4, self._read_edt_4]
-        table_mapper[b'EDTS'] = [self._read_edt_4, self._read_edt_4]
+        table_mapper[b'EDT'] = [self.reader_edt.read_edt_4, self.reader_edt.read_edt_4]
+        table_mapper[b'EDTS'] = [self.reader_edt.read_edt_4, self.reader_edt.read_edt_4]
 
         # geometry
-        table_mapper[b'GEOM1'] = [self._read_geom1_4, self._read_geom1_4]
-        table_mapper[b'GEOM2'] = [self._read_geom2_4, self._read_geom2_4]
-        table_mapper[b'GEOM3'] = [self._read_geom3_4, self._read_geom3_4]
-        table_mapper[b'GEOM4'] = [self._read_geom4_4, self._read_geom4_4]
+        table_mapper[b'GEOM1'] = [self.reader_geom1.read_geom1_4, self.reader_geom1.read_geom1_4]
+        table_mapper[b'GEOM2'] = [self.reader_geom2.read_geom2_4, self.reader_geom2.read_geom2_4]
+        table_mapper[b'GEOM3'] = [self.reader_geom3.read_geom3_4, self.reader_geom3.read_geom3_4]
+        table_mapper[b'GEOM4'] = [self.reader_geom4.read_geom4_4, self.reader_geom4.read_geom4_4]
 
         # superelements
-        table_mapper[b'GEOM1S'] = [self._read_geom1_4, self._read_geom1_4]
-        table_mapper[b'GEOM2S'] = [self._read_geom2_4, self._read_geom2_4]
-        table_mapper[b'GEOM3S'] = [self._read_geom3_4, self._read_geom3_4]
-        table_mapper[b'GEOM4S'] = [self._read_geom4_4, self._read_geom4_4]
+        table_mapper[b'GEOM1S'] = [self.reader_geom1.read_geom1_4, self.reader_geom1.read_geom1_4]
+        table_mapper[b'GEOM2S'] = [self.reader_geom2.read_geom2_4, self.reader_geom2.read_geom2_4]
+        table_mapper[b'GEOM3S'] = [self.reader_geom3.read_geom3_4, self.reader_geom3.read_geom3_4]
+        table_mapper[b'GEOM4S'] = [self.reader_geom4.read_geom4_4, self.reader_geom4.read_geom4_4]
 
-        table_mapper[b'GEOM1N'] = [self._read_geom1_4, self._read_geom1_4]
-        table_mapper[b'GEOM2N'] = [self._read_geom2_4, self._read_geom2_4]
-        table_mapper[b'GEOM3N'] = [self._read_geom3_4, self._read_geom3_4]
-        table_mapper[b'GEOM4N'] = [self._read_geom4_4, self._read_geom4_4]
+        table_mapper[b'GEOM1N'] = [self.reader_geom1.read_geom1_4, self.reader_geom1.read_geom1_4]
+        table_mapper[b'GEOM2N'] = [self.reader_geom2.read_geom2_4, self.reader_geom2.read_geom2_4]
+        table_mapper[b'GEOM3N'] = [self.reader_geom3.read_geom3_4, self.reader_geom3.read_geom3_4]
+        table_mapper[b'GEOM4N'] = [self.reader_geom4.read_geom4_4, self.reader_geom4.read_geom4_4]
 
-        table_mapper[b'GEOM1OLD'] = [self._read_geom1_4, self._read_geom1_4]
-        table_mapper[b'GEOM2OLD'] = [self._read_geom2_4, self._read_geom2_4]
-        table_mapper[b'GEOM3OLD'] = [self._read_geom3_4, self._read_geom3_4]
-        table_mapper[b'GEOM4OLD'] = [self._read_geom4_4, self._read_geom4_4]
-        table_mapper[b'EDOM'] = [self._read_edom4_4, self._read_edom4_4]
+        table_mapper[b'GEOM1OLD'] = [self.reader_geom1.read_geom1_4, self.reader_geom1.read_geom1_4]
+        table_mapper[b'GEOM2OLD'] = [self.reader_geom2.read_geom2_4, self.reader_geom2.read_geom2_4]
+        table_mapper[b'GEOM3OLD'] = [self.reader_geom3.read_geom3_4, self.reader_geom3.read_geom3_4]
+        table_mapper[b'GEOM4OLD'] = [self.reader_geom4.read_geom4_4, self.reader_geom4.read_geom4_4]
 
-        table_mapper[b'EPT'] = [self._read_ept_4, self._read_ept_4]
-        table_mapper[b'EPTS'] = [self._read_ept_4, self._read_ept_4]
-        table_mapper[b'EPTOLD'] = [self._read_ept_4, self._read_ept_4]
+        table_mapper[b'GEOM1ATV'] = [self.reader_geom1.read_geom1_4, self.reader_geom1.read_geom1_4]
+        table_mapper[b'GEOM2ATV'] = [self.reader_geom2.read_geom2_4, self.reader_geom2.read_geom2_4]
 
-        table_mapper[b'MPT'] = [self._read_mpt_4, self._read_mpt_4]
-        table_mapper[b'MPTS'] = [self._read_mpt_4, self._read_mpt_4]
+        table_mapper[b'EDOM'] = [self.reader_edom.read_edom4_4, self.reader_edom.read_edom4_4]  # optimization
 
-        table_mapper[b'DYNAMIC'] = [self._read_dynamics_4, self._read_dynamics_4]
-        table_mapper[b'DYNAMICS'] = [self._read_dynamics_4, self._read_dynamics_4]
+        table_mapper[b'EPT'] = [self.reader_ept.read_ept_4, self.reader_ept.read_ept_4]
+        table_mapper[b'EPTS'] = [self.reader_ept.read_ept_4, self.reader_ept.read_ept_4]
+        table_mapper[b'EPTOLD'] = [self.reader_ept.read_ept_4, self.reader_ept.read_ept_4]
+        table_mapper[b'EPTATV'] = [self.reader_ept.read_ept_4, self.reader_ept.read_ept_4]
 
-        table_mapper[b'AXIC'] = [self._read_axic_4, self._read_axic_4]
+        table_mapper[b'MPT'] = [self.reader_mpt.read_mpt_4, self.reader_mpt.read_mpt_4]
+        table_mapper[b'MPTS'] = [self.reader_mpt.read_mpt_4, self.reader_mpt.read_mpt_4]
+
+        table_mapper[b'DYNAMIC'] = [self.reader_dynamic.read_dynamics_4, self.reader_dynamic.read_dynamics_4]
+        table_mapper[b'DYNAMICS'] = [self.reader_dynamic.read_dynamics_4, self.reader_dynamic.read_dynamics_4]
+
+        table_mapper[b'AXIC'] = [self.reader_axic.read_axic_4, self.reader_axic.read_axic_4]
 
         # table objects (e.g. TABLED1)
-        table_mapper[b'DIT'] = [self._read_dit_4, self._read_dit_4]
-        table_mapper[b'DITS'] = [self._read_dit_4, self._read_dit_4]
+        table_mapper[b'DIT'] = [self.reader_dit.read_dit_4, self.reader_dit.read_dit_4]
+        table_mapper[b'DITS'] = [self.reader_dit.read_dit_4, self.reader_dit.read_dit_4]
         return table_mapper
 
 
-    def _read_contact_4(self, data, ndata):
-        """
-        reads the CONTACT/CONTACTS table
-        Table of Bulk Data entry related to surface contact
-
-        """
-        return self._read_geom_4(self._contact_map, data, ndata)
-
-    def _read_viewtb_4(self, data, ndata):
+    def _read_viewtb_4(self, data: bytes, ndata: int):
         """
         View information table
-        Contains the relationship between each p-element and its view-elements and view-grids.
+        Contains the relationship between each p-element and its view-elements
+        and view-grids.
+
         """
         return self._read_geom_4(self._viewtb_map, data, ndata)
 
@@ -295,7 +279,7 @@ class OP2GeomCommon(OP2, GEOM1, GEOM2, GEOM3, GEOM4, EPT, MPT, EDT, EDOM, DIT, D
 class OP2Geom(BDF, OP2GeomCommon):
     """creates an interface for the OP2 and BDF classes"""
     _properties = [
-        'is_bdf_vectorized', 'nid_map', 'wtmass',
+        'nid_map', 'wtmass',
         'is_real', 'is_complex', 'is_random',
         '_sort_method', 'is_sort1', 'is_sort2',
         'matrix_tables', 'table_name_str', 'is_geometry',
@@ -303,7 +287,8 @@ class OP2Geom(BDF, OP2GeomCommon):
     ]
     def __init__(self, make_geom: bool=True,
                  debug: bool=False, log: Any=None,
-                 debug_file: Optional[str]=None, mode: str='msc'):
+                 debug_file: Optional[str]=None,
+                 mode: str='msc', revision: str=''):
         """
         Initializes the OP2 object
 
@@ -320,18 +305,23 @@ class OP2Geom(BDF, OP2GeomCommon):
             sets the filename that will be written to
         mode : str; default='msc'
             {msc, nx}
+        revision : str; default=''
+            the nastran revision (e.g., XXXXXXXX, 2412.5)
 
         """
         BDF.__init__(self, debug=debug, log=log)
         OP2GeomCommon.__init__(self, make_geom=make_geom,
-                               debug=debug, log=log, debug_file=debug_file, mode=mode)
+                               debug=debug, log=log, debug_file=debug_file,
+                               mode=mode, revision=revision)
 
     @property
-    def is_geometry(self):
+    def is_geometry(self) -> bool:
         return True
 
-    def read_op2(self, op2_filename=None, combine=True,
-                 build_dataframe=None, skip_undefined_matrices=False, encoding=None):
+    def read_op2(self, op2_filename: Optional[str | PurePath]=None, combine: bool=True,
+                 build_dataframe: Optional[bool]=False,
+                 skip_undefined_matrices: bool=False,
+                 encoding: Optional[str]=None):
         """see ``OP2.read_op2``"""
         OP2.read_op2(self, op2_filename=op2_filename, combine=combine,
                      build_dataframe=build_dataframe,
@@ -436,7 +426,7 @@ def bdf_to_op2_geom(model: BDF, validate: bool=True) -> OP2Geom:
 
     # apply data from our 2 models to the new model
     _properties = model._properties
-    keys_to_skip = _properties + ['_properties', 'npoints', 'is_geometry']
+    keys_to_skip = _properties + ['_properties', 'npoints', 'is_geometry', 'zona']
     for key in model.object_attributes(mode='both', keys_to_skip=keys_to_skip):
         value = getattr(model, key)
         #if isinstance(value, (dict, list)) and len(value) == 0:
@@ -451,8 +441,9 @@ def bdf_to_op2_geom(model: BDF, validate: bool=True) -> OP2Geom:
     #op2_geom_model.elements = bdf_model.elements
     return op2_geom_model
 
-def attach_op2_results_to_bdf(bdf_model: BDF, op2_model: Optional[OP2]=None, validate: bool=True) -> OP2Geom:
-    """We're up-coverting a BDF and an OP2 result into an OP2Geom object."""
+def attach_op2_results_to_bdf(bdf_model: BDF, op2_model: Optional[OP2]=None,
+                              validate: bool=True) -> OP2Geom:
+    """We're up-converting a BDF and an OP2 result into an OP2Geom object."""
     op2_geom_model = bdf_to_op2_geom(bdf_model, validate=validate)
     if op2_model is None:
         return op2_geom_model

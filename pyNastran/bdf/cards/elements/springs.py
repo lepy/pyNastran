@@ -27,7 +27,7 @@ class SpringElement(Element):
         Element.__init__(self)
         self.nodes = [None, None]
 
-    def Mass(self):
+    def Mass(self) -> float:
         return 0.0
 
     def repr_fields(self):
@@ -57,7 +57,8 @@ class CELAS1(SpringElement):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, pid, nids, c1=0, c2=0, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 c1: int=0, c2: int=0, comment: str=''):
         """
         Creates a CELAS1 card
 
@@ -67,7 +68,7 @@ class CELAS1(SpringElement):
             element id
         pid : int
             property id (PELAS)
-        nids : List[int, int]
+        nids : list[int]
             node ids
         c1 / c2 : int; default=0
             DOF for nid1 / nid2
@@ -107,7 +108,7 @@ class CELAS1(SpringElement):
         h5_file.create_dataset('components', data=components)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CELAS1 card from ``BDF.add_card(...)``
 
@@ -125,17 +126,17 @@ class CELAS1(SpringElement):
         #: component number
         c1 = integer_or_blank(card, 4, 'c1', 0)
         c2 = integer_or_blank(card, 6, 'c2', 0)
-        assert len(card) <= 7, 'len(CELAS1 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(CELAS1 card) = {len(card):d}\ncard={card}'
         return CELAS1(eid, pid, nids, c1, c2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CELAS1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -145,6 +146,8 @@ class CELAS1(SpringElement):
         nids = [data[2], data[3]]
         c1 = data[4]
         c2 = data[5]
+        assert 0 <= c1 < 7
+        assert 0 <= c2 < 7
         return CELAS1(eid, pid, nids, c1, c2, comment=comment)
 
     def validate(self):
@@ -155,13 +158,13 @@ class CELAS1(SpringElement):
 
     @property
     def node_ids(self):
-        msg = ', which is required by CELAS1 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS1 eid={self.eid:d}'
         return self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
 
     def get_edge_ids(self):
         return [tuple(sorted(self.node_ids))]
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         node_ids = self.node_ids
         c1 = self.c1
@@ -193,12 +196,13 @@ class CELAS1(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ', which is required by CELAS1 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS1 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -207,7 +211,8 @@ class CELAS1(SpringElement):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CELAS1 eid=%s' % self.eid
+
+        msg = f', which is required by CELAS1 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 
@@ -250,7 +255,9 @@ class CELAS2(SpringElement):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, k, nids, c1=0, c2=0, ge=0., s=0., comment=''):
+    def __init__(self, eid: int, k: float, nids: list[int],
+                 c1: int=0, c2: int=0,
+                 ge: float=0., s: float=0., comment: str=''):
         """
         Creates a CELAS2 card
 
@@ -260,9 +267,8 @@ class CELAS2(SpringElement):
             element id
         k : float
             spring stiffness
-        nids : List[int, int]
-            SPOINT ids
-            node ids
+        nids : list[int]
+            2 SPOINT ids or 2 node ids
         c1 / c2 : int; default=0
             DOF for nid1 / nid2
         ge : int; default=0.0
@@ -315,7 +321,7 @@ class CELAS2(SpringElement):
         h5_file.create_dataset('components', data=components)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CELAS2 card from ``BDF.add_card(...)``
 
@@ -328,23 +334,23 @@ class CELAS2(SpringElement):
         """
         eid = integer(card, 1, 'eid')
         k = double(card, 2, 'k')
-        nids = [integer_or_blank(card, 3, 'g1', 0),
-                integer_or_blank(card, 5, 'g2', 0)]
-        c1 = integer_or_blank(card, 4, 'c1', 0)
-        c2 = integer_or_blank(card, 6, 'c2', 0)
-        ge = double_or_blank(card, 7, 'ge', 0.)
-        s = double_or_blank(card, 8, 's', 0.)
-        assert len(card) <= 9, 'len(CELAS2 card) = %i\ncard=%s' % (len(card), card)
+        nids = [integer_or_blank(card, 3, 'g1', default=0),
+                integer_or_blank(card, 5, 'g2', default=0)]
+        c1 = integer_or_blank(card, 4, 'c1', default=0)
+        c2 = integer_or_blank(card, 6, 'c2', default=0)
+        ge = double_or_blank(card, 7, 'ge', default=0.)
+        s = double_or_blank(card, 8, 's', default=0.)
+        assert len(card) <= 9, f'len(CELAS2 card) = {len(card):d}\ncard={card}'
         return CELAS2(eid, k, nids, c1, c2, ge, s, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CELAS2 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -356,6 +362,8 @@ class CELAS2(SpringElement):
         c2 = data[5]
         ge = data[6]
         s = data[7]
+        assert 0 <= c1 < 7
+        assert 0 <= c2 < 7
         return CELAS2(eid, k, nids, c1, c2, ge, s, comment=comment)
 
     def validate(self):
@@ -370,7 +378,7 @@ class CELAS2(SpringElement):
 
     @property
     def node_ids(self):
-        msg = ', which is required by CELAS2 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS2 eid={self.eid:d}'
         return self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
 
     def get_edge_ids(self):
@@ -384,11 +392,12 @@ class CELAS2(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ', which is required by CELAS2 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS2 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -396,6 +405,7 @@ class CELAS2(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
         msg = ', which is required by CELAS2 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
@@ -405,7 +415,7 @@ class CELAS2(SpringElement):
         self.nodes = self.node_ids
         self.nodes_ref = None
 
-    def _verify(self, xref=True):
+    def _verify(self, xref: bool=True) -> None:
         eid = self.eid
         k = self.K()
         node_ids = self.node_ids
@@ -470,7 +480,7 @@ class CELAS3(SpringElement):
             element id
         pid : int
             property id (PELAS)
-        nids : List[int, int]
+        nids : list[int, int]
             SPOINT ids
         comment : str; default=''
             a comment for the card
@@ -503,7 +513,7 @@ class CELAS3(SpringElement):
         h5_file.create_dataset('nodes', data=nodes)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CELAS3 card from ``BDF.add_card(...)``
 
@@ -515,21 +525,21 @@ class CELAS3(SpringElement):
             a comment for the card
         """
         eid = integer(card, 1, 'eid')
-        pid = integer_or_blank(card, 2, 'pid', eid)
+        pid = integer_or_blank(card, 2, 'pid', default=eid)
 
-        s1 = integer_or_blank(card, 3, 's1', 0)
-        s2 = integer_or_blank(card, 4, 's2', 0)
-        assert len(card) <= 5, 'len(CELAS3 card) = %i\ncard=%s' % (len(card), card)
+        s1 = integer_or_blank(card, 3, 's1', default=0)
+        s2 = integer_or_blank(card, 4, 's2', default=0)
+        assert len(card) <= 5, f'len(CELAS3 card) = {len(card):d}\ncard={card}'
         return CELAS3(eid, pid, [s1, s2], comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CELAS3 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -551,12 +561,13 @@ class CELAS3(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ', which is required by CELAS3 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS3 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.Pid(), msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -564,8 +575,9 @@ class CELAS3(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ', which is required by CELAS3 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS3 eid={self.eid:d}'
         #self.nodes_ref = model.safe_empty_nodes(self.node_ids, msg=msg)
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
@@ -579,7 +591,7 @@ class CELAS3(SpringElement):
 
     @property
     def node_ids(self):
-        msg = ', which is required by CELAS3 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS3 eid={self.eid:d}'
         return self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
 
     def get_edge_ids(self):
@@ -645,7 +657,7 @@ class CELAS4(SpringElement):
             element id
         k : float
             spring stiffness
-        nids : List[int, int]
+        nids : list[int, int]
             SPOINT ids
         comment : str; default=''
             a comment for the card
@@ -697,17 +709,17 @@ class CELAS4(SpringElement):
         k = double(card, 2, 'k')
         s1 = integer_or_blank(card, 3, 's1', 0)
         s2 = integer_or_blank(card, 4, 's2', 0)
-        assert len(card) <= 5, 'len(CELAS4 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(CELAS4 card) = {len(card):d}\ncard={card}'
         return CELAS4(eid, k, [s1, s2], comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CELAS4 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -725,7 +737,7 @@ class CELAS4(SpringElement):
     def node_ids(self):
         if self.nodes_ref is None:
             return self.nodes
-        msg = ', which is required by CELAS4 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS4 eid={self.eid:d}'
         return self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
 
     def get_edge_ids(self):
@@ -739,11 +751,12 @@ class CELAS4(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ', which is required by CELAS4 eid=%s' % (self.eid)
+        msg = f', which is required by CELAS4 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -751,8 +764,9 @@ class CELAS4(SpringElement):
         ----------
         model : BDF()
             the BDF object
+
         """
-        msg = ', which is required by CELAS4 eid=%s' % self.eid
+        msg = f', which is required by CELAS4 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         #self.nodes_ref = model.safe_empty_nodes(self.node_ids, msg=msg)
 

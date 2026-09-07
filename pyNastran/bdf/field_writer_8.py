@@ -1,7 +1,11 @@
 """Defines functions for single precision 8 character field writing."""
 import sys
-from typing import List, Union, Any
-from numpy import float32, isnan
+import math
+import warnings
+from typing import Optional, Any
+
+import numpy as np
+from numpy import int32, int64, float32, float64, isnan
 
 
 def set_string8_blank_if_default(value: Any, default: Any) -> str:
@@ -25,7 +29,7 @@ def is_same(value1: Any, value2: Any) -> bool:
     return False
 
 
-def set_blank_if_default(value: Any, default: Any) -> Union[int, float, str, None]:
+def set_blank_if_default(value: Any, default: Any) -> Optional[int | float | str]:
     """
     Used when setting the output data of a card to clear default values
 
@@ -39,12 +43,12 @@ def set_blank_if_default(value: Any, default: Any) -> Union[int, float, str, Non
 
     .. note:: this method is used by almost every card when printing
     """
-    if isinstance(value, (float, float32)) and isnan(value):
+    if isinstance(value, (float, float32, float64)) and isnan(value):
         return None
     return None if is_same(value, default) else value
 
 
-def set_default_if_blank(value: Any, default: Any) -> Union[int, float, str]:
+def set_default_if_blank(value: Any, default: Any) -> int | float | str:
     """
     Used when initializing a card and the default value isn't set
     Used on PBARL"""
@@ -54,7 +58,7 @@ def set_default_if_blank(value: Any, default: Any) -> Union[int, float, str]:
 def print_scientific_8(value: float) -> str:
     """
     Prints a value in 8-character scientific notation.
-    This is a sub-method and shouldnt typically be called
+    This is a sub-method and shouldn't typically be called
 
     Notes
     -----
@@ -62,29 +66,41 @@ def print_scientific_8(value: float) -> str:
 
     """
     if value == 0.0:
-        return '%8s' % '0.'
+        return '      0.'
 
-    python_value = '%8.11e' % value
-    svalue, sexponent = python_value.strip().split('e')
-    exponent = int(sexponent)  # removes 0s
+    abs_val = abs(value)
+    exponent = int(math.floor(math.log10(abs_val)))
+    mantissa = value / 10.0 ** exponent
+    # Fix floating point edge case where mantissa rounds to 10
+    if abs(mantissa) >= 9.9999999999:
+        mantissa /= 10.0
+        exponent += 1
 
-    sign = '-' if abs(value) < 1. else '+'
-
-    # the exponent will be added later...
-    exp2 = str(exponent).strip('-+')
-    value2 = float(svalue)
+    exp2 = str(abs(exponent))
+    sign = '-' if exponent < 0 else '+'
 
     leftover = 5 - len(exp2)
-
     if value < 0:
-        fmt = "%%1.%sf" % (leftover - 1)
-    else:
-        fmt = "%%1.%sf" % leftover
+        leftover -= 1
 
-    svalue3 = fmt % value2
-    svalue4 = svalue3.strip('0')
-    field = "%8s" % (svalue4 + sign + exp2)
+    svalue3 = ('%1.' + str(leftover) + 'f') % mantissa
+    svalue4 = svalue3.rstrip('0')
+    field = '%8s' % (svalue4 + sign + exp2)
     return field
+
+
+def print_int_default_8(value: int, default: int) -> str:
+    """combine set_blank_if_default and print_field"""
+    if value == default:
+        return '        '
+    return '%8d' % value
+
+
+def print_float_default_8(value: float, default: float) -> str:
+    """combine set_blank_if_default and print_float_8"""
+    if value == default:
+        return '        '
+    return print_float_8(value)
 
 
 def print_float_8(value: float) -> str:
@@ -96,7 +112,7 @@ def print_float_8(value: float) -> str:
     if isnan(value):
         return '        '
     elif value == 0.0:
-        return '%8s' % '0.'
+        return '      0.'  # '%8s' % '0.'
     elif value > 0.:  # positive, not perfect...
         if value < 5e-8:
             field = print_scientific_8(value)
@@ -131,12 +147,13 @@ def print_float_8(value: float) -> str:
             field = "%8.1f" % value
         else:  # big value
             field = "%8.1f" % value
-            if field.index('.') < 8:
+            if '.' not in field or field.index('.') >= 8:
+                field = print_scientific_8(value)
+            else:
                 field = '%8.1f' % round(value)
                 field = field[0:8]
-                #assert '.' != field[0], field
-            else:
-                field = print_scientific_8(value)
+                if '.' not in field:
+                    field = print_scientific_8(value)
             return field
     else:
         if value > -5e-7:
@@ -189,40 +206,40 @@ def print_float_8(value: float) -> str:
                 field = print_scientific_8(value)
             return field
     field = field.strip(' 0')
-    field = '%8s' % field
+    field = f'{field:>8s}'
 
     #assert len(field) == 8, ('value=%r field=%r is not 8 characters '
     #                         'long, its %s' % (value, field, len(field)))
     return field
 
 
-#def print_float_or_int_8(value: Union[int, float]) - str:
-    #"""
-    #Prints a 8-character width field
+# def print_float_or_int_8(value: int | float) - str:
+#     """
+#     Prints an 8-character width field
+#
+#     Parameters
+#     ----------
+#     value : int/float
+#         the value to print
+#
+#     Returns
+#     -------
+#     field : str
+#         an 8-character string
+#     """
+#     if isinstance(value, (float, float32, float64)):
+#         field = print_float_8(value)
+#     elif isinstance(value, int):
+#         field = "%8i" % value
+#     else:
+#         msg = 'Invalid Type:  value=%r type=%s' % (value, type(value))
+#         raise TypeError(msg)
+#     return field
 
-    #Parameters
-    #----------
-    #value : int/float
-        #the value to print
 
-    #Returns
-    #-------
-    #field : str
-        #an 8-character string
-    #"""
-    #if isinstance(value, (float, float32)):
-        #field = print_float_8(value)
-    #elif isinstance(value, int):
-        #field = "%8i" % value
-    #else:
-        #msg = 'Invalid Type:  value=%r type=%s' % (value, type(value))
-        #raise TypeError(msg)
-    #return field
-
-
-def print_field_8(value: Union[int, float, str, None]) -> str:
+def print_field_8(value: Optional[int | float | str]) -> str:
     """
-    Prints a 8-character width field
+    Prints an 8-character width field
 
     Parameters
     ----------
@@ -235,27 +252,27 @@ def print_field_8(value: Union[int, float, str, None]) -> str:
         an 8-character string
 
     """
-    if isinstance(value, int):
-        field = "%8i" % value
-    elif isinstance(value, (float, float32)):
+    if isinstance(value, (int, int32, int64)):
+        field = '%8d' % value
+    elif isinstance(value, (float, float32, float64)):
         field = print_float_8(value)
     elif value is None:
-        field = "        "
+        field = '        '
     else:
-        field = "%8s" % value
+        field = '%8s' % value
     if len(field) != 8:
-        msg = 'field=%r is not 8 characters long...raw_value=%r' % (field, value)
+        msg = f'field={field!r} is not 8 characters long...raw_value={value!r}'
         raise RuntimeError(msg)
     return field
 
 
-def print_card_8(fields: List[Union[int, float, str, None]]) -> str:
+def print_card_8(fields: list[int | float | str | None]) -> str:
     """
     Prints a nastran-style card with 8-character width fields.
 
     Parameters
     ----------
-    fields : List[int/float/str/None]
+    fields : list[int/float/str/None]
         all the fields in the BDF card (no trailing Nones)
 
     Returns
@@ -269,21 +286,20 @@ def print_card_8(fields: List[Union[int, float, str, None]]) -> str:
               format where the first 8 is the card name or
               blank (continuation).  The last 8-character field indicates
               an optional continuation, but because it's a left-justified
-              unneccessary field, print_card doesnt use it.
+              unnecessary field, print_card doesn't use it.
 
     .. code-block:: python
 
-      >>> fields = ['DUMMY', 1, 2, 3, None, 4, 5, 6, 7, 8.]
-      >>> print_card_8(fields)
-      DUMMY          1       2       3               4       5       6       7
-      DUMMY          1       2       3               4       5       6       7
-                    8.
+       >>> card = ['DUMMY', 1, 2, 3, None, 4, 5, 6, 7, 8.]
+       >>> print_card_8(card)
+       DUMMY          1       2       3               4       5       6       7
+                     8.
 
     """
     try:
         out = '%-8s' % fields[0]
-    except:
-        print("ERROR!  fields=%s" % fields)
+    except Exception:
+        warnings.warn("ERROR!  fields=%s" % fields)
         sys.stdout.flush()
         raise
 
@@ -291,8 +307,8 @@ def print_card_8(fields: List[Union[int, float, str, None]]) -> str:
         field = fields[i]
         try:
             out += print_field_8(field)
-        except:
-            print("bad fields = %s" % fields)
+        except Exception:
+            warnings.warn("bad fields = %s" % fields)
             raise
         if i % 8 == 0:  # allow 1+8 fields per line
             out = out.rstrip(' ')
@@ -303,7 +319,7 @@ def print_card_8(fields: List[Union[int, float, str, None]]) -> str:
     return out
 
 
-def print_int_card(fields: List[Union[int]]) -> str:
+def print_int_card(fields: list[Optional[int | str]]) -> str:
     """
     Prints a nastran-style card with 8-character width fields.
     All fields (other than the first field) must be integers.
@@ -311,8 +327,8 @@ def print_int_card(fields: List[Union[int]]) -> str:
 
     Parameters
     ----------
-    fields : List[int/float/str/None]
-      The list of fields to write to a nastran card.
+    fields : list[int | str]
+        The list of fields to write to a nastran card.
 
     .. warning::
       Blanks are not allowed!
@@ -320,22 +336,39 @@ def print_int_card(fields: List[Union[int]]) -> str:
 
     .. code-block:: python
 
-      fields = ['SET', 1, 2, 3, 4, 5, 6, ..., n]
-
+       fields = ['SET', 1, 2, 3, 4, 5, 6, ..., n]
+       print_int_card(fields)
+       >>> fields
+       'SET1, 1, 2, 3, 4, 5, 6, ...'
+       '    , n'
     """
     try:
         out = '%-8s' % fields[0]
-    except:
-        print("ERROR!  fields=%s" % fields)
+    except Exception:
+        warnings.warn("ERROR!  fields=%s" % fields)
         sys.stdout.flush()
         raise
 
-    for i in range(1, len(fields)):
+    nfields = len(fields)
+    if nfields > 8:
+        for i in range(1, nfields - 7, 8):
+            field1, field2, field3, field4, field5, field6, field7, field8 = fields[i:i+8]
+            try:
+                # balks if you have None or string fields
+                out += '%8d%8d%8d%8d%8d%8d%8d%8d\n        ' % (
+                    field1, field2, field3, field4, field5, field6, field7, field8)
+            except Exception:
+                warnings.warn('bad fields = %s' % fields)
+                raise
+
+    i0 = 1 + 8 * ((nfields - 1) // 8)   # first remainder index
+    for i in range(i0, nfields):
         field = fields[i]
         try:
-            out += "%8i" % field  # balks if you have None or string fields
-        except:
-            print("bad fields = %s" % fields)
+            # balks if you have None or string fields
+            out += '%8d' % field
+        except Exception:
+            warnings.warn('bad fields = %s' % fields)
             raise
         if i % 8 == 0:  # allow 1+8 fields per line
             out = out.rstrip(' ')
@@ -344,7 +377,7 @@ def print_int_card(fields: List[Union[int]]) -> str:
     return out
 
 
-def print_int_card_blocks(fields_blocks: List[Any]) -> str:
+def print_int_card_blocks(fields_blocks: list[Any]) -> str:
     """
     Prints a nastran-style card with 8-character width fields.
     All fields other than the card name must be written in "block" format.
@@ -352,32 +385,32 @@ def print_int_card_blocks(fields_blocks: List[Any]) -> str:
 
     Parameters
     ----------
-    fields_blocks : List[int]
+    fields_blocks : list[int]
       The fields written in "block" notation.
 
     Returns
     -------
     msg : str
-        the field blocks as a 8-character width Nastran card
+        the field blocks as an 8-character width Nastran card
 
     .. note:: Blanks are allowed in the False block.
 
     .. code-block:: python
 
-      fields_blocks = [
-          'SET1',
-          [['a', 1.0, 3], False], # these are not all integers
-          [[1, 2, 3], True],      # these are all integers
-      ]
-      msg = print_int_card_blocks(fields_blocks)
-      print(msg)
-      >>> 'SET1           a      1.       3       1       2       3\n'
+       fields_blocks = [
+           'SET1',
+           [['a', 1.0, 3], False], # these are not all integers
+           [[1, 2, 3], True],      # these are all integers
+       ]
+       msg = print_int_card_blocks(fields_blocks)
+       print(msg)
+       >>> "SET1           a      1.       3       1       2       3"
 
     """
     card_name = fields_blocks[0]
     try:
         out = '%-8s' % card_name
-    except:
+    except Exception:
         print("ERROR!  fields_blocks=%s" % fields_blocks)
         sys.stdout.flush()
         raise
@@ -387,7 +420,7 @@ def print_int_card_blocks(fields_blocks: List[Any]) -> str:
         (fields, is_all_ints) = block
         if is_all_ints is True:
             for field in fields:
-                out += "%8i" % field
+                out += "%8d" % field
                 i += 1
                 if i == 8:  # allow 1+8 fields per line
                     out += '\n        '
@@ -403,3 +436,65 @@ def print_int_card_blocks(fields_blocks: List[Any]) -> str:
             raise SyntaxError('is_all_ints must be a boolean.  is_all_ints=%r' % is_all_ints)
     out = out.rstrip(' \n') + '\n'  # removes blank lines at the end of cards
     return out
+
+
+_POS_BINS_8 = [
+    (0.1, 1.0, '%8.7f'),
+    (1.0, 10.0, '%8.6f'),
+    (10.0, 100.0, '%8.5f'),
+    (100.0, 1000.0, '%8.4f'),
+    (1000.0, 10000.0, '%8.3f'),
+    (10000.0, 100000.0, '%8.2f'),
+    (100000.0, 1000000.0, '%8.1f'),
+]
+
+_NEG_BINS_8 = [
+    (0.1, 1.0, '%8.6f'),
+    (1.0, 10.0, '%8.5f'),
+    (10.0, 100.0, '%8.4f'),
+    (100.0, 1000.0, '%8.3f'),
+    (1000.0, 10000.0, '%8.2f'),
+    (10000.0, 100000.0, '%8.1f'),
+]
+
+
+def array_float_8(ndarray: np.ndarray) -> np.ndarray:
+    """Vectorized print_float_8 for arrays — bins values by magnitude
+    and formats in batches to avoid per-element Python call overhead."""
+    shape = ndarray.shape
+    flat = ndarray.ravel()
+    n = len(flat)
+    result = np.empty(n, dtype='|U8')
+    abs_val = np.abs(flat)
+    processed = np.zeros(n, dtype=bool)
+
+    izero = flat == 0.0
+    result[izero] = '      0.'
+    processed |= izero
+
+    pos = flat > 0
+    neg = flat < 0
+
+    for lo, hi, fmt in _POS_BINS_8:
+        mask = pos & (flat >= lo) & (flat < hi)
+        if not np.any(mask):
+            continue
+        indices = np.where(mask)[0]
+        result[indices] = [((fmt % v).strip(' 0') or '0.').rjust(8)
+                           for v in flat[indices]]
+        processed[indices] = True
+
+    for lo, hi, fmt in _NEG_BINS_8:
+        mask = neg & (abs_val >= lo) & (abs_val < hi)
+        if not np.any(mask):
+            continue
+        indices = np.where(mask)[0]
+        result[indices] = [((fmt % v).replace('-0.', '-.').strip(' 0') or '-.').rjust(8)
+                           for v in flat[indices]]
+        processed[indices] = True
+
+    remaining = np.where(~processed)[0]
+    for idx in remaining:
+        result[idx] = print_float_8(flat[idx])
+
+    return result.reshape(shape)

@@ -1,40 +1,61 @@
+"""pyNastranGUI argument parsing"""
 import os
 import sys
+from typing import Optional, Any
 
+from cpylog import SimpleLogger
 import pyNastran
+from pyNastran import DEV
 from pyNastran.utils import check_path
 from pyNastran.utils.arg_handling import argparse_to_dict, swap_key, update_message
 
 #from gui.formats import format_string
+if sys.version_info < (3, 10):  # pragma: no cover
+    sys.exit("requires Python 3.10+...")
 
-if sys.version_info < (3, 7):  # pragma: no cover
-    sys.exit("requires Python 3.7+...")
-
+# load in multiple files at once (tecplot, stl)
 SUPPORT_MULTIMODEL = False
 
 # True: --groups flag
 # False: --nogroups flag
 GROUPS_DEFAULT = True
-FORMAT_TO_EXTENSION = {
-    # an extension should not be added to this list if it is shared with another type
-    'nastran' : ['.bdf', '.ecd', '.nas', '.op2', '.pch'],
-    'stl' : ['.stl'],
-    'cart3d' : ['.tri', '.triq'],
-    'tecplot' : ['.plt'],
-    'ugrid' : ['.ugrid'],
-    'plot3d' : ['.p3d', '.p3da'],
-    'surf' : ['.surf'],
-    'lawgs' : ['.wgs'],
-    'shabp' : ['.mk5'],
-    'usm3d' : ['.front'],  # .cogsg
-    'bedge' : ['.bedge'],
-    'su2' : ['.su2'],
-    'tetgen' : ['.smesh', '.ele'],
-    'obj' : ['.obj'],
-    'fast' : ['.fgrid'],
-    'avl' : ['.avl'],
-    'vrml' : ['.wrl'],
-    #'abaqus' : []
+
+OUTPUT_FORMAT_TO_EXTENSION = {
+    'nastran': ['.op2'],
+    'cart3d': ['.triq'],
+    'shabp': ['.out'],
+}
+INPUT_FORMAT_TO_EXTENSION = {
+    # an extension should not be added to this list if it is
+    # shared with another type
+    'nastran': ['.bdf', '.ecd', '.nas', '.op2', '.pch', '.blk', '.neu'],  # '.dat'
+    'h5nastran': ['.h5'],
+    #'nastran2': ['.bdf', '.ecd', '.nas',],
+
+    'stl': ['.stl'],
+    'cart3d': ['.tri', '.triq'],
+    'tecplot': ['.plt'],  # .dat
+    'ugrid': ['.ugrid'],
+    'plot3d': ['.p3d', '.p3da'],
+    'surf': ['.surf'],
+    'lawgs': ['.wgs'],
+    'shabp': ['.mk5'],
+    'usm3d': ['.front'],  # .cogsg
+    'bedge': ['.bedge'],
+    'su2': ['.su2'],
+    'tetgen': ['.smesh', '.ele'],
+    'obj': ['.obj'],
+    'fast': ['.fgrid'],
+    'avl': ['.avl'],
+    'vrml': ['.wrl'],
+    'vtk': ['.vtk', '.vtu'],
+    'fld': ['.fld'],
+    'fluent': ['.vrt', '.cel', '.daten'],
+    #'abaqus': ['.inp'],
+    #'plot3d': ['.p3d', '.p3da'],
+
+    #'fast': ['.cogsg'],
+    'avus': ['.grd'],
 
     # no duplicate extensions are allowed; use the explicit --format option
     #'ugrid3d' : ['.ugrid'],
@@ -43,37 +64,95 @@ FORMAT_TO_EXTENSION = {
 }
 
 
-def determine_format(input_filename, allowed_formats=None):
+def determine_input_output_formats(log: SimpleLogger,
+                                   filenames: list[str],
+                                   allowed_formats: list[str]) -> list[str]:
+    filenames2 = []
+    formats = []
+    exts2 = []
+    for filename in filenames:
+        try:
+            ext = os.path.splitext(filename)[1]
+            exts2.append(ext)
+            filenames2.append(filename)
+        except TypeError:
+            log.warning(f'no extension for {filename}')
+            continue
+    if exts2 == 0:
+        return formats
+
+    extension_to_format = {
+        ext: formati for formati, format_exts in INPUT_FORMAT_TO_EXTENSION.items()
+        for ext in format_exts}
+    for formati, format_exts in OUTPUT_FORMAT_TO_EXTENSION.items():
+        for ext in format_exts:
+            extension_to_format[ext] = formati
+
+    found_exts = []
+    for ext, filename in zip(exts2, filenames2):
+        if ext in extension_to_format:
+            found_exts.append(ext)
+            formati = extension_to_format[ext]
+            formats.append(formati)
+        else:
+            log.warning(f'unknown extension: {ext!r} for {filename}')
+            continue
+    return formats
+
+
+def determine_format(input_filename: str,
+                     output_filenames: Optional[list[str]]=None,
+                     allowed_formats: Optional[list[str]]=None) -> str:
     """
     Tries to map the input filename to an extension.
 
     .. note :: this function will not support generic extensions (e.g. .inp, .dat)
     """
+    if output_filenames is None:
+        output_filenames = []
+    assert None not in output_filenames, output_filenames
+
+    try:
+        out_exts = [os.path.splitext(fname)[1] for fname in output_filenames]
+    except TypeError:
+        print(f'output_filenames = {output_filenames}')
+        raise
+    out_ext = '' if len(out_exts) == 0 else out_exts[0]
+
     if allowed_formats is None:
         # used to include None...
         allowed_formats = [
-            'nastran', 'stl', 'cart3d', 'tecplot', 'ugrid', 'ugrid3d', 'panair',
+            'nastran', 'stl', 'cart3d', 'fld', 'fluent', 'tecplot', 'ugrid', 'ugrid3d', 'panair',
             #'plot3d',
-            'surf', 'lawgs', 'degen_geom', 'shabp', 'avus', 'fast', 'abaqus',
-            'usm3d', 'bedge', 'su2', 'tetgen', 'obj',
-            'openfoam_hex', 'openfoam_shell', 'openfoam_faces',
-            'avl', 'vrml',
+            'surf', 'lawgs', 'shabp', 'avus', 'fast', 'abaqus',
+            'usm3d', 'bedge', 'su2', 'tetgen',
+            'avl', 'vtk',
         ]
+        if DEV:
+            allowed_formats.extend(['degen_geom', 'obj', 'vrml', 'h5nastran', 'nastran2', 'nastran3'])
+    print(f'allowed_formats = {allowed_formats}')
 
-    ext = os.path.splitext(input_filename)[1].lower()
-    extension_to_format = {val : key for key, value in FORMAT_TO_EXTENSION.items()
-                           for val in value}
-    try:
-        formati = extension_to_format[ext]
-    except KeyError:
-        print('allowed_formats =', allowed_formats)
+    in_ext = os.path.splitext(input_filename)[1].lower()
+    in_extension_to_format = {val: key for key, value in INPUT_FORMAT_TO_EXTENSION.items()
+                              for val in value}
+    out_extension_to_format = {val: key for key, value in OUTPUT_FORMAT_TO_EXTENSION.items()
+                               for val in value}
+    if in_ext in in_extension_to_format:
+        formati = in_extension_to_format[in_ext]
+    elif out_ext in out_extension_to_format:
+        formati = out_extension_to_format[out_ext]
+    elif in_ext == '.dat':
+        formati = 'nastran'
+    else:
+        #print('allowed_formats =', allowed_formats)
         msg = 'format=%r was not found\nSpecify the format as [%s]' % (
-            ext, ', '.join(allowed_formats))
+            in_ext, ', '.join(allowed_formats))
         raise TypeError(msg)
     return formati
 
 
-def get_inputs(print_inputs=False, argv=None):
+def get_inputs(print_inputs: bool=False,
+               argv: Optional[list[str]]=None) -> dict[str, Any]:
     """Gets the inputs for pyNastranGUI using docopt."""
     if argv is None:
         argv = sys.argv[1:]  # same as argparse
@@ -81,19 +160,6 @@ def get_inputs(print_inputs=False, argv=None):
     else:
         # drop the pyNastranGUI; same as argparse
         argv = argv[1:]
-
-    input_format = None
-    input_filename = None
-    output_filename = None
-    debug = True
-
-    geom_script = None
-    post_script = None
-    user_points = None
-    user_geom = None
-    is_groups = not GROUPS_DEFAULT
-    log = None
-    test = False
 
     if len(argv) >= 1:
         argdict = run_argparse(argv)
@@ -103,21 +169,22 @@ def get_inputs(print_inputs=False, argv=None):
         return argdict
 
     inputs = {
-        'format' : input_format,
-        'input' : input_filename,
-        'output' : output_filename,
-        'debug' : debug,
-        'geomscript' : geom_script,
-        'postscript' : post_script,
-        'user_points' : user_points,
-        'user_geom' : user_geom,
-        'is_groups' : is_groups,
-        'log' : log,
-        'test' : test,
+        'format': None,  # input_format
+        'input': None,  # input_filename
+        'output': None,  # output_filename
+        'debug': True,  # debug
+        'geomscript': None,  # geom_script
+        'postscript': None,  # post_script
+        'user_points': None,  # user_points
+        'user_geom': None,  # user_geom
+        'is_groups': not GROUPS_DEFAULT,
+        'log': None,
+        'test': False,
     }
     return inputs
 
-def run_argparse(argv):
+
+def run_argparse(argv: list[str]) -> dict[str, str]:
     """Gets the inputs for pyNastranGUI using argparse."""
     import argparse
     #msg = "Usage:\n"
@@ -135,73 +202,80 @@ def run_argparse(argv):
     #msg += '               [-q] [--groups] [--noupdate] [--log LOG]%s%s\n' % (test, qt)
 
     dev = ''
-    dev_list = []
+    dev_list: list[str] = []
     if not pyNastran.is_pynastrangui_exe:
         #dev = ' [--noupdate] [--test] [--qt Qt] [--plugin]'
         dev_list = ['--noupdate', '--test', '--qt', '--plugin']
         dev = ''.join([' [%s]' % devi for devi in dev_list])
 
-    # no input/output files
-    # can you ever have an OUTPUT, but no INPUT?
-    usage = 'Usage:\n'
-    usage += '  pyNastranGUI INPUT [-f FORMAT] [-o OUTPUT] [options]\n'
+    usage = (
+        'Usage:\n'
+        # no input/output files
+        # can you ever have an OUTPUT, but no INPUT?
+        '  pyNastranGUI INPUT [-f FORMAT] [-o OUTPUT] [options]\n'
 
-    # You don't need to throw a -o flag
-    usage += '  pyNastranGUI INPUT OUTPUT [-f FORMAT] [-o OUTPUT] [options]\n'
+        # You don't need to throw a -o flag
+        '  pyNastranGUI INPUT OUTPUT [-f FORMAT] [-o OUTPUT] [options]\n'
 
-    # no input/output files
-    # can you ever have an OUTPUT, but no INPUT?
-    usage += '  pyNastranGUI [-f FORMAT] [-i INPUT] [-o OUTPUT...] [options]\n'
-    #usage += '  pyNastranGUI -h | --help\n'
-    usage += '  pyNastranGUI -v | --version\n'
+        # no input/output files
+        # can you ever have an OUTPUT, but no INPUT?
+        '  pyNastranGUI [-f FORMAT] [-i INPUT] [-o OUTPUT...] [options]\n'
 
-    usage += (
+        #usage += '  pyNastranGUI -h | --help\n'
+        '  pyNastranGUI -v | --version\n'
         '  [options] = [-g GSCRIPT] [-p PSCRIPT]\n'
         '              [-u POINTS_FNAME...] [--user_geom GEOM_FNAME...]\n'
     )
     if GROUPS_DEFAULT:
-        usage += '              [-q] [--groups] [--log LOG]%s\n' % (dev)
+        usage += f'              [-q] [--groups] [--log LOG]{dev}\n'
     else:
-        usage += '              [-q] [--nogroups] [--log LOG]%s\n' % (dev)
+        usage += f'              [-q] [--nogroups] [--log LOG]{dev}\n'
 
-    arg_msg = ''
-    arg_msg += '\n'
-    arg_msg += 'Primary Options:\n'
-     # plot3d,
-    arg_msg += '  -f FORMAT, --format FORMAT  format type (avus, bedge, cart3d, lawgs, nastran,\n'
-    arg_msg += '                                  openfoam_hex, openfoam_shell, openfoam_faces,\n'
-    arg_msg += '                                  panair, stl, surf, tetgen, usm3d, ugrid, ugrid3d)\n'
-    arg_msg += '  -i INPUT, --input INPUT     path to input file\n'
-    arg_msg += '  -o OUTPUT, --output OUTPUT  path to output file\n'
-    #arg_msg += "  -r XYZ, --rotation XYZ      [x, y, z, -x, -y, -z] default is ???\n"
-    arg_msg += '\n'
+    arg_msg = (
+        ''
+        '\n'
+        'Primary Options:\n'
+        # plot3d,
+        '  -f FORMAT, --format FORMAT  format type (avus, bedge, cart3d, lawgs, nastran,\n'
+        '                                  panair, stl, surf, tetgen, usm3d, ugrid, ugrid3d)\n'
+        '  -i INPUT, --input INPUT     path to input file\n'
+        '  -o OUTPUT, --output OUTPUT  path to output file\n'
+        #"  -r XYZ, --rotation XYZ      [x, y, z, -x, -y, -z] default is ???\n"
+        '\n'
+    )
 
     arg_msg += 'Secondary Options:\n'
     if GROUPS_DEFAULT:
         arg_msg += '  --groups                        enables groups\n'
     else:
         arg_msg += '  --nogroups                      disables groups\n'
-    arg_msg += '  -g GSCRIPT, --geomscript        path to geometry script file (runs before load geometry)\n'
-    arg_msg += '  -p PSCRIPT, --postscript        path to post script file (runs after load geometry)\n'
-    arg_msg += '  --user_geom GEOM_FNAME          add user specified geometry (repeatable)\n'
-    arg_msg += '  -u POINTS_FNAME, --user_points  add user specified points (repeatable)\n'
-    arg_msg += '\n'
+    arg_msg += (
+        '  -g GSCRIPT, --geomscript        path to geometry script file (runs before load geometry)\n'
+        '  -p PSCRIPT, --postscript        path to post script file (runs after load geometry)\n'
+        '  --user_geom GEOM_FNAME          add user specified geometry (repeatable)\n'
+        '  -u POINTS_FNAME, --user_points  add user specified points (repeatable)\n'
+        '\n'
 
-    arg_msg += "Debug:\n"
+        'Debug:\n'
+    )
     if not pyNastran.is_pynastrangui_exe:
-        arg_msg += '  --noupdate     disables the update check\n'
-        arg_msg += '  --test         temporary dev mode (default=False)\n'
-        arg_msg += '  --qt QT        sets the qt version (default=QT_API)\n'
-        arg_msg += '  --plugin       disables the format check\n'
-    arg_msg += '  --log LOG      disables HTML logging; prints to the screen\n'
-    arg_msg += '\n'
+        arg_msg += (
+            '  --noupdate     disables the update check\n'
+            '  --test         temporary dev mode (default=False)\n'
+            '  --qt QT        sets the qt version (pyqt5, pyside2; default=QT_API)\n'
+            '  --plugin       disables the format check\n'
+        )
 
-    arg_msg += 'Info:\n'
-    arg_msg += '  -q, --quiet    prints debug messages (default=True)\n'
-    arg_msg += '  -h, --help     show this help message and exits\n'
-    arg_msg += "  -v, --version  show program's version number and exit\n"
-    arg_msg += '\n'
+    arg_msg += (
+        '  --log LOG      disables HTML logging; prints to the screen\n'
+        '\n'
 
+        'Info:\n'
+        '  -q, --quiet    prints debug messages (default=True)\n'
+        '  -h, --help     show this help message and exits\n'
+        "  -v, --version  show program's version number and exit\n"
+        '\n'
+    )
     #msg += "\n"
     #parser = argparse.ArgumentParser(
         #prog=None, usage=None, description=None, epilog=None,
@@ -250,13 +324,13 @@ def run_argparse(argv):
 
     parent_parser.add_argument('-f', '--format', type=str, nargs=1, action=append_action,
                                help='format type (avus, bedge, cart3d, lawgs, nastran, '
-                               'openfoam_hex, openfoam_shell, openfoam_faces, panair, '
+                               'panair, '
                                'stl, surf, tetgen, usm3d, ugrid, ugrid3d, #plot3d)')
 
     # double args
     #parent_parser.add_argument('-f', '--format', type=str,
                                #help='format type (avus, bedge, cart3d, lawgs, nastran, '
-                               #'openfoam_hex, openfoam_shell, openfoam_faces, panair, '
+                               #'panair, '
                                #'stl, surf, tetgen, usm3d, ugrid, ugrid3d, #plot3d)',
                                #action='append')
     parent_parser.add_argument('-g', '--geomscript', type=str,
@@ -323,7 +397,9 @@ def run_argparse(argv):
     _update_argparse_argdict(argdict)
     return argdict
 
-def _add_inputs_outputs(positional_inputs, optional_inputs, word='input'):
+
+def _add_inputs_outputs(positional_inputs, optional_inputs,
+                        word: str='input') -> list[str]:
     input_filenames = []
     if isinstance(optional_inputs, str):
         input_filenames.append(optional_inputs)
@@ -342,16 +418,13 @@ def _add_inputs_outputs(positional_inputs, optional_inputs, word='input'):
         input_filenames += [positional_inputs]
     return input_filenames
 
-def _update_argparse_argdict(argdict):
+
+def _update_argparse_argdict(argdict: dict[str, Any]) -> dict[str, Any]:
     """converts to the pyNastranGUI argument format"""
     argdict['debug'] = not argdict['quiet']
     del argdict['quiet']
 
-    if not GROUPS_DEFAULT:
-        swap_key(argdict, 'nogroups', 'is_groups')
-    else:
-        argdict['is_groups'] = argdict['groups']
-
+    _set_groups_key(argdict)
     swap_key(argdict, 'points_fname', 'user_points')
 
     input_filenames = _add_inputs_outputs(argdict['INPUT'], argdict['input'], word='input')
@@ -368,45 +441,12 @@ def _update_argparse_argdict(argdict):
         check_path(input_filename, name='input file')
 
     plugin = False
-    if 'plugin' in argdict:
+    if 'plugin' in argdict and argdict['plugin']:
         plugin = True
-
-    formats = argdict['format']
-    if input_filenames and formats is None:
-        input_formats = []
-        for input_filenamei in input_filenames:
-            if isinstance(input_filenamei, str):
-                formati = determine_format(input_filenamei)
-            else:  # pragma: no cover
-                raise TypeError('input_filenamei=%s type=%s' % (
-                    input_filenamei, type(input_filenamei)))
-            input_formats.append(formati)
-        #input_formats = [determine_format(input_filenamei) for input_filenamei in input_filenames]
-        argdict['format'] = input_formats
-        del input_formats
-    elif formats:
-        input_formats = []
-        for formati in formats:
-            if isinstance(formati, str):
-                input_formats.append(formati)
-            else:
-                input_formats.extend(formati)
-        argdict['format'] = input_formats
-        del input_formats
-    del formats
+    input_formats = _update_format(argdict, input_filenames, output_filenames)
 
     if not plugin:
-        # None is for custom geometry
-        allowed_formats = [
-            'nastran', 'stl', 'cart3d', 'tecplot', 'ugrid', 'ugrid3d', 'panair',
-            #'plot3d',
-            'surf', 'lawgs', 'degen_geom', 'shabp', 'avus', 'fast', 'abaqus',
-            'usm3d', 'bedge', 'su2', 'tetgen',
-            'openfoam_hex', 'openfoam_shell', 'openfoam_faces', 'obj', 'avl',
-            None,
-        ]
-        for input_format in input_formats:
-            assert input_format in allowed_formats, 'format=%r is not supported' % input_format
+        _validate_format(input_formats)
 
     if argdict['geomscript']:
         geom_script = argdict['geomscript']
@@ -415,9 +455,9 @@ def _update_argparse_argdict(argdict):
         post_script = argdict['postscript']
         check_path(post_script, name='postscript')
 
-    if argdict['qt'] is not None:
+    if argdict.get('qt') is not None:
         qt = argdict['qt'].lower()
-        assert qt in ['pyqt5', 'pyside2'], 'qt=%r' % qt
+        assert qt in ['pyqt5', 'pyside2', 'pyside6', 'pyqt6'], 'qt=%r' % qt
         os.environ.setdefault('QT_API', qt)
 
     #if argdict['input'] is None:
@@ -444,7 +484,7 @@ def _update_argparse_argdict(argdict):
             formats = [formats]
         nformats = len(formats)
         if nformats == 1 and ninput_files > 1:
-            formats = formats * ninput_files
+            formats *= ninput_files
         argdict['format'] = formats
         if nformats != ninput_files:
             msg = (
@@ -454,3 +494,60 @@ def _update_argparse_argdict(argdict):
                     ninput_files, input_filenames))
             raise RuntimeError(msg)
     return argdict
+
+
+def _set_groups_key(argdict: dict[str, str]) -> None:
+    if not GROUPS_DEFAULT:
+        swap_key(argdict, 'nogroups', 'is_groups')
+    else:
+        argdict['is_groups'] = argdict['groups']
+
+
+def _update_format(argdict: dict[str, Any],
+                   input_filenames: list[str],
+                   output_filenames: list[str]) -> list[str]:
+    formats: Optional[list[str]] = argdict['format']
+
+    input_formats: list[str] = []
+    if input_filenames and formats is None:
+        for input_filenamei in input_filenames:
+            if isinstance(input_filenamei, str):
+                formati = determine_format(input_filenamei,
+                                           output_filenames=output_filenames)
+            else:  # pragma: no cover
+                raise TypeError('input_filenamei=%s type=%s' % (
+                    input_filenamei, type(input_filenamei)))
+            input_formats.append(formati)
+        #input_formats = [determine_format(input_filenamei) for input_filenamei in input_filenames]
+        argdict['format'] = input_formats
+    elif formats:
+        for formati in formats:
+            if isinstance(formati, str):
+                input_formats.append(formati)
+            else:
+                input_formats.extend(formati)
+        argdict['format'] = input_formats
+    return input_formats
+
+
+def _validate_format(input_formats: list[str]) -> None:
+    # None is for custom geometry
+    allowed_formats = [
+        'nastran', 'stl', 'cart3d', 'fld', 'fluent', 'tecplot',
+        'ugrid', 'ugrid3d', 'panair',
+        #'plot3d',
+        'surf', 'lawgs', 'degen_geom', 'shabp', 'avus', 'fast', 'abaqus',
+        'usm3d', 'bedge', 'su2', 'tetgen',
+        'avl', 'vtk',
+        None,  # I think None is for the null case
+    ]
+
+    if DEV:
+        allowed_formats += ['obj', 'h5nastran', 'nastran2', 'nastran3']
+
+    for input_format in input_formats:
+        if None in allowed_formats:
+            allowed_formats.remove(None)
+        #print('allowed_formats =', allowed_formats)
+        fmts = ", ".join(allowed_formats)
+        assert input_format in allowed_formats, f'format={input_format} is not supported\nallowed_formats=[{fmts}]'

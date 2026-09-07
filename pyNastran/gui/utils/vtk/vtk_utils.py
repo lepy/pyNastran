@@ -3,72 +3,252 @@ defines:
  - create_vtk_cells_of_constant_element_type(grid, elements, etype)
 
 """
+from __future__ import annotations
+import warnings
 from collections import defaultdict
-import numpy as np
-import vtk
-from vtk.util.numpy_support import numpy_to_vtk # vtk_to_numpy
-from pyNastran.gui.utils.vtk.base_utils import (
-    vtkConstants, numpy_to_vtk, numpy_to_vtkIdTypeArray,
-    get_numpy_idtype_for_vtk)
+from typing import Optional, TYPE_CHECKING
 
-def numpy_to_vtk_points(nodes, points=None, dtype='<f', deep=1):
+import numpy as np
+
+from pyNastran.gui.vtk_common_core import vtkVersion, VTK_VERSION as vtk_version
+_VTK_VERSION = vtkVersion.GetVTKVersion()
+VTK_VERSION_SPLIT = [int(val) for val in _VTK_VERSION.split('.')]
+_VTK_ERROR_MESSAGE = f'VTK version={vtk_version!r} is not supported (use 9.3<=vtk<9.7); VTK_VERSION_SPLIT={str(VTK_VERSION_SPLIT)}'
+if VTK_VERSION_SPLIT[0] == 9:
+    if not(3 <= VTK_VERSION_SPLIT[1] < 7):
+        raise NotImplementedError(_VTK_ERROR_MESSAGE)
+else:  # pragma: no cover
+    raise NotImplementedError(_VTK_ERROR_MESSAGE)
+
+#from vtk import vtkSelectionNode, vtkExtractSelection, vtkSelection, vtkAxes, vtkIdFilter, VTK_ID_TYPE
+#from vtk import vtkCellData, vtkPointData
+from vtkmodules.vtkCommonDataModel import vtkCellData, vtkPointData, vtkSelectionNode, vtkSelection
+from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
+try:
+    from vtkmodules.vtkFiltersCore import vtkIdFilter
+except ImportError:
+    # VTK 9.6+ renamed vtkIdFilter to vtkGenerateIds
+    from vtkmodules.vtkFiltersCore import vtkGenerateIds as vtkIdFilter
+from vtkmodules.util.vtkConstants import VTK_ID_TYPE
+
+from pyNastran.gui.vtk_common_core import (
+    vtkPoints, vtkMath, vtkUnsignedCharArray, vtkIdTypeArray, VTK_FLOAT)
+from pyNastran.gui.vtk_interface import vtkCellArray, vtkVertex
+from pyNastran.gui.vtk_util import numpy_to_vtk, vtk_to_numpy
+
+#from pyNastran.gui.vtk_common_core import VTK_ID_TYPE
+from pyNastran.gui.vtk_interface import vtkUnstructuredGrid, vtkSelectionNode
+from pyNastran.gui.utils.vtk.base_utils import (
+    numpy_to_vtk, numpy_to_vtkIdTypeArray,
+    get_numpy_idtype_for_vtk, VTK_VERSION_SPLIT)
+
+_USE_LEGACY_SET_CELLS = (VTK_VERSION_SPLIT[0] == 9 and VTK_VERSION_SPLIT[1] < 6)
+if TYPE_CHECKING:  # pragma: no cover
+    from cpylog import SimpleLogger
+    #from vtkmodules.vtkFiltersGeneral import vtkAxes
+    from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+# // Linear cells
+# VTK_EMPTY_CELL = 0
+# VTK_VERTEX = 1
+# VTK_POLY_VERTEX = 2
+# VTK_LINE = 3
+# VTK_POLY_LINE = 4
+# VTK_TRIANGLE = 5
+# VTK_TRIANGLE_STRIP = 6
+# VTK_POLYGON = 7
+# VTK_PIXEL = 8
+# VTK_QUAD = 9
+# VTK_TETRA = 10
+# VTK_VOXEL = 11
+# VTK_HEXAHEDRON = 12
+# VTK_WEDGE = 13
+# VTK_PYRAMID = 14
+# VTK_PENTAGONAL_PRISM = 15
+# VTK_HEXAGONAL_PRISM = 16
+#
+# // Quadratic, isoparametric cells
+# VTK_QUADRATIC_EDGE = 21
+# VTK_QUADRATIC_TRIANGLE = 22
+# VTK_QUADRATIC_QUAD = 23
+# VTK_QUADRATIC_POLYGON = 36
+# VTK_QUADRATIC_TETRA = 24
+# VTK_QUADRATIC_HEXAHEDRON = 25
+# VTK_QUADRATIC_WEDGE = 26
+# VTK_QUADRATIC_PYRAMID = 27
+# VTK_BIQUADRATIC_QUAD = 28
+# VTK_TRIQUADRATIC_HEXAHEDRON = 29
+# VTK_QUADRATIC_LINEAR_QUAD = 30
+# VTK_QUADRATIC_LINEAR_WEDGE = 31
+# VTK_BIQUADRATIC_QUADRATIC_WEDGE = 32
+# VTK_BIQUADRATIC_QUADRATIC_HEXAHEDRON = 33
+# VTK_BIQUADRATIC_TRIANGLE = 34
+#
+# // Cubic, isoparametric cell
+# VTK_CUBIC_LINE = 35
+#
+# // Special class of cells formed by convex group of points
+# VTK_CONVEX_POINT_SET = 41
+#
+# // Polyhedron cell (consisting of polygonal faces)
+# VTK_POLYHEDRON = 42
+#
+# // Higher order cells in parametric form
+# VTK_PARAMETRIC_CURVE = 51
+# VTK_PARAMETRIC_SURFACE = 52
+# VTK_PARAMETRIC_TRI_SURFACE = 53
+# VTK_PARAMETRIC_QUAD_SURFACE = 54
+# VTK_PARAMETRIC_TETRA_REGION = 55
+# VTK_PARAMETRIC_HEX_REGION = 56
+#
+# // Higher order cells
+# VTK_HIGHER_ORDER_EDGE = 60
+# VTK_HIGHER_ORDER_TRIANGLE = 61
+# VTK_HIGHER_ORDER_QUAD = 62
+# VTK_HIGHER_ORDER_POLYGON = 63
+# VTK_HIGHER_ORDER_TETRAHEDRON = 64
+# VTK_HIGHER_ORDER_WEDGE = 65
+# VTK_HIGHER_ORDER_PYRAMID = 66
+# VTK_HIGHER_ORDER_HEXAHEDRON = 67
+#
+# // Arbitrary order Lagrange elements (formulated separated from generic higher order cells)
+# VTK_LAGRANGE_CURVE = 68
+# VTK_LAGRANGE_TRIANGLE = 69
+# VTK_LAGRANGE_QUADRILATERAL = 70
+# VTK_LAGRANGE_TETRAHEDRON = 71
+# VTK_LAGRANGE_HEXAHEDRON = 72
+# VTK_LAGRANGE_WEDGE = 73
+# VTK_LAGRANGE_PYRAMID = 74
+#
+# // Arbitrary order Bezier elements (formulated separated from generic higher order cells)
+# VTK_BEZIER_CURVE = 75
+# VTK_BEZIER_TRIANGLE = 76
+# VTK_BEZIER_QUADRILATERAL = 77
+# VTK_BEZIER_TETRAHEDRON = 78
+# VTK_BEZIER_HEXAHEDRON = 79
+# VTK_BEZIER_WEDGE = 80
+# VTK_BEZIER_PYRAMID = 81
+
+ETYPE_STR_TO_ETYPE_INT = {
+    'vertex' : 1,
+    'line': 3,
+    'tri3': 5,
+    'quad4': 9,
+    'tetra4': 10,
+    'hexa8': 12,
+    'penta6': 13,
+    'pyram5': 14,
+    'tria6': 22,
+    'pyram13': 27,
+}
+ETYPE_INT_TO_NNODES = {
+    # etype: nnodes
+    1: 1, # vertex
+    3: 2, # line
+    5: 3, # ctri3
+    9: 4, # cquad4
+    10: 4, # ctetra4
+    14: 5, # cpyram5
+    12: 8, # chexa8
+    13: 6, # cpenta6
+    22: 6, # ctria6
+    27: 13, # cpyram13
+}
+
+def numpy_to_vtk_points(nodes: np. ndarray,
+                        points: Optional[vtkPoints]=None,
+                        dtype: str='<f', deep: int=1) -> vtkPoints:
     """common method to account for vtk endian quirks and efficiently adding points"""
     assert isinstance(nodes, np.ndarray), type(nodes)
     if points is None:
-        points = vtk.vtkPoints()
-        nnodes, ndim = nodes.shape
+        points = vtkPoints()
+        try:
+            nnodes, ndim = nodes.shape
+        except:
+            raise RuntimeError(nodes)
         assert ndim == 3, nodes.shape
         points.SetNumberOfPoints(nnodes)
 
-        # if we're in big endian, VTK won't work, so we byte swap
-        nodes = np.asarray(nodes, dtype=np.dtype(dtype))
+    # if we're in big endian, VTK won't work, so we byte swap
+    nodes = np.asarray(nodes, dtype=np.dtype(dtype))
 
     points_array = numpy_to_vtk(
         num_array=nodes,
         deep=deep,
-        array_type=vtk.VTK_FLOAT,
+        array_type=VTK_FLOAT,
     )
     points.SetData(points_array)
     return points
 
 
-def create_vtk_cells_of_constant_element_type(grid, elements, etype):
+def _check_shape(etype: int | str,
+                 elements: np.ndarray,
+                 nnodes_per_element: int) -> int:
+    """
+    The following table lists the supported vtk types
+
+    ID  Class.GetCellType()
+    ==  ===================
+    1   vtkVertex
+    3   vtkLine
+    5   vtkTriangle
+    12  vtkHexa
+    9   vtkQuad
+    10  vtkTetra
+    13  vtkPenta
+    14  vtkPyram
+    13  vtkWedge
+    25  vtkQuadraticHexahedron
+    26  vtkQuadraticWedge
+    27  vtkQuadraticPyramid
+
+    """
+    etype_int = -1
+    if isinstance(etype, str):
+        try:
+            etype_int = ETYPE_STR_TO_ETYPE_INT[etype]
+        except KeyError:
+            warnings.warn(f'no recommendation for etype={etype!r}; nnodes_per_element={nnodes_per_element}')
+            raise
+        nnodes = ETYPE_INT_TO_NNODES[etype_int]
+
+    elif isinstance(etype, int):
+        etype_int = etype
+        try:
+            nnodes = ETYPE_INT_TO_NNODES[etype_int]
+        except KeyError:
+            warnings.warn(f'no recommendation for etype={etype}; nnodes_per_element={nnodes_per_element}')
+    else:  # pragma: no cover
+        raise RuntimeError(etype)
+    assert nnodes_per_element == nnodes, elements.shape
+    return etype_int
+
+
+def create_vtk_cells_of_constant_element_type(grid: vtkUnstructuredGrid,
+                                              elements: np.ndarray,
+                                              etype: int | str) -> None:
     """
     Adding constant type elements is overly complicated.
+    See:
+     - create_vtk_cells_of_constant_element_types
 
     Parameters
     ----------
-    grid : vtk.vtkUnstructuredGrid()
+    grid : vtkUnstructuredGrid()
         the unstructured grid
     elements : (nelements, nnodes_per_element) int ndarray
         the elements to add
-    etype : int
+    etype : int | str
         VTK cell type
+        etype = 9  # vtkQuad().GetCellType()
 
     Notes
     -----
     The documentation in this method is triangle-specific as it was
     developed for a tri mesh.  It's more general than that though.
 
-    1 = vtk.vtkVertex().GetCellType()
-    3 = vtkLine().GetCellType()
-    5 = vtkTriangle().GetCellType()
-    9 = vtk.vtkQuad().GetCellType()
-    10 = vtkTetra().GetCellType()
-    #vtkPenta().GetCellType()
-    #vtkHexa().GetCellType()
-    #vtkPyram().GetCellType()
-
     """
     nelements, nnodes_per_element = elements.shape
-    if etype == 1: # vertex
-        assert nnodes_per_element == 1, elements.shape
-    if etype == 3: # line
-        assert nnodes_per_element == 2, elements.shape
-    elif etype == 5:  # tri
-        assert nnodes_per_element == 3, elements.shape
-    elif etype in [9, 10]:  # quad, tet4
-        assert nnodes_per_element == 4, elements.shape
+    etype_int = _check_shape(etype, elements, nnodes_per_element)
 
     # We were careful about how we defined the arrays, so the data
     # is contiguous when we ravel it.  Otherwise, you need to
@@ -78,11 +258,14 @@ def create_vtk_cells_of_constant_element_type(grid, elements, etype):
 
     #nodes = numpy_to_vtk(elements, deep=0, array_type=vtk.VTK_ID_TYPE)
     # (nnodes_per_element + 1)  # TODO: was 4; for a tri...didn't seem to crash???
+    # int8:  [-128 to 127]
+    # int32: [-2_147_483_648 to 2_147_483_647]  # 2.1 billion
+    # int64: [-9223372036854775808 to 9223372036854775807]
     cell_offsets = np.arange(0, nelements, dtype='int32') * (nnodes_per_element + 1)
     assert len(cell_offsets) == nelements
 
     # Create the array of cells
-    vtk_cells = vtk.vtkCellArray()
+    vtk_cells = vtkCellArray()
 
     dtype = get_numpy_idtype_for_vtk()
 
@@ -91,33 +274,38 @@ def create_vtk_cells_of_constant_element_type(grid, elements, etype):
     elements_vtk[:, 1:] = elements
 
     cells_id_type = numpy_to_vtkIdTypeArray(elements_vtk.ravel(), deep=1)
-    vtk_cells.SetCells(nelements, cells_id_type)
 
     # Cell types
     # 5 = vtkTriangle().GetCellType()
-    cell_types = np.ones(nelements, dtype='int32') * etype
+    cell_types = np.full(nelements, etype_int, dtype='int8')
     vtk_cell_types = numpy_to_vtk(
         cell_types, deep=0,
-        array_type=vtk.vtkUnsignedCharArray().GetDataType())
+        array_type=vtkUnsignedCharArray().GetDataType())
 
-    vtk_cell_offsets = numpy_to_vtk(cell_offsets, deep=0,
-                                    array_type=vtkConstants.VTK_ID_TYPE)
+    if _USE_LEGACY_SET_CELLS:
+        vtk_cells.SetCells(nelements, cells_id_type)
+        vtk_cell_offsets = numpy_to_vtk(cell_offsets, deep=0,
+                                        array_type=VTK_ID_TYPE)
+        grid.SetCells(vtk_cell_types, vtk_cell_offsets, vtk_cells)
+    else:
+        vtk_cells.ImportLegacyFormat(cells_id_type)
+        grid.SetCells(vtk_cell_types, vtk_cells)
 
-    grid.SetCells(vtk_cell_types, vtk_cell_offsets, vtk_cells)
-
-def create_vtk_cells_of_constant_element_types(grid, elements_list, etypes_list):
+def create_vtk_cells_of_constant_element_types(grid: vtkUnstructuredGrid,
+                                               elements_list: list[np.ndarray],
+                                               etypes_list: list[int] | list[str]) -> None:
     """
-    Adding constant type elements is overly complicated enough as in
+    Adding constant type elements is overly complicated enough in
     ``create_vtk_cells_of_constant_element_type``.  Now we extend
-    this to multiple element types.
+    this to multiple element types.  They're all stacked in order.
 
-    grid : vtk.vtkUnstructuredGrid()
+    grid : vtkUnstructuredGrid()
         the unstructured grid
-    elements_list : List[elements, ...]
+    elements_list : list[elements, ...]
         elements : (nelements, nnodes_per_element) int ndarray
             the elements to add
-    etypes_list : List[etype, ...]
-        etype : int
+    etypes_list : list[etype, ...]
+        etype : int | str
             the VTK flag as defined in
             ``create_vtk_cells_of_constant_element_type``
 
@@ -133,14 +321,15 @@ def create_vtk_cells_of_constant_element_types(grid, elements_list, etypes_list)
     elements_list2 = []
     nelements = 0
     noffsets = 0
-    for element, etype in zip(elements_list, etypes_list):
+    for element, etype_int_str in zip(elements_list, etypes_list):
         nelement, nnodes_per_element = element.shape
+        etype_int = _check_shape(etype_int_str, element, nnodes_per_element)
 
-        nnodesp1 = nnodes_per_element + 1  # TODO: was 4; for a tri???
+        nnodesp1 = nnodes_per_element + 1  # 4 for a tri
         cell_offset = np.arange(0, nelement, dtype='int32') * nnodesp1 + noffsets
         noffset = nelement * nnodesp1
 
-        cell_type = np.ones(nelement, dtype='int32') * etype
+        cell_type = np.ones(nelement, dtype='int32') * etype_int
         assert len(cell_offset) == nelement
 
         nnodesp1 = nnodes_per_element + 1
@@ -160,25 +349,29 @@ def create_vtk_cells_of_constant_element_types(grid, elements_list, etypes_list)
 
     # Create the array of cells
     cells_id_type = numpy_to_vtkIdTypeArray(elements_array.ravel(), deep=1)
-    vtk_cells = vtk.vtkCellArray()
-    vtk_cells.SetCells(nelements, cells_id_type)
+    vtk_cells = vtkCellArray()
 
     # Cell types
     vtk_cell_types = numpy_to_vtk(
         cell_types_array, deep=0,
-        array_type=vtk.vtkUnsignedCharArray().GetDataType())
+        array_type=vtkUnsignedCharArray().GetDataType())
 
-    vtk_cell_offsets = numpy_to_vtk(cell_offsets_array, deep=0,
-                                    array_type=vtkConstants.VTK_ID_TYPE)
+    if _USE_LEGACY_SET_CELLS:
+        vtk_cells.SetCells(nelements, cells_id_type)
+        vtk_cell_offsets = numpy_to_vtk(cell_offsets_array, deep=0,
+                                        array_type=VTK_ID_TYPE)
+        grid.SetCells(vtk_cell_types, vtk_cell_offsets, vtk_cells)
+    else:
+        vtk_cells.ImportLegacyFormat(cells_id_type)
+        grid.SetCells(vtk_cell_types, vtk_cells)
 
-    grid.SetCells(vtk_cell_types, vtk_cell_offsets, vtk_cells)
-
-def create_unstructured_point_grid(points, npoints):
+def create_unstructured_point_grid(points: vtkPoints,
+                                   npoints: int) -> vtkUnstructuredGrid:
     """creates a point grid"""
-    ugrid = vtk.vtkUnstructuredGrid()
+    ugrid = vtkUnstructuredGrid()
     ugrid.SetPoints(points)
 
-    cell_type_vertex = vtk.vtkVertex().GetCellType()
+    cell_type_vertex = vtkVertex().GetCellType()
     etypes = [cell_type_vertex]
     elements = [np.arange(npoints, dtype='int32').reshape(npoints, 1)]
     create_vtk_cells_of_constant_element_types(ugrid, elements, etypes)
@@ -187,17 +380,18 @@ def create_unstructured_point_grid(points, npoints):
     return ugrid
 
 
-def extract_selection_node_from_grid_to_ugrid(grid, selection_node):
+def extract_selection_node_from_grid_to_ugrid(grid: vtkUnstructuredGrid,
+                                              selection_node: vtkSelectionNode) -> vtkUnstructuredGrid:
     """
     Creates a sub-UGRID from a UGRID and a vtkSelectionNode.  In other
     words, we use a selection criteria (a definition of a subset of
     points or cells) and we create a reduced model.
 
     """
-    selection = vtk.vtkSelection()
+    selection = vtkSelection()
     selection.AddNode(selection_node)
 
-    extract_selection = vtk.vtkExtractSelection()
+    extract_selection = vtkExtractSelection()
     extract_selection.SetInputData(0, grid)
     extract_selection.SetInputData(1, selection)
     extract_selection.Update()
@@ -206,44 +400,49 @@ def extract_selection_node_from_grid_to_ugrid(grid, selection_node):
     return ugrid
 
 
-def create_vtk_selection_node_by_point_ids(point_ids):
+def create_vtk_selection_node_by_point_ids(point_ids: np.ndarray) -> vtkSelectionNode:
     id_type_array = _convert_ids_to_vtk_idtypearray(point_ids)
-    selection_node = vtk.vtkSelectionNode()
+    selection_node = vtkSelectionNode()
     #selection_node.SetContainingCellsOn()
     #selection_node.Initialize()
-    selection_node.SetFieldType(vtk.vtkSelectionNode.POINT)
-    selection_node.SetContentType(vtk.vtkSelectionNode.INDICES)
+    selection_node.SetFieldType(vtkSelectionNode.POINT)
+    selection_node.SetContentType(vtkSelectionNode.INDICES)
     selection_node.SetSelectionList(id_type_array)
     return selection_node
 
-def create_vtk_selection_node_by_cell_ids(cell_ids):
+def create_vtk_selection_node_by_cell_ids(cell_ids: np.ndarray) -> vtkSelectionNode:
     id_type_array = _convert_ids_to_vtk_idtypearray(cell_ids)
-    selection_node = vtk.vtkSelectionNode()
-    selection_node.SetFieldType(vtk.vtkSelectionNode.CELL)
-    selection_node.SetContentType(vtk.vtkSelectionNode.INDICES)
+    selection_node = vtkSelectionNode()
+    selection_node.SetFieldType(vtkSelectionNode.CELL)
+    selection_node.SetContentType(vtkSelectionNode.INDICES)
     selection_node.SetSelectionList(id_type_array)
     return selection_node
 
-def _convert_ids_to_vtk_idtypearray(ids):
+def _convert_ids_to_vtk_idtypearray(ids) -> vtkIdTypeArray:
     if isinstance(ids, int):
-        ids = [ids]
-    #else:
-        #for idi in ids:
-            #assert isinstance(idi, int), type(idi)
+        ids = np.array([ids], dtype='int64')
+    elif not isinstance(ids, np.ndarray):
+        ids = np.asarray(ids, dtype='int64')
+    ids = np.ascontiguousarray(ids.ravel().astype('int64'))
+    return numpy_to_vtkIdTypeArray(ids, deep=1)
 
-    id_type_array = vtk.vtkIdTypeArray()
-    id_type_array.SetNumberOfComponents(1)
-    for idi in ids:
-        id_type_array.InsertNextValue(idi)
-    return id_type_array
-
-def find_point_id_closest_to_xyz(grid, cell_id, node_xyz):
+def find_point_id_closest_to_xyz(grid: vtkUnstructuredGrid,
+                                 cell_id: int,
+                                 node_xyz: np.ndarray) -> Optional[int]:
+    """TODO: verify type of node_xyz"""
     cell = grid.GetCell(cell_id)
+    if cell is None:
+        return None
     nnodes = cell.GetNumberOfPoints()
     points = cell.GetPoints()
 
-    point0 = points.GetPoint(0)
-    dist_min = vtk.vtkMath.Distance2BetweenPoints(point0, node_xyz)
+    try:
+        point0 = points.GetPoint(0)
+    except ValueError:
+        #ValueError: expects 0 <= id && id < GetNumberOfPoints()
+        return None
+
+    dist_min = vtkMath.Distance2BetweenPoints(point0, node_xyz)
 
     imin = 0
     #point_min = point0
@@ -251,7 +450,7 @@ def find_point_id_closest_to_xyz(grid, cell_id, node_xyz):
         #point = array(points.GetPoint(ipoint), dtype='float32')
         #dist = norm(point - node_xyz)
         point = points.GetPoint(ipoint)
-        dist = vtk.vtkMath.Distance2BetweenPoints(point, node_xyz)
+        dist = vtkMath.Distance2BetweenPoints(point, node_xyz)
         if dist < dist_min:
             dist_min = dist
             imin = ipoint
@@ -259,7 +458,11 @@ def find_point_id_closest_to_xyz(grid, cell_id, node_xyz):
     point_id = cell.GetPointId(imin)
     return point_id
 
-def map_element_centroid_to_node_fringe_result(ugrid, location, log):
+def map_element_centroid_to_node_fringe_result(
+        ugrid: vtkUnstructuredGrid,
+        location: str,
+        log: SimpleLogger) -> tuple[bool,
+                                    tuple[int, int, float, float]]:
     """
     Maps elemental fringe results to nodal fringe results.
 
@@ -272,7 +475,7 @@ def map_element_centroid_to_node_fringe_result(ugrid, location, log):
     energy, this will map properly.
     """
     is_passed = False
-    failed_out = (None, None, None, None)
+    failed_out = (0, 0, 0.0, 0.0)
     if location == 'node':
         log.error('Not a centroidal result.')
         return is_passed, failed_out
@@ -282,8 +485,8 @@ def map_element_centroid_to_node_fringe_result(ugrid, location, log):
     # points = ugrid.GetPoints()
 
 
-    cell_data = ugrid.GetCellData()
-    point_data = ugrid.GetPointData()
+    cell_data: vtkCellData = ugrid.GetCellData()
+    point_data: vtkPointData = ugrid.GetPointData()
     # nnodes = point_data.GetNumberOfPoints()  # bad
     nnodes = ugrid.GetNumberOfPoints()
 
@@ -293,7 +496,7 @@ def map_element_centroid_to_node_fringe_result(ugrid, location, log):
         log.error('Expected centroidal results, but found none.  '
                   'The result has already been mapped.')
         return is_passed, failed_out
-    cell_results = vtk.util.numpy_support.vtk_to_numpy(vtk_cell_results)
+    cell_results = vtk_to_numpy(vtk_cell_results)
 
     icells = np.where(np.isfinite(cell_results))[0]
     if not len(icells):
@@ -317,7 +520,7 @@ def map_element_centroid_to_node_fringe_result(ugrid, location, log):
     for point_id, res in out_results_node.items():
         meani = np.average(res)
         point_results[point_id] = meani
-    vtk_point_results = numpy_to_vtk(point_results, deep=0, array_type=vtk.VTK_FLOAT)
+    vtk_point_results = numpy_to_vtk(point_results, deep=0, array_type=VTK_FLOAT)
     vtk_point_results.SetName('name')
 
     #points.SetData(points_array)
@@ -337,15 +540,14 @@ def map_element_centroid_to_node_fringe_result(ugrid, location, log):
     #out = obj.get_nlabels_labelsize_ncolors_colormap(i, name)
     #nlabels, labelsize, ncolors, colormap = out
 
-
     cell_data.SetActiveScalars(None)
     point_data.SetActiveScalars('name')
     is_passed = True
     return is_passed, (imin, imax, min_value, max_value)
 
-def update_axis_text_size(axis: vtk.vtkAxes,
+def update_axis_text_size(axis: vtkAxesActor,
                           coord_text_scale: float,
-                          width: float=1.0, height: float=0.25):
+                          width: float=1.0, height: float=0.25) -> None:
     """updates the coordinate system text size"""
     # width doesn't set the width
     # it being very large (old=0.1) makes the width constraint inactive
@@ -361,3 +563,23 @@ def update_axis_text_size(axis: vtk.vtkAxes,
         text.SetWidth(coord_text_scale * width)
         text.SetHeight(coord_text_scale * height)
 
+def set_vtk_id_filter_name(ids: vtkIdFilter, name: str,
+                           is_points: bool=False,
+                           is_cells: bool=False) -> None:
+    """
+    Parameters
+    ----------
+    point_cell_type : int
+        0 : point
+        1 : cell
+
+    """
+    xor = (is_points ^ is_cells)
+    assert xor, (is_points, is_cells)
+    if is_points:
+        ids.SetPointIdsArrayName(name)
+    elif is_cells:
+        ids.SetCellIdsArrayName(name)
+    else:  # pragma: no cover
+        raise RuntimeError(is_points, is_cells)
+    return

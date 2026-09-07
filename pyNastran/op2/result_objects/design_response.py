@@ -1,8 +1,10 @@
 import warnings
+from typing import TextIO
 import numpy as np
+from pyNastran.f06.f06_formatting import write_floats_12e, write_floats_10e
 
 class Responses:
-    """Defines SOL 200 responses"""
+    """Defines SOL 200 responses from the R1TABRG table"""
     def __init__(self):
         self.convergence_data = None
         self.desvars = None
@@ -16,8 +18,9 @@ class Responses:
         self.composite_strain_response = None
         self.flutter_response = None
         self.fractional_mass_response = None
+        self.normalized_mass_density = None
 
-    def get_stats(self, short=False) -> str:
+    def get_stats(self, short: bool=False) -> str:
         objects = [
             self.convergence_data,
             self.desvars,
@@ -31,11 +34,16 @@ class Responses:
             self.composite_strain_response,
             self.flutter_response,
             self.fractional_mass_response,
+            self.normalized_mass_density,
         ]
         msg = []
         for obj in objects:
             if obj is not None:
-                msg += obj.get_stats(short=short) + '\n'
+                if isinstance(obj, dict):
+                    for key, obji in dict.items():
+                        msg += obji.get_stats(short=short) + '\n'
+                else:
+                    msg += obj.get_stats(short=short) + '\n'
         return msg
 
     def get_table_types(self):
@@ -44,10 +52,16 @@ class Responses:
             'displacement_response', 'weight_response',
             'stress_response', 'strain_response', 'force_response',
             'composite_stress_response', 'composite_strain_response', 'flutter_response',
-            'fractional_mass_response',
+            'fractional_mass_response', 'normalized_mass_density',
         ]
         return ['responses.' + table for table in tables
-                if getattr(self, table) is not None]
+                #if getattr(self, table) is not None
+                ]
+
+    def __repr__(self) -> str:
+        msg = 'Responses:\n - ' + '\n - '.join(self.get_table_types()).rstrip('\n -')
+        return msg
+
 
 class WeightResponse:
     def __init__(self):
@@ -172,9 +186,9 @@ class WeightResponse:
         #msg += '  velocity=%s\n' % (velocity)
         return msg
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False):
         if short:
-            return 'responses.weight_response (%s)\n' % (self.n)
+            return f'responses.weight_response ({self.n:d})\n'
         return self.__repr__() + '\n'
 
 
@@ -211,7 +225,7 @@ class PropertyResponse:
         msg += '  pid = %s\n' % np.array(self.pid)
         return msg
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False):
         if short:
             return 'responses.%s_response (%s)\n' % (self.name, self.n)
         return self.__repr__() + '\n'
@@ -231,7 +245,7 @@ class FractionalMassResponse:
         self.type_flag = []
         self.seid = []
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False):
         if short:
             return 'responses.%s_response (%s)\n' % (self.name, self.n)
         return self.__repr__() + '\n'
@@ -289,7 +303,7 @@ class DisplacementResponse:
         self.seid.append(seid)
         self._n += 1
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False):
         if short:
             return 'responses.%s_response (%s)\n' % (self.name, self.n)
         return self.__repr__() + '\n'
@@ -346,7 +360,7 @@ class FlutterResponse:
         msg += '  velocity=%s\n' % np.array(self.velocity)
         return msg
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False):
         if short:
             return 'responses.%s_response (%s)\n' % (self.name, self.n)
         return self.__repr__() + '\n'
@@ -402,6 +416,8 @@ class DSCMCOL:
     def __init__(self, responses):
         """internal_response_id = iresponse + 1 = column in DSCM2"""
         self.responses = responses
+        # for key, response in self.responses.items():
+        #     assert 'name' in response, response
 
     #def write_f06(self):
         #msg = [
@@ -438,13 +454,14 @@ class DSCMCOL:
     def get_responses_by_group(self):
         response_groups_order = [
             'weight_volume', 'static', 'eigenvalue',
-            '???', 'psd',
+            'buckling',
+            '???', 'psd', 'aeroelastic flutter',
             '2',
         ]
         responses_groups = {key: [] for key in response_groups_order}
 
-
         response_name_to_group = {
+            # 'dresp2': 'combined',
             'weight': 'weight_volume',
             'volume': 'weight_volume',
 
@@ -454,6 +471,8 @@ class DSCMCOL:
             'composite failure': 'static',
             'composite strain': 'static',
 
+            'buckling': 'buckling',
+
             'psd displacement': 'psd',
             'psd acceleration': 'psd',
 
@@ -462,9 +481,12 @@ class DSCMCOL:
             'equivalent radiated power': '???',
             'frequency response displacement': '???',
             'frequency response stress?': '???',
-            'ceig': '???',
+            'ceig': '???',  #  complex eigenvalues
+            'aeroelastic flutter damping': 'aeroelastic flutter',
         }
         response_name_to_f06_response_type = {
+            # 'dresp2': '2',
+
             # weight/volume
             'weight' : 'WEIGHT',
             'volume': 'VOLUME',
@@ -477,14 +499,20 @@ class DSCMCOL:
             'composite failure': 'CFAILURE',
             'composite strain': 'CSTRAIN',
 
+            # buckling
+            'buckling': 'BUCK',
+
+            # complex eigenvalues
+            'ceig': 'CEIG?',
+
             # psd
             'psd displacement': 'DISP',
             'psd acceleration': 'ACCE',
 
             # ???
-            'frequency response displacement': '???',
-            'frequency response stress?': '???',
-            'ceig': '???',
+            'frequency response displacement': 'FRDISP?',
+            'frequency response stress?': 'FRSTRES?',
+            'aeroelastic flutter damping': 'FLUTTER',
         }
 
         for i, respi in self.responses.items():
@@ -526,9 +554,15 @@ class DSCMCOL:
                     msg += f'         {i+1:8d}        {external_id:8d}        {response_type:8s}\n'
             elif group_name == 'static':
                 msg += self._write_static(ids, response_name_to_f06_response_type)
-            elif group_name == 'eigenvalue':
+            elif group_name in ['eigenvalue', 'buckling']:
+                if group_name == 'eigenvalue':
+                    msg += '             -----  EIGENVALUE RESPONSES  -----\n'
+                elif group_name == 'buckling':
+                    msg += '             ------  BUCKLING RESPONSES  ------\n'
+                else:  # pragma: no cover
+                    raise RuntimeError(group_name)
+
                 msg += (
-                    '             -----  EIGENVALUE RESPONSES  -----\n'
                     '          --------------------------------------------------------------------------\n'
                     '            COLUMN         DRESP1         RESPONSE          MODE            SUB  \n'
                     '              NO.         ENTRY ID          TYPE             NO.            CASE \n'
@@ -542,28 +576,56 @@ class DSCMCOL:
                     subcase = respi['subcase']
                     response_type = response_name_to_f06_response_type[name]
                     msg += f'         {i+1:8d}        {external_id:8d}    {response_type:8s}            {mode_num:8d}        {subcase:8d}\n'
+            elif group_name == 'aeroelastic flutter':
+                msg += _write_dscmcol_flutter(self.responses, ids, response_name_to_f06_response_type)
             elif group_name == 'psd':
                 msg += self._write_psd(ids, response_name_to_f06_response_type)
+            elif group_name == 'equivalent radiated power':
+                msg += self._write_eq_radiated_power(ids, response_name_to_f06_response_type)
             elif group_name == '2':
                 msg += self._write_dresp2(ids)
             else:
-                warnings.warn(f'skipping DSCMCOL group_name={group_name}')
+                warnings.warn(f'skipping DSCMCOL group_name={group_name!r}')
                 for i in ids:
                     respi = self.responses[i]
                     warnings.warn(str(respi))
                 continue
             msg += '\n\n'
-        print(msg)
+        str(msg)
+        return msg
+
+    @property
+    def external_ids(self) -> list[int]:
+        external_ids = []
+        for resp in self.responses.values():
+            external_ids.append(resp['external_response_id'])
+            #print(resp)
+        return external_ids
+
+    @property
+    def names(self) -> list[str]:
+        names = []
+        for key, resp in self.responses.items():
+            #print(key, resp)
+            if 'name' in resp:
+                names.append(resp['name'])
+            else:
+                names.append('2')
+        return names
 
     def _write_static(self, ids, response_name_to_f06_response_type):
         msg = ''
         is_composite = False
         for i in ids:
             respi = self.responses[i]
-            name = respi['name']
-            if name in ['composite failure', 'composite strain']:
-                is_composite = True
-                break
+            if 'name' in respi:
+                name = respi['name']
+                if name in ['composite failure', 'composite strain']:
+                    is_composite = True
+                    break
+            else:
+                # DRESP2
+                continue
 
         msg += (
             '             -----  STATICS RESPONSES  -----\n'
@@ -619,8 +681,6 @@ class DSCMCOL:
 
         msg += (
             '             -----  PSD RESPONSES  -----\n'
-        )
-        msg += (
             '          ------------------------------------------------------------------------------------------------------------------------\n'
             '            COLUMN         DRESP1         RESPONSE        GRID/ELM        RANDPS         COMPONENT           SUB             PLY  \n'
             '              NO.         ENTRY ID          TYPE             ID            ID                NO.             CASE             NO. \n'
@@ -641,6 +701,40 @@ class DSCMCOL:
             else:
                 raise RuntimeError(respi)
         return msg
+
+    def _write_eq_radiated_power(self, ids, response_name_to_f06_response_type):
+        """
+        {'name': 'equivalent radiated power',
+        'panel': 555,
+        'flag': -102,
+        'subcase': 2,
+        'freq': 16.0,
+        'seid': 0,
+        'internal_response_id': 5,
+        'external_response_id': 889,
+        'response_type': 19,
+        'iresponse': 4,
+        'response_number': 1}
+        TODO: not verified
+        """
+        msg = ''
+
+        msg += (
+            '             -----  EQIVALENT RADIATED POWER RESPONSES  -----\n'
+            '          ------------------------------------------------------------------------------------------------------------------------\n'
+            '            COLUMN         DRESP1         RESPONSE        GRID/ELM        RANDPS           SUB             FREQ \n'
+            '              NO.         ENTRY ID          TYPE             ID            ID              CASE                 \n'
+            '          ------------------------------------------------------------------------------------------------------------------------\n'
+        )
+        for i in ids:
+            respi = self.responses[i]
+            external_id = respi['external_response_id']
+            name = respi['name']
+            subcase = respi['subcase']
+            freq = respi['freq']
+            response_type = response_name_to_f06_response_type[name]
+            msg += f'         {i+1:8d}        {external_id:8d}        {response_type:8s}        {subcase:8d}        {freq}\n'
+        return
 
     def _write_dresp2(self, ids):
         msg = (
@@ -706,11 +800,39 @@ class DSCMCOL:
                 msg += f'    {response_type:2d}: name={name!r}; names={names2}\n'
         return msg
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False):
+        self.get_responses_by_group()
         if short:
             return f'responses.dscmcol ({len(self.responses)})\n'
         return self.__repr__() + '\n'
 
+def _write_dscmcol_flutter(responses, ids,
+                           response_name_to_f06_response_type: dict[str, str]) -> str:
+    """flutter response writer"""
+    msg = '             -----  AEROELASTIC FLUTTER RESPONSES  -----\n'
+    msg += (
+        '          --------------------------------------------------------------------------------------------------------------------------\n'
+        '            COLUMN         DRESP1         RESPONSE         SUBCASE           MODE         DENSITY            MACH         VELOCITY\n'
+        '              NO.         ENTRY ID          TYPE              ID              NO.                             NO.                 \n'
+        '          --------------------------------------------------------------------------------------------------------------------------\n'
+    )
+    for i in ids:
+        #{'name': 'aeroelastic flutter damping', 'subcase': 1,
+         #'mode': 2, 'density': 1.226991, 'mach': 0.1529329, 'vel': 52.0, 'seid': 0,
+         #'internal_response_id': 2, 'external_response_id': 3,
+         #'response_type': 84, 'iresponse': 1, 'response_number': 1}
+        respi = responses[i]
+        external_id = respi['external_response_id']
+        name = respi['name']
+        mode_num = respi['mode']
+        mach = respi['mach']
+        velocity = respi['velocity']
+        density = respi['density']
+        subcase = respi['subcase']
+        response_type = response_name_to_f06_response_type[name]
+        msg += f'         {i+1:8d}        {external_id:8d}        {response_type:8s}        {subcase:8d}        {mode_num:8d}        {density:8.3f}        {mach:8.3f}        {velocity:8.3f}\n'
+    #print(msg)
+    return msg
 
 class Desvars:
     def __init__(self, desvars):
@@ -726,10 +848,16 @@ class Desvars:
 
         encoding = 'ascii'
         for i, (internal_id, desvar_id, label, lower, upper, delxv, dunno) in enumerate(desvars):
-            #print((internal_id, desvar_id, label, lower, upper, delxv, dunno))
+            try:
+                label_str = label.decode(encoding)
+                #print((internal_id, desvar_id, label_str, lower, upper, delxv, dunno))
+            except Exception:
+                label_str = 'fake_%d' % i
+                #warnings.warn(str([internal_id, desvar_id, label, label_str, lower, upper, delxv, dunno]))
+                #raise
             self.internal_id[i] = internal_id
             self.desvar_id[i] = desvar_id
-            self.label[i] = label.decode(encoding).strip()
+            self.label[i] = label_str.strip()
             self.lower[i] = lower
             self.upper[i] = upper
             self.delxv[i] = delxv
@@ -747,7 +875,30 @@ class Desvars:
         msg += '  dunno = %s\n' % self.dunno
         return msg
 
-    def get_stats(self, short=False):
+    def write_f06(self, f06_file: TextIO) -> None:
+        msg = (
+            '                                                  -----   DESIGN VARIABLES   -----\n'
+            '\n'
+            '     ---------------------------------------------------------------------------------------------------------\n'
+            '            INTERNAL       DESVAR                         LOWER                               UPPER   \n'
+            '               ID            ID          LABEL            BOUND             VALUE             BOUND   \n'
+            '     ---------------------------------------------------------------------------------------------------------\n'
+            #'                   1        300002      T101            5.0800E-03        5.0800E-03        2.0000E-02\n'
+        )
+        for internal, desvar, label, lower, upper, delxv, dunno in zip(self.internal_id, self.desvar_id, self.label, self.lower, self.upper, self.delxv, self.dunno):
+            msg += f'            {internal:8d}      {desvar:8d}  {label:8s}            {lower:10.8e}        {delxv:10.8e}        {upper:10.8e}\n'
+
+        f06_file.write(msg)
+        #'                                                       DESIGN VARIABLE HISTORY'
+        #' ----------------------------------------------------------------------------------------------------------------------------------'
+        #'  INTERNAL |   EXTERNAL   |             |                                                                                          '
+        #'   DV. ID. |    DV. ID.   |    LABEL    |   INITIAL    :      1       :      2       :      3       :      4       :      5       :'
+        #' ----------------------------------------------------------------------------------------------------------------------------------'
+        #'         1 |     300002   |  T101       |   5.0800E-03 :'
+        return msg
+
+
+    def get_stats(self, short: bool=False):
         if short:
             return f'responses.desvars ({len(self.internal_id)})\n'
         return self.__repr__() + '\n'
@@ -816,18 +967,102 @@ class Convergence:
         self.desvar_values[n, :] = desvar_values
         self._n += 1
 
-    def __repr__(self):
+    def write_f06(self, f06: TextIO) -> None:
+        niterations = len(self.design_iter)
+
+        conv_result = self.conv_result[-1]
+        if conv_result == 'hard':
+            conv_msg = '\n                                                      (HARD CONVERGENCE ACHIEVED)\n'
+        elif conv_result == 'best_design':
+            conv_msg = '\n                                                      (HARD CONVERGENCE ACHIEVED)\n'
+            #conv_msg += '* CONVERGENCE ACHEIVED: BEST FEASIBLE DESIGN\n'
+        #elif conv_result == 'soft':
+            #conv_msg += '                                                      (SOFT CONVERGENCE ACHIEVED)\n'
+        elif conv_result == 'no':
+            conv_msg = ''
+        else: # pragma: no cover
+            raise NotImplementedError(conv_result)
+
+        msg = (
+            '                                   ***************************************************************\n'
+            '                                   S U M M A R Y   O F   D E S I G N    C Y C L E    H I S T O R Y\n'
+            '                                   ***************************************************************\n'
+            f'{conv_msg}'
+            '\n'
+            '\n'
+            f'                                       NUMBER OF FINITE ELEMENT ANALYSES COMPLETED           {niterations}\n'
+            '                                       NUMBER OF OPTIMIZATIONS W.R.T. APPROXIMATE MODELS     ?\n'
+            '\n'
+            '\n'
+            '                                              OBJECTIVE AND MAXIMUM CONSTRAINT HISTORY\n'
+            '           ---------------------------------------------------------------------------------------------------------------\n'
+            '                              OBJECTIVE FROM           OBJECTIVE FROM          FRACTIONAL ERROR          MAXIMUM VALUE  \n'
+            '             CYCLE              APPROXIMATE                 EXACT                    OF                       OF\n'
+            '             NUMBER            OPTIMIZATION               ANALYSIS              APPROXIMATION             CONSTRAINT   \n'
+            '           ---------------------------------------------------------------------------------------------------------------\n'
+            '\n'
+            #'             INITIAL                                      4.690397E-01                                      9.000000E+00\n'
+            #'           ---------------------------------------------------------------------------------------------------------------\n'
+
+            #'                                                       DESIGN VARIABLE HISTORY\n'
+            #' ----------------------------------------------------------------------------------------------------------------------------------\n'
+            #'  INTERNAL |   EXTERNAL   |             |                                                                                          \n'
+            #'   DV. ID. |    DV. ID.   |    LABEL    |   INITIAL    :      1       :      2       :      3       :      4       :      5       :\n'
+            #' ----------------------------------------------------------------------------------------------------------------------------------\n'
+            #'         1 |     300002   |  T101       |   5.0800E-03 :'
+
+            #'                                                       CONVERGENCE HISTORY\n'
+            #' ----------------------------------------------------------------------------------------------------------------------------------\n'
+            #'  INTERNAL |   EXTERNAL   |             |                                                                                          \n'
+            #'   DV. ID. |    DV. ID.   |    LABEL    |   INITIAL    :      1       :      2       :      3       :      4       :      5       :\n'
+            #' ----------------------------------------------------------------------------------------------------------------------------------\n'
+            #'DESIGN_ITER  iconvergence  conv_result  obj_initial  obj_final  constraint_max  iconstraint_max  DESVAR_value\n'
+            #'===========  ============  ===========  ===========  =========  ==============  ===============  ============\n'
+            #'         1 |     300002   |  T101       |   5.0800E-03 :'
+
+        )
+        #iconvergence = HARD
+        #conv_result = NO
+        stop = False
+        for design_iter, iconvergence, conv_result, obj_initial, obj_final, constraint_max, iconstraint_max, desvar_values in zip(
+            self.design_iter, self.iconvergence, self.conv_result, self.obj_initial, self.obj_final,
+            self.constraint_max, self.row_constraint_max, self.desvar_values):
+            constraint_max_str = f'{constraint_max:13.6e}'
+            if '.' not in constraint_max_str:
+                constraint_max_str = '    N/A      '
+
+            if design_iter == 1:
+                design_iter_str = 'INITIAL'
+                obj_initial = ''
+                msg += f'             {design_iter_str:7s}         {obj_initial  :13s}                 {obj_final:13.6e}                                      {constraint_max_str}\n'
+            else:
+                design_iter_str = str(design_iter)
+                obj_initial = ''
+                msg += f'             {design_iter_str:7s}         {obj_initial  :13s}                 {obj_final:13.6e}                                      {constraint_max_str}\n'
+
+            #msg += f'{design_iter:8d} {iconvergence:8s} {conv_result:8d} {obj_initial:8e} {obj_final:8e} {constraint_max:8e} {iconstraint_max:8d} {desvar_value:8e} \n'
+        msg += '           ---------------------------------------------------------------------------------------------------------------\n'
+        if conv_result not in {'hard', 'no', 'best_design'}:  # pragma: no cover
+            stop = True
+        if stop:  # pragma: no cover
+            print(msg)
+            asdf
+        f06.write(msg)
+
+
+    def __repr__(self) -> str:
         msg = 'Convergence()\n'
-        msg += '  shape=(%s, %s)\n' % (self.n, self.ndesign_variables)
         msg += '  design_iter = %s\n' % self.design_iter
         msg += '  icovergence = %s\n' % self.iconvergence
         msg += '  conv_result = %s\n' % self.conv_result
         msg += '  obj_initial = %s\n' % self.obj_initial
+        msg += '  obj_final = %s\n' % self.obj_final
         msg += '  constraint_max = %s\n' % self.constraint_max
         msg += '  row_constraint_max = %s\n' % self.row_constraint_max
+        msg += f'  desvar_values; shape=({self.n}, {self.ndesign_variables}):\n{self.desvar_values}'
         return msg
 
-    def get_stats(self, short=False):
+    def get_stats(self, short: bool=False) -> str:
         if short:
             return 'responses.convergence_data (%s, %s)\n' % (self.n, self.ndesign_variables)
         return self.__repr__() + '\n'

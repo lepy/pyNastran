@@ -1,11 +1,18 @@
-from typing import List
+from typing import TextIO, Optional
 import numpy as np
-from numpy import zeros, searchsorted, unique, ravel
 
-from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.femutils.utils import pivot_table
+from pyNastran.utils.numpy_utils import integer_types, integer_float_types
+from pyNastran.op2.stress_reduction import von_mises_2d, max_shear
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype, combination_inplace
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_element_node
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
-    StressObject, StrainObject, OES_Object)
-from pyNastran.f06.f06_formatting import write_floats_12e, _eigenvalue_header
+    StressObject, StrainObject, OES_Object, oes_real_data_code, get_scode,
+    set_static_case, set_modal_case, set_transient_case, set_post_buckling_case,
+)
+from pyNastran.f06.f06_formatting import write_floats_12e, write_floats_12e_long, _eigenvalue_header
+from pyNastran.op2.op2_interface.write_utils import set_table3_field, view_dtype, view_idtype_as_fdtype
+from pyNastran.op2.writer.utils import fdtype_from_data
 
 
 class RealCompositePlateArray(OES_Object):
@@ -27,6 +34,31 @@ class RealCompositePlateArray(OES_Object):
         #else:
             #raise NotImplementedError('SORT2')
 
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        h5_table_dict = {
+            'EID': Int64Col(pos=0),
+            'PLY': Int64Col(pos=1),
+            'X1': Float64Col(pos=2),
+            'Y1': Float64Col(pos=3),
+            'T1': Float64Col(pos=4),
+            'L1': Float64Col(pos=5),
+            'L2': Float64Col(pos=6),
+            'DOMAIN_ID': Int64Col(pos=7),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr, ntime_neid0: int, ntime_neid1: int, itime: int):
+        #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+        arr["EID"][ntime_neid0:ntime_neid1] = self.element_layer[:, 0]
+        arr["PLY"][ntime_neid0:ntime_neid1] = self.element_layer[:, 1]
+        arr["X1"][ntime_neid0:ntime_neid1] = self.data[itime, :, 0]
+        arr["Y1"][ntime_neid0:ntime_neid1] = self.data[itime, :, 1]
+        arr["T1"][ntime_neid0:ntime_neid1] = self.data[itime, :, 2]
+        arr["L1"][ntime_neid0:ntime_neid1] = self.data[itime, :, 3]
+        arr["L2"][ntime_neid0:ntime_neid1] = self.data[itime, :, 4]
+
+
     @property
     def is_real(self) -> bool:
         return True
@@ -39,15 +71,12 @@ class RealCompositePlateArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
         raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
-
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
 
     def build(self):
         """sizes the vectorized attributes of the RealCompositePlateArray"""
@@ -75,17 +104,21 @@ class RealCompositePlateArray(OES_Object):
         self.itime = 0
         self.ielement = 0
         self.itotal = 0
-        self.is_built = True
 
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
 
-        _times = zeros(self.ntimes, dtype=dtype)
-        element_layer = zeros((self.ntotal, 2), dtype='int32')
+        if self.is_sort1:
+            ntimes = self.ntimes
+            ntotal = self.ntotal
+        else:
+            ntimes = self.ntotal
+            ntotal = self.ntimes
+
+        _times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        element_layer = np.zeros((ntotal, 2), dtype=idtype)
 
         #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
-        data = zeros((self.ntimes, self.ntotal, 9), dtype='float32')
+        data = np.zeros((ntimes, ntotal, 9), dtype=fdtype)
 
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
@@ -142,9 +175,9 @@ class RealCompositePlateArray(OES_Object):
             #[(1, 1.4822459136312394e-10, -8.673617379884035e-19, 9.313225746154785e-10)
              #(2, 3.353939638127037e-09, 4.440892098500626e-16, 2.1073424255447017e-08)
              #(3, 1.4822459136312394e-10, 8.673617379884035e-19, 9.313225746154785e-10)]
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_element_node(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
                 headers, self.element_layer, self.data)
         else:
             element_layer = [self.element_layer[:, 0], self.element_layer[:, 1]]
@@ -166,11 +199,199 @@ class RealCompositePlateArray(OES_Object):
             data_frame.columns.names = ['Static']
             self.data_frame = data_frame
 
+    def envelope(self,
+                 eids: np.ndarray,
+                 result_name: str) -> np.ndarray:
+        is_min = (result_name == 'min')
+        func_name = 'nanmin' if is_min else 'nanmax'
+        max_min_func = getattr(np, func_name)
+
+        # self.element_layer = group.create_dataset('element_layer', data=element_layer)
+
+        # print(''.join(self.get_stats()))
+        element = np.unique(self.element_layer[:, 0])
+        ielement = np.searchsorted(element, eids)
+        assert np.array_equal(element[ielement], eids)
+
+        #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+        stress_strain_dict_map = {
+            'max': 6,
+            'min': 7,
+        }
+        ntime, nelement_node, _ = self.data.shape
+        if result_name == 'von_mises':
+            data = self.von_mises()
+        elif result_name == 'max_shear':
+            data = self.max_shear()
+        elif result_name == 'abs_max':
+            # TODO: wrong, but ok...
+            data = np.abs(self.data[:, :, [6,8]]).max(axis=2)
+            assert data.shape == (ntime, nelement_node), data.shape
+        elif result_name in stress_strain_dict_map:
+            iresult = stress_strain_dict_map[result_name]
+            data = self.data[:, :, iresult]
+        else:  # pragma: No cover
+            raise NotImplementedError(result_name)
+
+        neid = len(element)
+        assert data.ndim == 2, data.shape
+        ntime, nelement_layer = data.shape
+
+        # reshape for the pivot_table
+        data = data.reshape(ntime, nelement_layer, 1)
+
+        row_eids = self.element_layer[:, 0]
+        col_layers = self.element_layer[:, 1]
+        ulayers = np.unique(col_layers)
+        nlayer = len(ulayers)
+        pivot_data, eids_new = pivot_table(data, row_eids, col_layers, shape=3)
+        pivot_data = pivot_data.reshape(ntime, neid, nlayer)
+        assert pivot_data.shape == (ntime, neid, nlayer), pivot_data.shape
+
+        # squash the time and layer axes
+        eid_data = max_min_func(pivot_data, axis=(0, 2))
+        assert eid_data.shape == (neid,), (eid_data.shape, neid)
+
+        return eid_data[ielement]
+
+    def von_mises(self) -> np.ndarray:
+        if self.is_von_mises:
+            return self.data[:, :, -1]
+        #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+        oxx = self.data[:, :, 0]
+        oyy = self.data[:, :, 1]
+        txy = self.data[:, :, 2]
+        ovm = von_mises_2d(oxx, oyy, txy, self.is_stress)
+        return ovm
+
+    def max_shear(self) -> np.ndarray:
+        """hasn't been checked for strain"""
+        if not self.is_von_mises:
+            return self.data[:, :, -1]
+        #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+        omax = self.data[:, :, 6]
+        omin = self.data[:, :, 7]
+        max_sheari = max_shear(omax, omin)
+        return max_sheari
+
+    @classmethod
+    def _add_case(cls,
+                  table_name, element_name, isubcase,
+                  is_sort1, is_random, is_msc,
+                  random_code, title, subtitle, label):
+        is_strain = 'Strain' in cls.__name__
+        assert isinstance(is_strain, bool), is_strain
+        assert isinstance(element_name, str), element_name
+        num_wide = 11
+
+        # 95 - CQUAD4
+        # 96 - CQUAD8
+        # 97 - CTRIA3
+        # 98 - CTRIA6 (composite)
+        # 232 - QUADRLC (CQUADR-composite)
+        # 233 - TRIARLC (CTRIAR-composite)
+        ELEMENT_NAME_TO_ELEMENT_TYPE = {
+            'CQUAD4': 95,
+            'CQUAD8': 96,
+            'CTRIA3': 97,
+            'CTRIA6': 98,
+            'CQUADR': 232,
+            'CTRIAR': 233,
+        }
+        element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name]
+
+        data_code = oes_real_data_code(table_name,
+                                       element_name, num_wide,
+                                       is_sort1=is_sort1, is_random=is_random,
+                                       random_code=random_code,
+                                       title=title, subtitle=subtitle, label=label,
+                                       is_msc=is_msc)
+        data_code['element_name'] = element_name
+        data_code['element_type'] = element_type
+
+        if is_strain:
+            # fiber   # 2  =0
+            # strain  # 1,3=1
+            #stress_bits[2] == 0
+            stress_bits = [1, 1, 0, 1, 0]
+            #data_code['s_code'] = 1 # strain?
+        else:
+            # fiber   # 2   =0
+            # stress  # 1, 3=0
+            stress_bits = [0, 0, 0, 0, 0]
+            #data_code['s_code'] = 0
+
+        s_code = get_scode(stress_bits)
+        data_code['stress_bits'] = stress_bits
+        data_code['s_code'] = s_code
+
+        assert stress_bits[1] == stress_bits[3]  # strain
+        return data_code
+
+    @classmethod
+    def add_static_case(cls, table_name, element_layer, data, isubcase,
+                        element_name: str,
+                        is_sort1=True, is_random=False, is_msc=True,
+                        random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+
+        obj = set_static_case(cls, is_sort1, isubcase, data_code,
+                              _set_class, (element_layer, data))
+        return obj
+
+    @classmethod
+    def add_transient_case(cls, table_name, element_layer, data, isubcase,
+                           element_name: str,
+                           times,
+                           is_sort1=True, is_random=False, is_msc=True,
+                           random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+
+        obj = set_transient_case(cls, is_sort1, isubcase, data_code,
+                                 _set_class, (element_layer, data), times)
+        return obj
+
+    @classmethod
+    def add_modal_case(cls, table_name, element_layer, data, isubcase,
+                       element_name: str,
+                       modes, eigns, cycles,
+                       is_sort1=True, is_random=False, is_msc=True,
+                       random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_modal_case(cls, is_sort1, isubcase, data_code,
+                             _set_class, (element_layer, data),
+                             modes, eigns, cycles)
+        return obj
+
+    @classmethod
+    def add_post_buckling_case(cls, table_name, element_layer, data, isubcase,
+                               element_name: str,
+                               modes, eigrs, eigis,
+                               is_sort1=True, is_random=False, is_msc=True,
+                               random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_post_buckling_case(cls, is_sort1, isubcase, data_code,
+                                     _set_class, (element_layer, data),
+                                     modes, eigrs, eigis)
+        return obj
+
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
         self._eq_header(table)
         if not np.array_equal(self.element_layer, table.element_layer):
-            assert self.element_node.shape == table.element_layer.shape, 'element_layer shape=%s table.shape=%s' % (
+            assert self.element_layer.shape == table.element_layer.shape, 'element_layer shape=%s table.shape=%s' % (
                 self.element_layer.shape, table.element_layer.shape)
             msg = 'table_name=%r class_name=%s\n' % (self.table_name, self.__class__.__name__)
             msg += '%s\n' % str(self.code_information())
@@ -208,8 +429,9 @@ class RealCompositePlateArray(OES_Object):
                     raise ValueError(msg)
         return True
 
-    def add_new_eid_sort1(self, etype, dt, eid, layer, o11, o22, t12, t1z, t2z,
+    def add_eid_sort1(self, etype, dt, eid, layer, o11, o22, t12, t1z, t2z,
                           angle, major, minor, ovm):
+        assert self.sort_method == 1, self
         self._times[self.itime] = dt
         self.element_layer[self.itotal, :] = [eid, layer]
         self.data[self.itime, self.itotal, :] = [o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
@@ -219,18 +441,44 @@ class RealCompositePlateArray(OES_Object):
     def add_sort1(self, dt, eid, layer, o11, o22, t12, t1z, t2z, angle,
                   major, minor, ovm):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert eid is not None
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self.element_layer[self.itotal, :] = [eid, layer]
         self.data[self.itime, self.itotal, :] = [o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
         self.itotal += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def add_eid_sort2(self, etype, dt, eid, layer, o11, o22, t12, t1z, t2z,
+                          angle, major, minor, ovm):
+        assert self.is_sort2, self
+        itime = self.itotal
+        itotal = self.itime
+        self._times[itime] = dt
+        self.element_layer[itotal, :] = [eid, layer]
+        self.data[itime, itotal, :] = [o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+        self.itotal += 1
+        self.ielement += 1
+
+    def add_sort2(self, dt, eid, layer, o11, o22, t12, t1z, t2z, angle,
+                  major, minor, ovm):
+        """unvectorized method for adding SORT2 transient data"""
+        assert self.is_sort2, self
+        assert eid is not None
+        assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
+        itime = self.itotal
+        itotal = self.itime
+        self._times[itime] = dt
+        #self.element_layer[itotal, :] = [eid, layer]
+        self.data[self.itime, itotal, :] = [o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+        self.itotal += 1
+
+    def get_stats(self, short: bool=False) -> list[str]:
+        class_name = self.__class__.__name__
         if not self.is_built:
             msg = [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{class_name}>\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
             return msg
 
@@ -238,23 +486,20 @@ class RealCompositePlateArray(OES_Object):
         ntimes = self.ntimes
         #nnodes = self.nnodes
         ntotal = self.ntotal
-        nelements = len(unique(self.element_layer[:, 0]))
-
+        nelements = len(np.unique(self.element_layer[:, 0]))
         msg = []
         if self.nonlinear_factor not in (None, np.nan):  # transient
-            msg.append('  type=%s ntimes=%i nelements=%i ntotal=%i\n'
-                       % (self.__class__.__name__, ntimes, nelements, ntotal))
+            msg.append(f'  type={class_name} ntimes={ntimes:d} nelements={nelements:d} ntotal={ntotal}; table_name={self.table_name_str}\n')
             ntimes_word = 'ntimes'
         else:
-            msg.append('  type=%s nelements=%i ntotal=%i\n'
-                       % (self.__class__.__name__, nelements, ntotal))
+            msg.append(f'  type={class_name} nelements={nelements:d} ntotal={ntotal:d}\n')
             ntimes_word = '1'
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element_layer.shape = %s\n' % str(self.element_layer.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element_layer.shape = {self.element_layer.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -280,18 +525,134 @@ class RealCompositePlateArray(OES_Object):
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element_layer[:, 0])  #[0]
+        itot = np.searchsorted(eids, self.element_layer[:, 0])  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        ind = ravel([searchsorted(self.element_layer[:, 0] == eid) for eid in eids])
-        #ind = searchsorted(eids, self.element)
+        ind = np.ravel([np.searchsorted(self.element_layer[:, 0] == eid) for eid in eids])
+        #ind = np.searchsorted(eids, self.element)
         #ind = ind.reshape(ind.size)
         #ind.sort()
         return ind
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+
+    def linear_combination(self, factor: integer_float_types,
+                           data: Optional[np.ndarray]=None,
+                           update: bool=True) -> None:
+        #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm/shear]
+        ires = [0, 1, 2, 3, 4] # o11-t2z
+        combination_inplace(self.data, data, factor, ires=ires)
+        if update:
+            self.update_data_components()
+
+    def update_data_components(self):
+        if self.is_strain:
+            import warnings
+            warnings.warn('verify composite plate principal strains/angle, von_mises/max_shear')
+
+        # https://www.continuummechanics.org/principalstressesandstrains.html
+        o11 = self.data[:, :, 0]
+        o22 = self.data[:, :, 1]
+        t12 = self.data[:, :, 2]
+
+        # ndata = len(o11.ravel())
+        # mat = np.zeros((ndata, 2, 2))
+        # mat[:, 0, 0] = o11.ravel()
+        # mat[:, 1, 1] = o22.ravel()
+        # mat[:, 0, 1] = mat[:, 1, 0] = t12.ravel()
+        # eign = np.linalg.eigvals(mat)
+        # assert eign.shape == (ndata, 2)
+
+        #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm/shear]
+        itheta = 5
+        imax = 6
+        imin = 7
+        ivm = 8
+        mid = (o11 + o22) / 2
+        do11_22 = o11 - o22
+        radius = np.sqrt((do11_22 / 2)**2 + t12**2)
+        theta2 = np.atan2(2*t12, do11_22)
+        maxi = mid + radius
+        mini = mid - radius
+
+        if self.is_von_mises:
+            # https://en.wikipedia.org/wiki/Von_Mises_yield_criterion
+            ovm = np.sqrt(maxi**2 + mini**2 - maxi*mini)
+        else:
+            # https://ansyshelp.ansys.com/public/account/secured?returnurl=/Views/Secured/corp/v251/en/wb_sim/ds_Maximum_Stress.html
+            ovm = (maxi - mini) / 2.
+        self.data[:, :, itheta] = np.degrees(theta2 / 2.)
+        self.data[:, :, imax] = maxi
+        self.data[:, :, imin] = mini
+        self.data[:, :, ivm] = ovm
+        return
+
+    def write_csv(self, csv_file: TextIO,
+                  is_exponent_format: bool=False,
+                  is_mag_phase: bool=False, is_sort1: bool=True,
+                  write_header: bool=True):
+        """
+        Stress Table - PCOMP
+        ---------------------
+        Flag,  SubcaseID, iTime, EID, Layer,      FD,      Sxx,      Syy, Szz,       Sxy, Syz, Szx
+        10,            1,     1, 301,     1, -0.1250, 1208.084, 290.0204,   0,  1594.263,   0,   0
+        10,            1,     1, 301,     2, -0.0625, 291.0046, 991.1379,   0,  916.3578,   0,   0
+        10,            1,     1, 301,     3,       0, 809.2431, 413.8515,   0,  966.4908,   0,   0
+        10,            1,     1, 301,     4,  0.0625, 443.0045, 1707.213,   0,  1897.417,   0,   0
+        10,            1,     1, 301,     5,   0.125, 370.4785, 1253.329,   0,  1221.529,   0,   0
+
+        """
+        name = str(self.__class__.__name__)
+        if write_header:
+            csv_file.write('# %s\n' % name)
+            headers = ['Flag', 'SubcaseID', 'iTime', 'Eid', 'Layer', 'FD',
+                       'Sxx', 'Syy', 'Szz', 'Sxy', 'Syz', 'Sxz']
+            csv_file.write('# ' + ','.join(headers) + '\n')
+
+        # stress vs. strain
+        flag = 10 if 'Stress' in name else 11
+
+        isubcase = self.isubcase
+        #times = self._times
+
+        # write the f06
+        ntimes = self.data.shape[0]
+
+        eids = self.element_layer[:, 0]
+        layers = self.element_layer[:, 1]
+
+        zero = ' 0.000000E+00'
+        for itime in range(ntimes):
+            #dt = self._times[itime]
+            #header = _eigenvalue_header(self, header, itime, ntimes, dt)
+
+            #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+
+            #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+            o11 = self.data[itime, :, 0]
+            o22 = self.data[itime, :, 1]
+            t12 = self.data[itime, :, 2]
+            t1z = self.data[itime, :, 3]
+            t2z = self.data[itime, :, 4]
+            #angle = self.data[itime, :, 5]
+            #major = self.data[itime, :, 6]
+            #minor = self.data[itime, :, 7]
+            #ovm = self.data[itime, :, 8]
+
+            #fd = 0.
+            fd = np.nan
+            for eid, layer, o11i, o22i, t12i, t1zi, t2zi in zip(
+                    eids, layers, o11, o22, t12, t1z, t2z):
+                if is_exponent_format:
+                    [o11i, o22i, t12i, t1zi, t2zi] = write_floats_12e_long([
+                        o11i, o22i, t12i, t1zi, t2zi])
+                csv_file.write(f'{flag}, {isubcase}, {itime}, {eid}, {layer}, {fd}, '
+                               f'{o11i}, {o22i}, {zero}, '
+                               f'{t12i}, {t1zi}, {t2zi}\n')
+        return
+
+    def write_f06(self, f06_file: TextIO, header=None, page_stamp='PAGE %s',
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         #msg, nnodes, is_bilinear = self._get_msgs()
@@ -310,44 +671,40 @@ class RealCompositePlateArray(OES_Object):
                      '     ID      ID    NORMAL-1     NORMAL-2     SHEAR-12     SHEAR XZ-MAT  SHEAR YZ-MAT  ANGLE    MAJOR        MINOR        %s\n' % mises]
 
         if self.element_type == 95:  # CQUAD4
-            if self.is_strain:
-                msg = ['                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( Q U A D 4 )\n'] + words
-            else:
-                msg = ['                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( Q U A D 4 )\n'] + words
-        #elif self.element_type == 96:  # CQUAD8
+            etype_str = 'Q U A D 4'
+        #elif self.element_type == 96:  # CQUAD8 ???
             #nnodes_per_element = 1
         elif self.element_type == 97:  # CTRIA3
-            if self.is_strain:
-                msg = ['                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( T R I A 3 )\n'] + words
-            else:
-                msg = ['                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( T R I A 3 )\n'] + words
+            etype_str = 'T R I A 3'
         elif self.element_type == 96:  # QUAD8
             # good
-            if self.is_strain:
-                msg = ['                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( Q U A D 8 )\n'] + words
-            else:
-                msg = ['                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( Q U A D 8 )\n'] + words
-
+            etype_str = 'Q U A D 8'
         elif self.element_type == 98:  # CTRIA6
             # good
-            if self.is_strain:
-                msg = ['                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( T R I A 6 )\n'] + words
-            else:
-                msg = ['                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( T R I A 6 )\n'] + words
+            etype_str = 'T R I A 6'
         elif self.element_type == 233:  # CTRIAR linear
             # good
-            if self.is_strain:
-                msg = ['                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( T R I A R )\n'] + words
-            else:
-                msg = ['                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( T R I A R )\n'] + words
+            etype_str = 'T R I A R'
         elif self.element_type == 232:  # CQUADR linear
-            if self.is_strain:
-                msg = ['                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( Q U A D R )\n'] + words
-            else:
-                msg = ['                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( Q U A D R )\n'] + words
+            etype_str = 'Q U A D R'
         else:  # pragma: no cover
             msg = 'element_name=%s element_type=%s' % (self.element_name, self.element_type)
             raise NotImplementedError(msg)
+
+        if self.is_strain:
+            if self.table_name_str == 'OSTR1THC':
+                msg = [f'                     T H E R M A L   S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( {etype_str} )\n'] + words
+            elif self.table_name_str == 'OSTR1ELC':
+                msg = [f'                     E L A S T I C   S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( {etype_str} )\n'] + words
+            elif self.table_name_str == 'OSTR1PLC':
+                msg = [f'                     P L A S T I C   S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( {etype_str} )\n'] + words
+            elif self.table_name_str == 'OSTR1CRC':
+                msg = [f'                     C R E E P   S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( {etype_str} )\n'] + words
+                creep_strain
+            else:
+                msg = [f'                     S T R A I N S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( {etype_str} )\n'] + words
+        else:
+            msg = [f'                   S T R E S S E S   I N   L A Y E R E D   C O M P O S I T E   E L E M E N T S   ( {etype_str} )\n'] + words
 
         # write the f06
         ntimes = self.data.shape[0]
@@ -384,22 +741,22 @@ class RealCompositePlateArray(OES_Object):
             page_num += 1
         return page_num - 1
 
-    def write_op2(self, op2, op2_ascii, itable, new_result,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result,
                   date, is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
-        from struct import Struct, pack
+        from struct import pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #print("nnodes_all =", nnodes_all)
-        #msg.append('  element_node.shape = %s\n' % str(self.element_node.shape).replace('L', ''))
-        #msg.append('  data.shape=%s\n' % str(self.data.shape).replace('L', ''))
+        #msg.append(f'  element_node.shape = {self.element_node.shape}\n')
+        #msg.append(f'  data.shape={self.data.shape}\n')
 
         eids = self.element_layer[:, 0]
         layers = self.element_layer[:, 1]
@@ -418,7 +775,7 @@ class RealCompositePlateArray(OES_Object):
         #assert self.ntimes == 1, self.ntimes
 
         #device_code = self.device_code
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         #fmt = '%2i %6f'
         #print('ntotal=%s' % (ntotal))
@@ -428,17 +785,19 @@ class RealCompositePlateArray(OES_Object):
         op2_ascii.write('  #elementi = [eid_device, fd1, sx1, sy1, txy1, angle1, major1, minor1, vm1,\n')
         op2_ascii.write('  #                        fd2, sx2, sy2, txy2, angle2, major2, minor2, vm2,]\n')
 
-        #struct1 = Struct(endian + b'i16f')
-        struct2 = Struct(endian + b'2i 9f')
         if not self.is_sort1:
             raise NotImplementedError('SORT2')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        fdtype = fdtype_from_data(self.data, self.size)
+        data_out = np.empty((nlayers, 11), dtype=fdtype)
+        data_out[:, 0] = view_idtype_as_fdtype(eids_device, fdtype)
+        data_out[:, 1] = view_idtype_as_fdtype(layers, fdtype)
+
+        op2_ascii.write(f'nelements={nelements:d}\n')
         ntimes = self.data.shape[0]
 
         for itime in range(ntimes):
-            nwide = 0
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             #print('stress itable = %s' % itable)
@@ -448,43 +807,24 @@ class RealCompositePlateArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
             #dt = self._times[itime]
             #header = _eigenvalue_header(self, header, itime, ntimes, dt)
             #f06_file.write(''.join(header + msg))
 
-            #[o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
-            o11 = self.data[itime, :, 0]
-            o22 = self.data[itime, :, 1]
-            t12 = self.data[itime, :, 2]
-            t1z = self.data[itime, :, 3]
-            t2z = self.data[itime, :, 4]
-            angle = self.data[itime, :, 5]
-            major = self.data[itime, :, 6]
-            minor = self.data[itime, :, 7]
-            ovm = self.data[itime, :, 8]
+            # [eid_device, layer, o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+            # [                   o11, o22, t12, t1z, t2z, angle, major, minor, ovm]
+            data_out[:, 2:] = self.data[itime, :, :]
+            assert data_out.size == ntotal, f'data_out.shape={data_out.shape} size={data_out.size}; ntotal={ntotal}'
+            op2_file.write(data_out)
 
-            for eid_device, eid, layer, o11i, o22i, t12i, t1zi, t2zi, anglei, majori, minori, ovmi in zip(
-                    eids_device, eids, layers, o11, o22, t12, t1z, t2z, angle, major, minor, ovm):
-
-                data = [eid_device, layer, o11i, o22i, t12i, t1zi, t2zi, anglei, majori, minori, ovmi]
-                op2.write(struct2.pack(*data))
-
-                [o11i, o22i, t12i, t1zi, t2zi, majori, minori, ovmi] = write_floats_12e([
-                    o11i, o22i, t12i, t1zi, t2zi, majori, minori, ovmi])
-                op2_ascii.write('0 %8s %4s  %12s %12s %12s   %12s %12s  %6.2F %12s %12s %s\n'
-                                % (eid, layer, o11i, o22i, t12i, t1zi, t2zi, anglei, majori, minori, ovmi))
-
-                nwide += len(data)
-
-            assert nwide == ntotal, "nwide=%s ntotal=%s" % (nwide, ntotal)
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -503,7 +843,8 @@ class RealCompositePlateStressArray(RealCompositePlateArray, StressObject):
     def is_strain(self):
         return False
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         if self.is_von_mises:
             ovm = 'von_mises'
         else:
@@ -513,7 +854,7 @@ class RealCompositePlateStressArray(RealCompositePlateArray, StressObject):
 
 
 class RealCompositePlateStrainArray(RealCompositePlateArray, StrainObject):
-    def __init__(self, data_code, is_sort1, isubcase, dt):
+    def __init__(self, data_code, is_sort1, isubcase: int, dt):
         RealCompositePlateArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
@@ -525,10 +866,27 @@ class RealCompositePlateStrainArray(RealCompositePlateArray, StrainObject):
     def is_strain(self) -> bool:
         return True
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         if self.is_von_mises:
             ovm = 'von_mises'
         else:
             ovm = 'max_shear'
         headers = ['e11', 'e22', 'e12', 'e1z', 'e2z', 'angle', 'major', 'minor', ovm]
         return headers
+
+def _set_class(cls, data_code, is_sort1, isubcase,
+               element_layer, data, times):
+    dt = times[0]
+    assert element_layer.ndim == 2, element_layer.shape
+    assert data.ndim == 3, data.shape
+    ntimes = data.shape[0]
+    nnodes = data.shape[1]
+    obj = cls(data_code, is_sort1, isubcase, dt)
+    obj.element_layer = element_layer
+    obj.data = data
+
+    obj.ntimes = ntimes
+    obj.ntotal = nnodes
+    obj._times = times
+    return obj

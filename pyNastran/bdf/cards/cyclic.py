@@ -1,5 +1,6 @@
 """
 defines:
+ * CYAX
  * CYJOIN
 
 All cards are BaseCard objects.
@@ -13,13 +14,7 @@ from typing import TYPE_CHECKING
 #from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import BaseCard, expand_thru
 from pyNastran.bdf.bdf_interface.assign_type import (
-    integer, # integer_or_blank, double, double_or_blank,
-    #string_or_blank, blank,
-    fields,
-    #components_or_blank,
-    #integer_string_or_blank, integer_or_double, #parse_components,
-    #modal_components_or_blank,
-    string, integer_or_string,
+    integer, fields, string, integer_or_string,
 )
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
@@ -38,15 +33,15 @@ class CYAX(BaseCard):
     @classmethod
     def _init_from_empty(cls):
         nids = [1]
-        return CYAX(nids, comment='')
+        return CYAX(nids)
 
-    def __init__(self, nids, comment=''):
+    def __init__(self, nids, comment: str=''):
         if comment:
             self.comment = comment
         self.nids = nids
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a AXIF card from ``BDF.add_card(...)``
 
@@ -85,7 +80,7 @@ class CYJOIN(BaseCard):
         nids = [1, 2]
         return CYJOIN(side, coord, nids)
 
-    def __init__(self, side, coord, nids, comment=''):
+    def __init__(self, side, coord, nids, comment: str=''):
         BaseCard.__init__(self)
         if comment:
             self.comment = comment
@@ -102,7 +97,7 @@ class CYJOIN(BaseCard):
         pass
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CYJOIN card from ``BDF.add_card(...)``
 

@@ -17,489 +17,76 @@ Defines:
 
 """
 import sys
-from struct import pack, unpack
 from math import ceil
 from collections import defaultdict
-from typing import Tuple, Union
+from typing import Optional, Any
 
 import numpy as np
-from cpylog import get_logger2
+from cpylog import SimpleLogger, get_logger
 
-from pyNastran.utils import is_binary_file, _filename, b
+from pyNastran.utils import PathLike, is_binary_file
+from pyNastran.converters.cart3d.cart3d_reader_writer import (
+    Cart3dReaderWriter, _write_cart3d_binary, _write_cart3d_ascii)
 
-
-def read_cart3d(cart3d_filename, log=None, debug=False, result_names=None):
-    """loads a Cart3D file"""
-    model = Cart3D(log=log, debug=debug)
-    model.read_cart3d(cart3d_filename, result_names)
-    return model
-
-
-def comp2tri(in_filenames, out_filename,
-             is_binary=False, float_fmt='%6.7f',
-             log=None, debug=False):
-    """
-    Combines multiple Cart3d files (binary or ascii) into a single file.
-
-    Parameters
-    ----------
-    in_filenames : List[str]
-        list of filenames
-    out_filename : str
-        output filename
-    is_binary : bool; default=False
-        is the output file binary
-    float_fmt : str; default='%6.7f'
-        the format string to use for ascii writing
-
-    Notes
-    -----
-    assumes loads is None
-
-    """
-    points = []
-    elements = []
-    regions = []
-
-    npoints = 0
-    nregions = 0
-    model = Cart3D(log=log, debug=debug)
-    for infilename in in_filenames:
-        model.read_cart3d(infilename)
-        npointsi = model.nodes.shape[0]
-        nregionsi = len(np.unique(model.regions))
-
-        points.append(model.nodes)
-        elements.append(model.elements + npoints)
-        regions.append(model.regions + nregions)
-        npoints += npointsi
-        nregions += nregionsi
-
-    points = np.vstack(points)
-    elements = np.vstack(elements)
-    regions = np.vstack(regions)
-    model.points = points
-    model.elements = elements
-    model.regions = regions
-
-    if out_filename:
-        model.write_cart3d(out_filename, is_binary=is_binary, float_fmt=float_fmt)
-    return model
-
-class Cart3dIO:
-    """
-    Cart3d IO class
-    """
-    def __init__(self, log=None, debug=False):
-        self.log = get_logger2(log, debug=debug)
-        self._endian = b''
-        self._encoding = 'latin1'
-        self.n = 0
-        self.infile = None
-        self.infilename = None
-        self.points = None
-        self.elements = None
-        self.regions = None
-        self.loads = {}
-
-    def _write_header(self, outfile, points, elements, is_loads, is_binary=False):
-        """
-        writes the cart3d header
-
-        Without results
-        ---------------
-        npoints nelements
-
-        With results
-        ------------
-        npoints nelements nresults
-
-        """
-        npoints = points.shape[0]
-        nelements = elements.shape[0]
-
-        if is_binary:
-            if is_loads:
-                fmt = self._endian + b('iiiii')
-                msg = pack(fmt, 3*4, npoints, nelements, 6, 4)
-            else:
-                fmt = self._endian + b('iiii')
-                msg = pack(fmt, 2*4, npoints, nelements, 4)
-
-            int_fmt = None
-        else:
-            # this is ASCII data
-            if is_loads:
-                msg = b("%i %i 6\n" % (npoints, nelements))
-            else:
-                msg = b("%i %i\n" % (npoints, nelements))
-
-            # take the max value, string it, and length it
-            # so 123,456 is length 6
-            int_fmt = b('%%%si' % len(str(nelements)))
-        outfile.write(msg)
-        return int_fmt
-
-    def _write_points(self, outfile, points, is_binary, float_fmt='%6.6f'):
-        """writes the points"""
-        if is_binary:
-            four = pack(self._endian + b('i'), 4)
-            outfile.write(four)
-
-            npoints = points.shape[0]
-            fmt = self._endian + b('%if' % (npoints * 3))
-            floats = pack(fmt, *np.ravel(points))
-
-            outfile.write(floats)
-            outfile.write(four)
-        else:
-            if isinstance(float_fmt, bytes):
-                fmt_ascii = float_fmt
-            else:
-                fmt_ascii = float_fmt.encode('latin1')
-            np.savetxt(outfile, points, fmt_ascii)
-
-    def _write_elements(self, outfile, elements, is_binary, int_fmt='%6i'):
-        """writes the triangles"""
-        min_e = elements.min()
-        assert min_e == 0, 'min(elements)=%s' % min_e
-        if is_binary:
-            fmt = self._endian + b('i')
-            four = pack(fmt, 4)
-            outfile.write(four)
-            nelements = elements.shape[0]
-            fmt = self._endian + b('%ii' % (nelements * 3))
-            ints = pack(fmt, *np.ravel(elements+1))
-
-            outfile.write(ints)
-            outfile.write(four)
-        else:
-            if isinstance(int_fmt, bytes):
-                fmt_ascii = int_fmt
-            else:
-                fmt_ascii = int_fmt.encode('latin1')
-            np.savetxt(outfile, elements+1, fmt_ascii)
-
-    def _write_regions(self, outfile, regions, is_binary):
-        """writes the regions"""
-        if is_binary:
-            fmt = self._endian + b('i')
-            four = pack(fmt, 4)
-            outfile.write(four)
-
-            nregions = len(regions)
-            fmt = self._endian + b('%ii' % nregions)
-            ints = pack(fmt, *regions)
-            outfile.write(ints)
-
-            outfile.write(four)
-        else:
-            fmt = b'%i'
-            np.savetxt(outfile, regions, fmt)
-
-    def _write_loads(self, outfile, loads, is_binary, float_fmt='%6.6f'):
-        """writes the *.triq loads"""
-        if is_binary:
-            raise NotImplementedError('is_binary=%s' % is_binary)
-        else:
-            Cp = loads['Cp']
-            rho = loads['rho']
-            rhoU = loads['rhoU']
-            rhoV = loads['rhoV']
-            rhoW = loads['rhoW']
-            E = loads['E']
-            npoints = self.points.shape[0]
-            assert len(Cp) == npoints, 'len(Cp)=%s npoints=%s' % (len(Cp), npoints)
-            #nrows = len(Cp)
-            fmt = '%s\n%s %s %s %s %s\n' % (float_fmt, float_fmt, float_fmt,
-                                            float_fmt, float_fmt, float_fmt)
-            for (cpi, rhoi, rhou, rhov, rhoe, e) in zip(Cp, rho, rhoU, rhoV, rhoW, E):
-                outfile.write(fmt % (cpi, rhoi, rhou, rhov, rhoe, e))
-
-    def _read_header_ascii(self):
-        """
-        Reads the header::
-
-          npoints nelements          # geometry
-          npoints nelements nresults # results
-
-        """
-        line = self.infile.readline()
-        sline = line.strip().split()
-        if len(sline) == 2:
-            npoints, nelements = int(sline[0]), int(sline[1])
-            nresults = 0
-        elif len(sline) == 3:
-            npoints = int(sline[0])
-            nelements = int(sline[1])
-            nresults = int(sline[2])
-        else:
-            raise ValueError('invalid result type')
-        return npoints, nelements, nresults
-
-    @property
-    def nresults(self):
-        """get the number of results"""
-        if isinstance(self.loads, dict):
-            return len(self.loads)
-        return 0
-
-    @property
-    def nnodes(self):
-        """alternate way to access number of points"""
-        return self.npoints
-
-    @property
-    def npoints(self):
-        """get the number of points"""
-        return self.points.shape[0]
-
-    @property
-    def nodes(self):
-        """alternate way to access the points"""
-        return self.points
-
-    @nodes.setter
-    def nodes(self, points):
-        """alternate way to access the points"""
-        self.points = points
-
-    @property
-    def nelements(self):
-        """get the number of elements"""
-        return self.elements.shape[0]
-
-    def _read_points_ascii(self, npoints):
-        """
-        A point is defined by x,y,z and the ID is the location in points.
-
-        """
-        p = 0
-        data = []
-        assert npoints > 0, 'npoints=%s' % npoints
-        points = np.zeros((npoints, 3), dtype='float32')
-        while p < npoints:
-            data += self.infile.readline().strip().split()
-            while len(data) > 2:
-                x = data.pop(0)
-                y = data.pop(0)
-                z = data.pop(0)
-                points[p] = [x, y, z]
-                p += 1
-        return points
-
-    def _read_elements_ascii(self, nelements):
-        """
-        An element is defined by n1,n2,n3 and the ID is the location in elements.
-
-        """
-        assert nelements > 0, 'npoints=%s nelements=%s' % (self.npoints, nelements)
-        elements = np.zeros((nelements, 3), dtype='int32')
-
-        ieid = 0
-        data = []
-        while ieid < nelements:
-            data += self.infile.readline().strip().split()
-            while len(data) > 2:
-                n1 = int(data.pop(0))
-                n2 = int(data.pop(0))
-                n3 = int(data.pop(0))
-                elements[ieid] = [n1, n2, n3]
-                ieid += 1
-
-        nid_min = elements.min()
-        if nid_min != 1:
-            nid_max = elements.max()
-            nnodes = self.nodes.shape[0]
-            if nid_max == nnodes:
-                msg = (
-                    'Possible Cart3d error due to unused nodes\n'
-                    'min(nids)=%s; expected 1; nid_max=%s nnodes=%s' % (
-                        nid_min, nid_max, nnodes))
-                self.log.warning(msg)
-            else:
-                msg = 'elements:\n%s\nmin(nids)=%s; expected 1; nid_max=%s nnodes=%s' % (
-                    elements, nid_min, nid_max, nnodes, )
-                raise RuntimeError(msg)
-            #assert elements.min() == 1, elements.min()
-        return elements - 1
-
-    def _read_regions_ascii(self, nelements):
-        """reads the region section"""
-        regions = np.zeros(nelements, dtype='int32')
-        iregion = 0
-        data = []
-        while iregion < nelements:
-            data = self.infile.readline().strip().split()
-            ndata = len(data)
-            regions[iregion : iregion + ndata] = data
-            iregion += ndata
-        return regions
-
-    def _read_header_binary(self):
-        """
-        Reads the header::
-
-          npoints nelements          # geometry
-          npoints nelements nresults # results
-
-        """
-        data = self.infile.read(4)
-        size_little, = unpack(b'<i', data)
-        size_big, = unpack(b'>i', data)
-        if size_big in [12, 8]:
-            self._endian = b'>'
-            size = size_big
-        elif size_little in [8, 12]:
-            self._endian = b'<'
-            size = size_little
-        else:
-            self._rewind()
-            self.show(100)
-            raise RuntimeError('unknown endian')
-
-        self.n += 4
-        data = self.infile.read(size)
-        self.n += size
-
-        so4 = size // 4  # size over 4
-        if so4 == 3:
-            (npoints, nelements, nresults) = unpack(self._endian + b('iii'), data)
-            self.log.info("npoints=%s nelements=%s nresults=%s" % (npoints, nelements, nresults))
-        elif so4 == 2:
-            (npoints, nelements) = unpack(self._endian + b('ii'), data)
-            nresults = 0
-            self.log.info("npoints=%s nelements=%s" % (npoints, nelements))
-        else:
-            self._rewind()
-            self.show(100)
-            raise RuntimeError('in the wrong spot...endian...size/4=%s' % so4)
-        self.infile.read(8)  # end of first block, start of second block
-        return (npoints, nelements, nresults)
-
-    def _read_points_binary(self, npoints):
-        """reads the xyz points"""
-        size = npoints * 12  # 12=3*4 all the points
-        data = self.infile.read(size)
-
-        dtype = np.dtype(self._endian + b('f4'))
-        points = np.frombuffer(data, dtype=dtype).reshape((npoints, 3)).copy()
-
-        self.infile.read(8)  # end of second block, start of third block
-        return points
-
-    def _read_elements_binary(self, nelements):
-        """reads the triangles"""
-        size = nelements * 12  # 12=3*4 all the elements
-        data = self.infile.read(size)
-
-        dtype = np.dtype(self._endian + b('i4'))
-        elements = np.frombuffer(data, dtype=dtype).reshape((nelements, 3)).copy()
-
-        self.infile.read(8)  # end of third (element) block, start of regions (fourth) block
-        assert elements.min() == 1, elements.min()
-        return elements - 1
-
-    def _read_regions_binary(self, nelements):
-        """reads the regions"""
-        size = nelements * 4  # 12=3*4 all the elements
-        data = self.infile.read(size)
-
-        regions = np.zeros(nelements, dtype='int32')
-        dtype = self._endian + b'i'
-        regions = np.frombuffer(data, dtype=dtype).copy()
-
-        self.infile.read(4)  # end of regions (fourth) block
-        return regions
-
-    def _read_results_binary(self, i, infile, result_names=None):
-        """binary results are not supported"""
-        pass
-
-    def _rewind(self):  # pragma: no cover
-        """go back to the beginning of the file"""
-        self.n = 0
-        self.infile.seek(self.n)
-
-    def show(self, n, types='ifs', endian=None):  # pragma: no cover
-        assert self.n == self.infile.tell(), 'n=%s tell=%s' % (self.n, self.infile.tell())
-        #nints = n // 4
-        data = self.infile.read(4 * n)
-        strings, ints, floats = self.show_data(data, types=types, endian=endian)
-        self.infile.seek(self.n)
-        return strings, ints, floats
-
-    def show_data(self, data, types='ifs', endian=None):  # pragma: no cover
-        return self._write_data(sys.stdout, data, types=types, endian=endian)
-
-    def _write_data(self, outfile, data, types='ifs', endian=None):  # pragma: no cover
-        """
-        Useful function for seeing what's going on locally when debugging.
-
-        """
-        n = len(data)
-        nints = n // 4
-        ndoubles = n // 8
-        strings = None
-        ints = None
-        floats = None
-        longs = None
-
-        if endian is None:
-            endian = self._endian
-
-        if 's' in types:
-            strings = unpack(b'%s%is' % (endian, n), data)
-            outfile.write("strings = %s\n" % str(strings))
-        if 'i' in types:
-            ints = unpack(b'%s%ii' % (endian, nints), data)
-            outfile.write("ints    = %s\n" % str(ints))
-        if 'f' in types:
-            floats = unpack(b'%s%if' % (endian, nints), data)
-            outfile.write("floats  = %s\n" % str(floats))
-
-        if 'l' in types:
-            longs = unpack(b'%s%il' % (endian, nints), data)
-            outfile.write("long  = %s\n" % str(longs))
-        if 'I' in types:
-            ints2 = unpack(b'%s%iI' % (endian, nints), data)
-            outfile.write("unsigned int = %s\n" % str(ints2))
-        if 'L' in types:
-            longs2 = unpack(b'%s%iL' % (endian, nints), data)
-            outfile.write("unsigned long = %s\n" % str(longs2))
-        if 'q' in types:
-            longs = unpack(b'%s%iq' % (endian, ndoubles), data[:ndoubles*8])
-            outfile.write("long long = %s\n" % str(longs))
-        return strings, ints, floats
-
-    def show_ndata(self, n, types='ifs'):  # pragma: no cover
-        return self._write_ndata(sys.stdout, n, types=types)
-
-    def _write_ndata(self, outfile, n, types='ifs'):  # pragma: no cover
-        """
-        Useful function for seeing what's going on locally when debugging.
-
-        """
-        nold = self.n
-        data = self.infile.read(n)
-        self.n = nold
-        self.infile.seek(self.n)
-        return self._write_data(outfile, data, types=types)
-
-
-class Cart3D(Cart3dIO):
+class Cart3D(Cart3dReaderWriter):
     """Cart3d interface class"""
     model_type = 'cart3d'
     is_structured = False
     is_outward_normals = True
 
-    def __init__(self, log=None, debug=False):
-        Cart3dIO.__init__(self, log=log, debug=debug)
+    def __init__(self, log=None, debug: bool=False):
+        Cart3dReaderWriter.__init__(self, log=log, debug=debug)
         self.loads = {}
         self.points = None
         self.elements = None
 
-    def flip_model(self):
+    def cut_model_centroid(self, result: np.ndarray,
+                           yslices: np.ndarray,
+                           xyz=None) -> tuple[np.ndarray, np.ndarray]:  # pragma: no cover
+        if xyz is None:
+            xyz = self.points
+        ys = xyz[:, 1]
+        nelements = len(self.elements)
+        y_elements = ys[self.elements]
+
+        # grab all nodes where an element y value is 0.
+        y_max = y_elements.max(axis=1)
+        y_min = y_elements.min(axis=1)
+        assert len(y_max) == nelements, (len(y_max), nelements)
+        ieid = np.where((y_min <= 0.) & (y_max > 0.))[0]
+        assert len(ieid) <= nelements, (len(ieid), nelements)
+        nodes = self.elements[ieid, :]
+        #inodes = np.unique(nodes.ravel())
+
+        xyz1 = xyz[nodes[:,0], :]
+        xyz2 = xyz[nodes[:,1], :]
+        xyz3 = xyz[nodes[:,2], :]
+
+        centroid = (xyz1 + xyz2 + xyz3) / 3
+        return centroid, result[ieid]
+
+    def cut_model_node(self, result: np.ndarray,
+                       yslices: np.ndarray,
+                       xyz=None) -> tuple[np.ndarray, np.ndarray]:
+        if xyz is None:
+            xyz = self.points
+        ys = xyz[:, 1]
+        nelements = len(self.elements)
+        y_elements = ys[self.elements]
+
+        # grab all nodes where an element y value is 0.
+        y_max = y_elements.max(axis=1)
+        y_min = y_elements.min(axis=1)
+        assert len(y_max) == nelements, (len(y_max), nelements)
+
+        ieid = np.where((y_min <= 0.) & (y_max > 0.))[0]
+        assert len(ieid) <= nelements, (len(ieid), nelements)
+        nodes = self.elements[ieid, :]
+        inodes = np.unique(nodes.ravel())
+        return xyz[inodes, :], result[inodes]
+
+
+    def flip_model(self) -> None:
         """flip the model about the y-axis"""
         self.points[:, 1] *= -1.
         self.elements = np.hstack([
@@ -507,9 +94,10 @@ class Cart3D(Cart3dIO):
             self.elements[:, 2:3],
             self.elements[:, 1:2],
         ])
-        print(self.elements.shape)
+        #print(self.elements.shape)
 
-    def make_mirror_model(self, nodes, elements, regions, loads, axis='y', tol=0.000001):
+    def make_mirror_model(self, nodes, elements, regions, loads,
+                          axis: str='y', tol: float=0.000001) -> None:
         """
         Makes a full cart3d model about the given axis.
 
@@ -539,7 +127,7 @@ class Cart3D(Cart3dIO):
         #nelements = elements.shape[0]
         #assert nelements > 0, 'nelements=%s' % nelements
 
-        #ax, ax0 = self._get_ax(axis)
+        #ax, ax0 = self._get_ax(axis, self.log)
         #if ax in [0, 1, 2]:  # positive x, y, z values; mirror to -side
             #iy0 = np.where(nodes[:, ax] > tol)[0]
             #ax2 = ax
@@ -595,33 +183,7 @@ class Cart3D(Cart3dIO):
         #self.log.info('---finished make_mirror_model---')
         #return (nodes2, elements2, regions2, loads2)
 
-    def _get_ax(self, axis: Union[str, int]) -> Tuple[int, int]:
-        """helper method to convert an axis_string into an integer"""
-        if isinstance(axis, str):
-            axis = axis.lower().strip()
-
-        if axis in ['+x', 'x', 0]:
-            ax = 0
-        elif axis in ['+y', 'y', 1]:
-            ax = 1
-        elif axis in ['+z', 'z', 2]:
-            ax = 2
-
-        elif axis in ['-x', 3]:
-            ax = 3
-        elif axis == ['-y', 4]:
-            ax = 4
-        elif axis == ['-z', 5]:
-            ax = 5
-        else:  # pragma: no cover
-            raise NotImplementedError('axis=%r' % axis)
-        self.log.debug("axis=%r ax=%s" % (axis, ax))
-
-        # shift ax to the actual column index in the nodes array
-        ax0 = ax if ax in [0, 1, 2] else ax - 3
-        return ax, ax0
-
-    def make_half_model(self, axis='y', remap_nodes=True):
+    def make_half_model(self, axis: str='y', remap_nodes: bool=True) -> tuple[Any, Any, Any, Any, Any]:
         """
         Makes a half model from a full model
 
@@ -644,7 +206,7 @@ class Cart3D(Cart3dIO):
         assert nelements > 0, 'nelements=%s'  % nelements
 
         self.log.info('---starting make_half_model---')
-        ax, ax0 = self._get_ax(axis)
+        ax, ax0 = _get_ax(axis, self.log)
 
         self.log.debug('find elements to remove')
         #print(f'axis={axis} ax={ax}')
@@ -715,7 +277,44 @@ class Cart3D(Cart3dIO):
         self.elements = elements2
         self.regions = regions2
         self.loads = loads2
-        return (nodes2, elements2, regions2, loads2)
+        return nodes2, elements2, regions2, loads2
+
+    def keep_elements(self,
+                      ielements: np.ndarray,
+                      remove_associated_nodes: bool=True) -> np.ndarray:
+        """keeps a set of elements from the model"""
+        assert len(ielements) > 0, ielements
+        self.log.debug(f'elements.shape = {self.elements.shape}')
+        self.elements = self.elements[ielements, :]
+        self.regions = self.regions[ielements]
+
+        if remove_associated_nodes:
+            used_nodes = np.unique(self.elements.ravel())
+            self.nodes = self.nodes[used_nodes, :]
+            self.elements = np.searchsorted(used_nodes, self.elements)
+            loads2 = {}
+            for key, load in self.loads.items():
+                load2 = load[used_nodes]
+                loads2[key] = load2
+
+            # in-place operation on loads
+            for key, load in loads2.items():
+                self.loads[key] = load
+        return self.elements
+
+    def remove_elements(self,
+                        ielements: np.ndarray,
+                        remove_associated_nodes: bool=True) -> np.ndarray:
+        """removes a set of elements from the model"""
+        assert ielements is not None, ielements
+        assert len(ielements) > 0, ielements
+
+        nelements = self.nelements
+        iall_elements = np.arange(nelements)
+        ielements_to_keep = np.setdiff1d(iall_elements, ielements)
+        self.keep_elements(ielements_to_keep,
+                           remove_associated_nodes=remove_associated_nodes)
+        return self.elements
 
     def get_free_edges(self, elements):
         """
@@ -743,41 +342,21 @@ class Cart3D(Cart3dIO):
                 free_edges.append(edge)
         return np.array(free_edges, dtype='int32')
 
-    def read_cart3d(self, infilename, result_names=None):
+    def read_cart3d(self, infilename: PathLike, result_names=None):
         """extracts the points, elements, and Cp"""
         self.infilename = infilename
         self.log.info("---reading cart3d...%r---" % self.infilename)
 
-        self.infilename = infilename
         if is_binary_file(infilename):
-            with open(infilename, 'rb') as self.infile:
-                try:
-                    npoints, nelements, nresults = self._read_header_binary()
-                    self.points = self._read_points_binary(npoints)
-                    self.elements = self._read_elements_binary(nelements)
-                    self.regions = self._read_regions_binary(nelements)
-                    # TODO: loads
-                except:
-                    msg = 'failed reading %r' % infilename
-                    self.log.error(msg)
-                    raise
-
+            endian = self._endian
+            self._read_cart3d_binary(infilename, endian)
         else:
-            with open(_filename(infilename), 'r', encoding=self._encoding) as self.infile:
-                try:
-                    npoints, nelements, nresults = self._read_header_ascii()
-                    self.points = self._read_points_ascii(npoints)
-                    self.elements = self._read_elements_ascii(nelements)
-                    self.regions = self._read_regions_ascii(nelements)
-                    self._read_results_ascii(0, self.infile, nresults, result_names=result_names)
-                except:
-                    msg = 'failed reading %r' % infilename
-                    self.log.error(msg)
-                    raise
+            self._read_cart3d_ascii(infilename, self._encoding,
+                                    result_names=result_names)
 
-        self.log.debug("npoints=%s nelements=%s" % (self.npoints, self.nelements))
-        assert self.npoints > 0, 'npoints=%s' % self.npoints
-        assert self.nelements > 0, 'nelements=%s' % self.nelements
+        self.log.debug(f'npoints={self.npoints:d} nelements={self.nelements:d} nresults={self.nresults:d}')
+        assert self.npoints > 0, f'npoints={self.npoints:d}'
+        assert self.nelements > 0, f'nelements={self.nelements:d}'
 
     def write_cart3d(self, outfilename, is_binary=False, float_fmt='%6.7f'):
         """
@@ -792,16 +371,13 @@ class Cart3D(Cart3dIO):
         else:
             is_loads = True
 
-        self.log.info("---writing cart3d...%r---" % outfilename)
-        with open(outfilename, 'wb') as outfile:
-            int_fmt = self._write_header(outfile, self.points, self.elements, is_loads, is_binary)
-            self._write_points(outfile, self.points, is_binary, float_fmt)
-            self._write_elements(outfile, self.elements, is_binary, int_fmt)
-            self._write_regions(outfile, self.regions, is_binary)
-
-            if is_loads:
-                assert is_binary is False, 'is_binary=%r is not supported for loads' % is_binary
-                self._write_loads(outfile, self.loads, is_binary, float_fmt)
+        self.log.info(f'---writing cart3d...{outfilename!r}---')
+        if is_binary:
+            _write_cart3d_binary(outfilename, self.points, self.elements,
+                                 self.regions, self.loads, self._endian)
+        else:
+            _write_cart3d_ascii(outfilename, self.points, self.elements,
+                                self.regions, self.loads, float_fmt)
 
     def _read_results_ascii(self, i, infile, nresults, result_names=None):
         """
@@ -824,7 +400,7 @@ class Cart3D(Cart3dIO):
 
         Parameters
         ----------
-        result_names : List[str]; default=None (All)
+        result_names : list[str]; default=None (All)
             result_names = ['Cp', 'rho', 'rhoU', 'rhoV', 'rhoW', 'rhoE',
                             'Mach', 'U', 'V', 'W', 'E']
 
@@ -875,19 +451,22 @@ class Cart3D(Cart3dIO):
         del sline
         self.loads = self._calculate_results(result_names, results)
 
-    def _calculate_results(self, result_names, results, loads=None):
+    def _calculate_results(self, result_names: list[str],
+                           results: np.ndarray, loads=None) -> dict[str, np.ndarray]:
         """
         Takes the Cart3d variables and calculates additional variables
 
         Parameters
         ----------
-        result_names : List[str]
+        result_names : list[str]
             the variables to calculate
-        results : (n,6) ndarray
-            the non-dimensional prmitive flow variables
+        results : (n,6) float ndarray
+            the non-dimensional primitive flow variables
         loads : dict; default=None -> {}
-            key : ???
-            value : ???
+            key : str
+               Cp, rho rhoU, rhoV, rhoW, rhoE
+            value : (nnode,6) float np.ndarray
+               the load array
 
         """
         if loads is None:
@@ -1006,46 +585,23 @@ class Cart3D(Cart3dIO):
         self.log.debug('---finished read_results---')
         return loads
 
-    def _get_area_vector(self):
-        """
-        Gets the area vector (unnormalized normal vector)
-        Returns
-        -------
-        normals : (n, 3) ndarray
-            unnormalized centroidal normal vectors
-
-        """
-        elements = self.elements
-        nodes = self.nodes
-        p1 = nodes[elements[:, 0], :]
-        p2 = nodes[elements[:, 1], :]
-        p3 = nodes[elements[:, 2], :]
-
-        ne = elements.shape[0]
-        avec = p2 - p1
-        bvec = p3 - p1
-        n = np.cross(avec, bvec)
-        assert len(n) == ne, 'len(n)=%s ne=%s' % (len(n), ne)
-
-        return n
-
-    def get_area(self):
+    def get_area(self) -> np.ndarray:
         """
         Gets the element area
 
         Returns
         -------
-        area : (n, 3) ndarray
+        area : (nelement,) float ndarray
             the element areas
         """
 
         ne = self.elements.shape[0]
-        n = self._get_area_vector()
+        n = _get_area_vector(self.nodes, self.elements)
         ni = np.linalg.norm(n, axis=1)
         assert len(ni) == ne, 'len(ni)=%s ne=%s' % (len(ni), ne)
         return 0.5 * ni
 
-    def get_normals(self):
+    def get_normals(self) -> np.ndarray:
         """
         Gets the centroidal normals
 
@@ -1056,7 +612,7 @@ class Cart3D(Cart3dIO):
 
         """
         ne = self.elements.shape[0]
-        n = self._get_area_vector()
+        n = _get_area_vector(self.nodes, self.elements)
         ni = np.linalg.norm(n, axis=1)
         assert len(ni) == ne, 'len(ni)=%s ne=%s' % (len(ni), ne)
 
@@ -1064,18 +620,35 @@ class Cart3D(Cart3dIO):
         n /= ni[:, None]  # normal vector
         return n
 
-    def get_normals_at_nodes(self, cnormals):
+    def get_area_centroid_normals(self):
+        """
+        Gets the area, centroid, and centroidal normals
+
+        Returns
+        -------
+        area : (nelement,) float ndarray
+            the element areas
+        centroid : (nelement, 3) float ndarray
+            centroid of the element
+        cnormals : (nelement, 3) float ndarray
+            normalized centroidal normal vectors
+
+        """
+        area, centroid, normals = get_area_centroid_normals(self.nodes, self.elements)
+        return area, centroid, normals
+
+    def get_normals_at_nodes(self, cnormals: np.ndarray) -> np.ndarray:
         """
         Gets the nodal normals
 
         Parameters
         ----------
-        cnormals : (n, 3) ndarray
+        cnormals : (nelement, 3) float ndarray
             normalized centroidal normal vectors
 
         Returns
         -------
-        nnormals : (n, 3) ndarray
+        nnormals : (nnode, 3) float ndarray
             normalized nodal normal vectors
 
         """
@@ -1103,14 +676,74 @@ class Cart3D(Cart3dIO):
         nnormals /= ni[:, None]  # normal vector
         return nnormals
 
-def convert_to_float(svalues):
+
+def read_cart3d(cart3d_filename: PathLike,
+                log=None, debug=False, result_names=None) -> Cart3D:
+    """loads a Cart3D file"""
+    model = Cart3D(log=log, debug=debug)
+    model.read_cart3d(cart3d_filename, result_names)
+    return model
+
+
+def comp2tri(in_filenames, out_filename,
+             is_binary=False, float_fmt='%6.7f',
+             log=None, debug=False) -> Cart3D:
+    """
+    Combines multiple Cart3d files (binary or ascii) into a single file.
+
+    Parameters
+    ----------
+    in_filenames : list[str]
+        list of filenames
+    out_filename : str
+        output filename
+    is_binary : bool; default=False
+        is the output file binary
+    float_fmt : str; default='%6.7f'
+        the format string to use for ascii writing
+
+    Notes
+    -----
+    assumes loads is None
+
+    """
+    points = []
+    elements = []
+    regions = []
+
+    npoints = 0
+    nregions = 0
+    model = Cart3D(log=log, debug=debug)
+    for infilename in in_filenames:
+        model.read_cart3d(infilename)
+        npointsi = model.nodes.shape[0]
+        nregionsi = len(np.unique(model.regions))
+
+        points.append(model.nodes)
+        elements.append(model.elements + npoints)
+        regions.append(model.regions + nregions)
+        npoints += npointsi
+        nregions += nregionsi
+
+    points = np.vstack(points)
+    elements = np.vstack(elements)
+    regions = np.vstack(regions)
+    model.points = points
+    model.elements = elements
+    model.regions = regions
+
+    if out_filename:
+        model.write_cart3d(out_filename, is_binary=is_binary, float_fmt=float_fmt)
+    return model
+
+def convert_to_float(svalues: list[str]) -> list[float]:
     """Takes a list of strings and converts them to floats."""
     values = []
     for value in svalues:
         values.append(float(value))
     return values
 
-def _get_list(sline):
+def _get_list(sline: list[str]) -> list[float]:
     """Takes a list of strings and converts them to floats."""
     try:
         sline2 = convert_to_float(sline)
@@ -1118,3 +751,115 @@ def _get_list(sline):
         print("sline = %s" % sline)
         raise SyntaxError('cannot parse %s' % sline)
     return sline2
+
+def get_average_load(load: dict[str, np.ndarray],
+                     elements: np.ndarray) -> np.ndarray:
+    """
+    Gets the area, centroid, and centroidal normals
+
+    Returns
+    -------
+    load : (nnode,) float ndarray
+        the nodal load
+
+    """
+    xyz1 = load[elements[:, 0]]
+    xyz2 = load[elements[:, 1]]
+    xyz3 = load[elements[:, 2]]
+    avg = (xyz1 + xyz2 + xyz3) / 3.
+    return avg
+
+def get_area_centroid_normals(nodes: np.ndarray,
+                              elements: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Gets the area, centroid, and centroidal normals
+
+    Parameters
+    ----------
+    nodes : (nnode,3) float ndarray
+        the nodal load
+    elements : (nelement,3) int ndarray
+        the nodal load
+
+    Returns
+    -------
+    area : (nelement,) float ndarray
+        the element areas
+    centroid : (nelement, 3) float ndarray
+        centroid of the element
+    cnormals : (nelement, 3) float ndarray
+        normalized centroidal normal vectors
+
+    """
+    ne = elements.shape[0]
+    assert ne > 0, elements.shape
+    normal = _get_area_vector(nodes, elements)
+    ni = np.linalg.norm(normal, axis=1)
+
+    area = 0.5 * ni
+    assert len(ni) == ne, 'len(ni)=%s ne=%s' % (len(ni), ne)
+
+    assert ni.min() > 0.0, ni[np.where(ni <= 0.0)[0]]
+    normal /= ni[:, None]  # normal vector
+
+    xyz1 = nodes[elements[:, 0], :]
+    xyz2 = nodes[elements[:, 1], :]
+    xyz3 = nodes[elements[:, 2], :]
+    centroid = (xyz1 + xyz2 + xyz3) / 3.
+    return area, centroid, normal
+
+def _get_area_vector(nodes: np.ndarray,
+                     elements: np.ndarray) -> np.ndarray:
+    """
+    Gets the area vector (unnormalized normal vector)
+
+    Parameters
+    ----------
+    nodes : (nnode,3) float ndarray
+        the nodal load
+    elements : (nelement,3) int ndarray
+        the nodal load
+
+    Returns
+    -------
+    normals : (nelement, 3) float ndarray
+        unnormalized centroidal normal vectors
+
+    """
+    p1 = nodes[elements[:, 0], :]
+    p2 = nodes[elements[:, 1], :]
+    p3 = nodes[elements[:, 2], :]
+
+    ne = elements.shape[0]
+    avec = p2 - p1
+    bvec = p3 - p1
+    n = np.cross(avec, bvec)
+    assert len(n) == ne, 'len(n)=%s ne=%s' % (len(n), ne)
+
+    return n
+
+def _get_ax(axis: str | int, log: SimpleLogger) -> tuple[int, int]:
+    """helper method to convert an axis_string into an integer"""
+    if isinstance(axis, str):
+        axis = axis.lower().strip()
+
+    if axis in ['+x', 'x', 0]:
+        ax = 0
+    elif axis in ['+y', 'y', 1]:
+        ax = 1
+    elif axis in ['+z', 'z', 2]:
+        ax = 2
+
+    elif axis in ['-x', 3]:
+        ax = 3
+    elif axis == ['-y', 4]:
+        ax = 4
+    elif axis == ['-z', 5]:
+        ax = 5
+    else:  # pragma: no cover
+        raise NotImplementedError('axis=%r' % axis)
+    log.debug("axis=%r ax=%s" % (axis, ax))
+
+    # shift ax to the actual column index in the nodes array
+    ax0 = ax if ax in [0, 1, 2] else ax - 3
+    return ax, ax0

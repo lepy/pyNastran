@@ -5,11 +5,14 @@ https://wiki.python.org/moin/PyQt/Distinguishing%20between%20click%20and%20doubl
 http://www.saltycrane.com/blog/2007/12/pyqt-43-qtableview-qabstracttablemodel/
 http://stackoverflow.com/questions/12152060/how-does-the-keypressevent-method-work-in-this-program
 """
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.gui.limits import MAX_POINT_SIZE, MAX_LINE_WIDTH
-from pyNastran.gui.qt_version import qt_int as qt_version
+#from pyNastran.gui.qt_version import qt_version #qt_int
 
-from qtpy.QtCore import Qt#, QVariant
+from qtpy.QtCore import Qt, QModelIndex
 from qtpy import QtCore, QtGui
+
 from qtpy.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QTableView, QApplication,
     QDoubleSpinBox, QSlider, QSpinBox, QCheckBox, QHBoxLayout, QGridLayout, QVBoxLayout,
@@ -20,6 +23,9 @@ from qtpy.QtWidgets import (
 from pyNastran.gui.utils.qt.pydialog import PyDialog
 from pyNastran.gui.gui_objects.alt_geometry_storage import AltGeometry
 from pyNastran.gui.gui_objects.coord_properties import CoordProperties
+from pyNastran.gui.utils.qt.version import Background
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.gui.menus.edit_geometry_properties.edit_geometry_properties_object import EditGeometryPropertiesObject
 
 
 class SingleChoiceQTableView(QTableView):
@@ -178,8 +184,10 @@ class Model(QtCore.QAbstractTableModel):
 
 
 class EditGeometryProperties(PyDialog):
+    show_representation_toggles = False
     force = True
-    def __init__(self, data, win_parent=None):
+    def __init__(self, data, gui_obj: EditGeometryPropertiesObject,
+                 is_gui: bool=True, win_parent=None):
         """
         +------------------+
         | Edit Actor Props |
@@ -204,13 +212,19 @@ class EditGeometryProperties(PyDialog):
         self.set_font_size(data['font_size'])
         del self.out_data['font_size']
         self.setWindowTitle('Edit Geometry Properties')
+        self.is_gui = is_gui
+        self.gui_obj = gui_obj
+        assert isinstance(is_gui, bool), is_gui
+        if is_gui and not hasattr(self.gui_obj, 'on_update_geometry_properties'):
+            print(f'no on_update_geometry_properties in {str(self.gui_obj)}')
+            # self.gui_obj.log_error(f'no on_update_geometry_properties in {str(self.gui_obj)}')
+            return
         self.allow_update = True
 
         #default
         #self.win_parent = win_parent
         #self.out_data = data
 
-        self.keys = sorted(data.keys())
         self.keys = data.keys()
         keys = self.keys
         items = list(keys)
@@ -225,8 +239,6 @@ class EditGeometryProperties(PyDialog):
         table_model = Model(items, header_labels, self)
         view = SingleChoiceQTableView(self) #Call your custom QTableView here
         view.setModel(table_model)
-        #if qt_version == 4:
-            #view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         self.table = view
         #self.opacity_edit.valueChanged.connect(self.on_opacity)
@@ -261,7 +273,7 @@ class EditGeometryProperties(PyDialog):
         self._default_is_apply = False
         self.name = QLabel("Name:")
         self.name_edit = QLineEdit(str(name))
-        self.name_edit.setDisabled(True)
+        self.name_edit.setReadOnly(True)
 
         self.color = QLabel("Color:")
         self.color_edit = QPushButton()
@@ -274,7 +286,7 @@ class EditGeometryProperties(PyDialog):
             palette = QtGui.QPalette(self.color_edit.palette()) # make a copy of the palette
             #palette.setColor(QtGui.QPalette.Active, QtGui.QPalette.Base, \
                              #qcolor)
-            palette.setColor(QtGui.QPalette.Background, QtGui.QColor('blue'))  # ButtonText
+            palette.setColor(Background, QtGui.QColor('blue'))  # ButtonText
             self.color_edit.setPalette(palette)
 
             self.color_edit.setStyleSheet("QPushButton {"
@@ -283,15 +295,16 @@ class EditGeometryProperties(PyDialog):
                                           "}")
 
         self.representation_label = QLabel('Representation:')
+        self.checkbox_toggle = QCheckBox('Toggle')
         self.checkbox_wire = QCheckBox('Wireframe')
         self.checkbox_surf = QCheckBox('Surface/Solid')
+        self.checkbox_point = QCheckBox('Point')
         #print('representation = %s' % self.representation)
         #self.check_point = QCheckBox()
 
         self.use_slider = True
         self.is_opacity_edit_active = False
         self.is_opacity_edit_slider_active = False
-
         self.is_line_width_edit_active = False
         self.is_line_width_edit_slider_active = False
 
@@ -301,16 +314,16 @@ class EditGeometryProperties(PyDialog):
         self.is_bar_scale_edit_active = False
         self.is_bar_scale_edit_slider_active = False
 
-        self.opacity = QLabel("Opacity:")
+        self.opacity = QLabel('Opacity:')
         self.opacity_edit = QDoubleSpinBox(self)
         self.opacity_edit.setRange(0.1, 1.0)
-        self.opacity_edit.setDecimals(1)
-        self.opacity_edit.setSingleStep(0.1)
-        self.opacity_edit.setValue(opacity)
+        self.opacity_edit.setDecimals(2)
+        self.opacity_edit.setSingleStep(0.05)
+        self.opacity_edit.setValue(rounded_int(opacity))
         if self.use_slider:
             self.opacity_slider_edit = QSlider(QtCore.Qt.Horizontal)
             self.opacity_slider_edit.setRange(1, 10)
-            self.opacity_slider_edit.setValue(opacity * 10)
+            self.opacity_slider_edit.setValue(rounded_int(opacity * 10))
             self.opacity_slider_edit.setTickInterval(1)
             self.opacity_slider_edit.setTickPosition(QSlider.TicksBelow)
 
@@ -378,9 +391,7 @@ class EditGeometryProperties(PyDialog):
 
         # show/hide
         self.checkbox_show = QCheckBox("Show")
-        self.checkbox_hide = QCheckBox("Hide")
         self.checkbox_show.setChecked(show)
-        self.checkbox_hide.setChecked(not show)
 
         if name == 'main':
             self.color.setEnabled(False)
@@ -449,7 +460,6 @@ class EditGeometryProperties(PyDialog):
         self.point_size_slider_edit.setVisible(False)
         self.line_width_slider_edit.setVisible(False)
         self.checkbox_show.setVisible(False)
-        self.checkbox_hide.setVisible(False)
 
     def on_update_geometry_properties_window(self, data):
         """Not Implemented"""
@@ -463,7 +473,7 @@ class EditGeometryProperties(PyDialog):
         #self.out_data = data
         #self.update_active_key(i)
 
-    def update_active_key(self, index):
+    def update_active_key(self, index: QModelIndex) -> None:
         """
         Parameters
         ----------
@@ -482,7 +492,7 @@ class EditGeometryProperties(PyDialog):
         #i = self.keys.index(self.active_key)
         self.update_active_name(name)
 
-    def update_active_name(self, name):
+    def update_active_name(self, name: str) -> None:
         self.active_key = name
         self.name_edit.setText(name)
         obj = self.out_data[name]
@@ -509,7 +519,7 @@ class EditGeometryProperties(PyDialog):
             self.bar_scale_edit.setValue(bar_scale)
             self.force = True
             self.allow_update = True
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError(obj)
 
         #allowed_representations = [
@@ -517,6 +527,7 @@ class EditGeometryProperties(PyDialog):
 
         if self.representation != representation:
             self.representation = representation
+            self.on_set_representation()
             #if representation not in allowed_representations:
                 #msg = 'name=%r; representation=%r is invalid\nrepresentations=%r' % (
                     #name, representation, allowed_representations)
@@ -614,13 +625,12 @@ class EditGeometryProperties(PyDialog):
         #if self.use_slider:
             #self.opacity_slider_edit.setValue(opacity*10)
         self.checkbox_show.setChecked(is_visible)
-        self.checkbox_hide.setChecked(not is_visible)
 
         passed = self.on_validate()
         #self.on_apply(force=True)  # TODO: was turned on...do I want this???
         #self.allow_update = True
 
-    def create_layout(self):
+    def create_layout(self) -> None:
         ok_cancel_box = QHBoxLayout()
         ok_cancel_box.addWidget(self.cancel_button)
 
@@ -668,26 +678,28 @@ class EditGeometryProperties(PyDialog):
         irow += 1
 
         wire_surf_checkboxes = QButtonGroup(self)
-        wire_surf_checkboxes.addButton(self.checkbox_wire)
         wire_surf_checkboxes.addButton(self.checkbox_surf)
-
-        checkboxs = QButtonGroup(self)
-        checkboxs.addButton(self.checkbox_show)
-        checkboxs.addButton(self.checkbox_hide)
+        wire_surf_checkboxes.addButton(self.checkbox_wire)
+        wire_surf_checkboxes.addButton(self.checkbox_point)
+        for key, datai in self.out_data.items():
+            #print(key, datai)
+            self.representation = datai.representation
+            self.on_set_representation()
 
         vbox = QVBoxLayout()
         vbox.addWidget(self.table, stretch=1)
         vbox.addLayout(grid)
 
         vbox1 = QVBoxLayout()
+        vbox1.addWidget(self.checkbox_toggle)
         vbox1.addWidget(self.checkbox_wire)
         vbox1.addWidget(self.checkbox_surf)
+        vbox1.addWidget(self.checkbox_point)
 
         vbox2 = QVBoxLayout()
         vbox2.addWidget(self.checkbox_show)
-        vbox2.addWidget(self.checkbox_hide)
 
-        #vbox.addLayout(vbox1)
+        vbox.addLayout(vbox1)
         vbox.addLayout(vbox2)
 
         vbox.addStretch()
@@ -695,7 +707,21 @@ class EditGeometryProperties(PyDialog):
         vbox.addLayout(ok_cancel_box)
         self.setLayout(vbox)
 
-    def set_connections(self):
+    def on_set_representation(self) -> None:
+        is_point, is_surf, is_wire, is_follow = get_representation_flags(
+            self.representation)
+        if not self.show_representation_toggles:
+            is_point = False
+            is_surf = False
+            is_wire = False
+            is_follow = False
+
+        self.checkbox_toggle.setVisible(is_follow)
+        self.checkbox_wire.setVisible(is_wire)
+        self.checkbox_surf.setVisible(is_surf)
+        self.checkbox_point.setVisible(is_point)
+
+    def set_connections(self) -> None:
         """creates the actions for the menu"""
         self.opacity_edit.valueChanged.connect(self.on_opacity)
         self.line_width_edit.valueChanged.connect(self.on_line_width)
@@ -712,19 +738,22 @@ class EditGeometryProperties(PyDialog):
         # self.connect(self.line_width, QtCore.SIGNAL('clicked()'), self.on_line_width)
         # self.connect(self.point_size, QtCore.SIGNAL('clicked()'), self.on_point_size)
 
-        if qt_version == 4:
-            self.connect(self, QtCore.SIGNAL('triggered()'), self.closeEvent)
         self.color_edit.clicked.connect(self.on_color)
         self.checkbox_show.clicked.connect(self.on_show)
-        self.checkbox_hide.clicked.connect(self.on_hide)
         self.cancel_button.clicked.connect(self.on_cancel)
         # closeEvent
 
-    def keyPressEvent(self, event):
-        if event.key() == QtCore.Qt.Key_Escape:
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        #print(f'key = {key!r}')
+        #if key in [QtCore.Qt.Key_Up, QtCore.Qt.Key_Left]:
+        #    up
+        #if key in [QtCore.Qt.Key_Down, QtCore.Qt.Key_Right]:
+        #    down
+        if key == QtCore.Qt.Key_Escape:
             self.close()
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         self.on_cancel()
 
     def on_color(self):
@@ -751,13 +780,6 @@ class EditGeometryProperties(PyDialog):
         name = self.active_key
         is_checked = self.checkbox_show.isChecked()
         self.out_data[name].is_visible = is_checked
-        self.on_apply(force=self.force)
-
-    def on_hide(self):
-        """hides the actor"""
-        name = self.active_key
-        is_checked = self.checkbox_hide.isChecked()
-        self.out_data[name].is_visible = not is_checked
         self.on_apply(force=self.force)
 
     def on_line_width(self):
@@ -883,16 +905,12 @@ class EditGeometryProperties(PyDialog):
             #return True
         #return False
 
-    @property
-    def is_gui(self):
-        return hasattr(self.win_parent, 'on_update_geometry_properties')
-
-    def on_apply(self, force=False):
+    def on_apply(self, force: bool=False):
         passed = self.on_validate()
         #print("passed=%s force=%s allow=%s" % (passed, force, self.allow_update))
         if (passed or force) and self.allow_update and self.is_gui:
             #print('obj = %s' % self.out_data[self.active_key])
-            self.win_parent.on_update_geometry_properties(self.out_data, name=self.active_key)
+            self.gui_obj.on_update_geometry_properties(self.out_data, name=self.active_key)
         return passed
 
     def on_cancel(self):
@@ -901,6 +919,47 @@ class EditGeometryProperties(PyDialog):
             self.close()
             #self.destroy()
 
+def rounded_int(value: int | float) -> int:
+    """rounds a value that *should* be an integer"""
+    return int(round(value, 0))
+
+
+def get_representation_flags(representation: str) -> tuple[bool, bool, bool, bool]:
+    is_point = False
+    is_surf = False
+    is_wire = False
+    is_follow = False
+    if representation == 'coord':
+        pass
+    elif representation == 'bar':
+        pass
+    elif representation == 'main':
+        is_point = True
+        is_surf = True
+        is_wire = True
+        is_follow = False
+    elif representation == 'toggle':
+        is_point = True
+        is_surf = True
+        is_wire = True
+        is_follow = True
+    elif representation == 'point':
+        is_point = True
+    elif representation == 'wire':
+        is_wire = True
+    elif representation == 'surface':
+        is_surf = True
+    elif representation == 'wire+point':
+        is_point = True
+        is_wire = True
+    elif representation == 'wire+surf':
+        is_surf = True
+        is_wire = True
+    else:  # pragma: no cover
+        print(f'representation={representation!r}*****')
+        return
+        raise RuntimeError(self.representation)
+    return is_point, is_surf, is_wire, is_follow
 
 def main():  # pragma: no cover
     """gui independent way to test the program"""
@@ -929,19 +988,21 @@ def main():  # pragma: no cover
     # * surface - always surface
     # * bar - this can use bar scale
     data = {
-        'font_size' : 8,
+        'font_size' : 18,
         'toggle' : AltGeometry(parent, 'toggle', color=green, line_width=3, opacity=0.2, representation='toggle'),
+        'coord': CoordProperties('label', 'xyz', True, 1.0),
         'wire' : AltGeometry(parent, 'wire', color=purple, line_width=4, opacity=0.3, representation='wire'),
         'wire+point' : AltGeometry(parent, 'wire+point', color=blue, line_width=2, opacity=0.1, bar_scale=1.0, representation='wire+point'),
-        'wire+surf' : AltGeometry(parent, 'wire+surf', display='surface', color=blue, line_width=2, opacity=0.1, bar_scale=1.0, representation='wire+surf'),
+        'wire+surf' : AltGeometry(parent, 'wire+surf', display='Surface', color=blue, line_width=2, opacity=0.1, bar_scale=1.0, representation='wire+surf'),
         'main' : AltGeometry(parent, 'main', color=red, line_width=1, opacity=0.0, representation='main'),
         'point' : AltGeometry(parent, 'point', color=blue, opacity=0.1, representation='point'),
         'surface' : AltGeometry(parent, 'surface', color=blue, opacity=0.1, representation='surface'),
     }
-    main_window = EditGeometryProperties(data, win_parent=None)
+    main_window = EditGeometryProperties(data, None, is_gui=False, win_parent=None)
     main_window.show()
     # Enter the main loop
     app.exec_()
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()

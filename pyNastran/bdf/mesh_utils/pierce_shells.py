@@ -3,14 +3,14 @@ Defines:
  - pierce_shell_model(bdf_filename, xyz_points, tol=1.0)
 """
 from itertools import count
-from typing import List, Optional
+from typing import Optional, Any
 import numpy as np
 from pyNastran.bdf.bdf import BDF, read_bdf
 from pyNastran.bdf.mesh_utils.bdf_equivalence import _get_tree
 
 
-def quad_intersection(orig, direction, v0, v1, v2, v3):
-    # type: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray) -> Optional[np.ndarray]
+def quad_intersection(orig: np.ndarray, direction: np.ndarray,
+                      v0: np.ndarray, v1: np.ndarray, v2: np.ndarray, v3: np.ndarray) -> np.ndarray:
     """
     Pierces a quad
 
@@ -35,8 +35,8 @@ def quad_intersection(orig, direction, v0, v1, v2, v3):
         return ans
     return triangle_intersection(orig, direction, v0, v2, v3)
 
-def triangle_intersection(orig, direction, v0, v1, v2):
-    # type: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray) -> Optional[np.ndarray]
+def triangle_intersection(orig: np.ndarray, direction: np.ndarray,
+                          v0: np.ndarray, v1: np.ndarray, v2: np.ndarray) -> Optional[np.ndarray]:
     """
     Pierces a triangle
 
@@ -78,8 +78,8 @@ def triangle_intersection(orig, direction, v0, v1, v2):
     return orig + direction * (e2.dot(qvec) * inv_det)
 
 
-def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
-    # type: (Union[BDF, str], Any, float) -> List[int], np.ndarray, List[List[int]]
+def pierce_shell_model(bdf_filename: BDF | str, xyz_points: Any,
+                       tol: float=1.0) -> tuple[list[int], np.ndarray, list[list[int]]]:
     """
     Pierces a shell model with a <0., 0., 1.> vector.  In other words,
     models are pierced in the xy plane.
@@ -96,15 +96,15 @@ def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
 
     Returns
     -------
-    eids_pierce : List[int]
+    eids_pierce : list[int]
         int : The element ids that were pierced.
               If multiple elements are pierced, the one with the largest
               pierced z value will be returned.
         None : invalid pierce
-    xyz_pierces_max : List[float ndarray, None]
+    xyz_pierces_max : list[float ndarray, None]
         ndarray : pierce location
         None : invalid pierce
-    node_ids : List[int ndarray, None]
+    node_ids : list[int ndarray, None]
         ndarray : pierced element's nodes
         None : invalid pierce
 
@@ -155,6 +155,7 @@ def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
     #print(results)
     #print(iresults)
 
+    nan3 = np.full(3, np.nan, dtype='float64') # was None
     direction = np.array([0., 0., 1.])
     ipoints = []
     eids_pierce = []
@@ -165,7 +166,7 @@ def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
         if not eidsi:
             ipoints.append(i)
             eids_pierce.append(None)
-            xyz_pierces_max.append(None)
+            xyz_pierces_max.append(nan3)
             node_ids.append(None)
             model.log.warning('skipping %s because it failed tolerancing (tol=%s)' % (xyz_point, tol))
             continue
@@ -204,7 +205,7 @@ def pierce_shell_model(bdf_filename, xyz_points, tol=1.0):
         if len(zpiercesi) == 0:
             ipoints.append(i)
             eids_pierce.append(None)
-            xyz_pierces_max.append(None)
+            xyz_pierces_max.append(nan3)
             node_ids.append(None)
             model.log.warning('skipping %s because no pierces found (tol=%s)' % (xyz_point, tol))
             continue

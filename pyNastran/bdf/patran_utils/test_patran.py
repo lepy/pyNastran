@@ -13,7 +13,28 @@ MODEL_PATH = os.path.join(PKG_PATH, '..', 'models', 'patran_fmt')
 
 
 class TestPatranSyntax(unittest.TestCase):
-    def test_bdf_utils_01(self):
+    def test_patran_syntax_error(self):
+        node_sets1 = ['node', 1, 2, 3]
+        with self.assertRaises(TypeError):
+            parse_patran_syntax_dict(node_sets1)
+
+        node_sets2 = 'node 1,2:10:2:1'
+        with self.assertRaises(RuntimeError):
+            parse_patran_syntax_dict(node_sets2)
+
+        # node_sets3 = 'node 2:10:2'
+        # with self.assertRaises(SyntaxError):
+        #     parse_patran_syntax_dict(node_sets3)
+
+        node_sets4 = '2 node 2:10:2'
+        with self.assertRaises(AssertionError):
+            parse_patran_syntax_dict(node_sets4)
+        # print(out)
+
+        node_sets5 = 'node 2:10:2'
+        parse_patran_syntax_dict(node_sets5)
+
+    def test_patran_syntax_01(self):
         """tests parse_patran_syntax"""
         msg = '1:10  14:20:2  50:40:-1'
         output = parse_patran_syntax(msg, pound=None)
@@ -32,7 +53,7 @@ class TestPatranSyntax(unittest.TestCase):
 
         msg = '#:1'
         with self.assertRaises(ValueError):
-            output = parse_patran_syntax(msg, pound=None)
+            parse_patran_syntax(msg, pound=None)
         #assert array_equal(output, [1, 2, 3, 4, 5])
 
         msg = '1:#'
@@ -44,7 +65,7 @@ class TestPatranSyntax(unittest.TestCase):
         #with self.assertRaises(ValueError):
         output = parse_patran_syntax(msg, pound='5')
 
-    def test_bdf_utils_02(self):
+    def test_patran_syntax_02(self):
         """tests parse_patran_syntax_dict"""
         msg = 'n 1:10  14:20:2  50:40:-1 e 10 20'
         expected_nodes = np.array(
@@ -58,16 +79,15 @@ class TestPatranSyntax(unittest.TestCase):
         assert np.array_equal(output_dict['n'], expected_nodes)
         assert np.array_equal(output_dict['e'], expected_elements)
 
-
         # messing with the order a bit
         msg = 'n 1:#  e 2:#:4 junk 1 7 12:#:2 3'
         expected_nodes = np.array([1, 2, 3, 4, 5])
         expected_elements = np.array([2, 6, 10, 14])
         expected_junk = np.array([1, 3, 7, 12, 14, 16, 18, 20])
         pound_dict = {
-            'n' : 5,
-            'e' : 14,
-            'junk' : 20.,
+            'n': 5,
+            'e': 14,
+            'junk': 20.,
         }
 
         output_dict = parse_patran_syntax_dict(msg, pound_dict=pound_dict)
@@ -79,16 +99,16 @@ class TestPatranSyntax(unittest.TestCase):
             np.setdiff1d(output_dict['junk'], expected_junk))
         assert np.array_equal(output_dict['junk'], expected_junk), error_msg
 
-        msg = write_patran_syntax_dict({'e' : [2, 6, 10, 14]})
+        msg = write_patran_syntax_dict({'e': [2, 6, 10, 14]})
         assert msg == 'e 2:14:4', 'msg=%r' % msg
 
-        msg = write_patran_syntax_dict({'e' : [1, 2, 6, 10, 14]})
+        msg = write_patran_syntax_dict({'e': [1, 2, 6, 10, 14]})
         assert msg == 'e 1 2 6:14:4', 'msg=%r' % msg
 
         msg = write_patran_syntax_dict(
             {
-                'n' : [1, 2, 6, 10, 14],
-                'e' : [1, 2, 6, 10, 14],
+                'n': [1, 2, 6, 10, 14],
+                'e': [1, 2, 6, 10, 14],
             },
         )
         assert msg == 'e 1 2 6:14:4 n 1 2 6:14:4', 'msg=%r' % msg
@@ -96,21 +116,21 @@ class TestPatranSyntax(unittest.TestCase):
         out = parse_patran_syntax_dict('')
         assert len(out) == 0, 'out=%s' % out
 
-    def test_bdf_utils_03(self):
+    def test_patran_syntax_03(self):
         """tests parse_patran_syntax_dict"""
         node_sets = "e 1:3 n 2:6:2 Node 10:13 N 15 coord 1:10"
         type_map = {
-            'n' : 'Node',
-            'Node' : 'Node',
-            'e' : 'Element',
-            'Elm' : 'Element',
-            'Element' : 'Element',
+            'n': 'Node',
+            'Node': 'Node',
+            'e': 'Element',
+            'Elm': 'Element',
+            'Element': 'Element',
         }
 
         data = parse_patran_syntax_dict(node_sets, type_map)
         data_expected = {
-            'Element' : np.array([1, 2, 3]),
-            'Node' : np.array([2, 4, 6, 10, 11, 12, 13, 15]),
+            'Element': np.array([1, 2, 3]),
+            'Node': np.array([2, 4, 6, 10, 11, 12, 13, 15]),
         }
 
         data = parse_patran_syntax_dict_map(node_sets, type_map, msg='')

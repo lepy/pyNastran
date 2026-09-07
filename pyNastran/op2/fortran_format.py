@@ -3,9 +3,75 @@ Defines:
  - FortranFormat
 
 """
+from __future__ import annotations
+from typing import Optional, TYPE_CHECKING
 from pyNastran.utils import object_attributes
 from pyNastran.utils.numpy_utils import integer_types
 #from pyNastran.op2.errors import FortranMarkerError, SortCodeError
+from pyNastran.op2.errors import EmptyRecordError
+
+from pyNastran.op2.tables.oef_forces.oef import OEF
+from pyNastran.op2.tables.oef_forces.oefpk import OEFPK
+from pyNastran.op2.tables.oes_stressStrain.oes import OES
+from pyNastran.op2.tables.ogs_grid_point_stresses.ogs import OGS
+
+from pyNastran.op2.tables.oee_energy.onr import ONR
+from pyNastran.op2.tables.ogf_gridPointForces.ogpf import OGPF
+#from pyNastran.op2.tables.oes_stressStrain.oesm import OESM
+
+from pyNastran.op2.tables.opg_appliedLoads.opg import OPG
+from pyNastran.op2.tables.oqg_constraintForces.oqg import OQG
+from pyNastran.op2.tables.oqg_constraintForces.obc import OBC
+from pyNastran.op2.tables.oqg_constraintForces.obg import OBG
+from pyNastran.op2.tables.oug.oug import OUG
+from pyNastran.op2.tables.oug.otemp import OTEMP
+from pyNastran.op2.tables.oug.ougpk import OUGPK
+
+from pyNastran.op2.tables.contact.oslide import OSLIDE
+from pyNastran.op2.tables.contact.obolt import OBOLT
+from pyNastran.op2.tables.contact.ofcon3d import OFCON3D
+from pyNastran.op2.tables.contact.ougstrs import OUGSTRS
+
+from pyNastran.op2.tables.lama_eigenvalues.lama import LAMA
+from pyNastran.op2.tables.onmd import ONMD
+from pyNastran.op2.tables.opr import OPR
+from pyNastran.op2.tables.ogpwg import OGPWG
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.op2.op2 import OP2
+
+
+class Op2Tables:
+    def __init__(self, op2: OP2):
+        #self.op2 = op2
+        self.reader_onmd = ONMD(op2)
+        self.reader_ogpwg = OGPWG(op2)
+        self.reader_lama = LAMA(op2)
+
+        self.reader_oes = OES(op2)
+        self.reader_opg = OPG(op2)
+        self.reader_oqg = OQG(op2)
+        self.reader_opr = OPR(op2)
+        self.reader_ogs = OGS(op2)
+        self.reader_onr = ONR(op2)
+        self.reader_ogpf = OGPF(op2)
+
+        # OUG - displacement, velocity, acceleration, eigenvector, temperature
+        self.reader_oug = OUG(op2)
+        self.reader_otemp = OTEMP(op2)  # Siemens
+        self.reader_ougpk = OUGPK(op2)  # STK
+
+        # bolt
+        self.reader_obolt = OBOLT(op2) # NX 2019.2 Bolt output
+        # contact
+        self.reader_obc = OBC(op2)
+        self.reader_obg = OBG(op2)
+        self.reader_oslide = OSLIDE(op2) # Incremental and total slide output for contact/glue
+        self.reader_ofcon3d = OFCON3D(op2)
+        self.reader_ougstrs = OUGSTRS(op2)
+
+        #  OEF - element force, heat flux
+        self.reader_oef = OEF(op2)
+        self.reader_oefpk = OEFPK(op2) # STK
 
 
 class FortranFormat:
@@ -20,24 +86,37 @@ class FortranFormat:
         self.read_mode = 1
         self._endian = None
         self._table_mapper = {}
-        self._nastran_format = None
+        if hasattr(self, '_nastran_format'):
+            pass
+        else:
+            self._nastran_format = None
+        self._data_factor = 1
 
         #: stores if the user entered [] for isubcases
         self.is_all_subcases = True
         self.valid_subcases = []
         #self.op2_reader = OP2Reader()
-        self.IS_TESTING = True
+        self.IS_TESTING = False
 
-    def show(self, n: int, types: str='ifs', endian=None):  # pragma: no cover
+        self._op2_readers = Op2Tables(self)
+
+    def show_file(self, file, n: int, types: str='ifs', endian=None, force: bool=False):
+        nold = self.n
+        data_out = self.f.read(n)
+        self.n = nold
+        self.f.seek(self.n)
+        msg = self.op2_reader._write_data(file, data_out, types='ifs', endian=endian, force=force)
+
+    def show(self, n: int, types: str='ifs', endian=None, force: bool=False):  # pragma: no cover
         """Shows binary data"""
-        return self.op2_reader.show(n, types=types, endian=endian)
+        return self.op2_reader.show(n, types=types, endian=endian, force=force)
 
-    def show_data(self, data, types: str='ifs', endian=None):  # pragma: no cover
+    def show_data(self, data, types: str='ifs', endian=None, force: bool=False):  # pragma: no cover
         """Shows binary data"""
-        return self.op2_reader.show_data(data, types=types, endian=endian)
+        return self.op2_reader.show_data(data, types=types, endian=endian, force=force)
 
-    def show_ndata(self, n: int, types: str='ifs'):  # pragma: no cover
-        self.op2_reader.show_ndata(n, types=types)
+    def show_ndata(self, n: int, types: str='ifs', force: bool=False, endian=None):  # pragma: no cover
+        self.op2_reader.show_ndata(n, types=types, force=force, endian=endian)
 
     #def passer(self, data):
         #"""
@@ -51,7 +130,7 @@ class FortranFormat:
     def _finish(self):
         raise NotImplementedError('overwrite this')
 
-    def _read_subtable_results(self, table4_parser, record_len):
+    def _read_subtable_results(self, table4_parser, record_len: int) -> Optional[int]:
         """
         # if reading the data
         # 1 - 1st pass to size the array (vectorized)
@@ -67,11 +146,11 @@ class FortranFormat:
         Returns
         -------
         n : None / int
-            None : an error occurred or we're in read_mode=1/array sizeing (???)
+            None : an error occurred or we're in read_mode=1/array sizing (???)
             int : the number of bytes that have been read
 
         """
-        op2_reader = self.op2_reader
+        op2_reader = self.op2_reader  # type: OP2Reader
         #datai = b''
         n = 0
         if self.read_mode == 2:
@@ -79,7 +158,7 @@ class FortranFormat:
 
             data, ndata = op2_reader._read_record_ndata()
             n = table4_parser(data, ndata)
-            assert isinstance(n, integer_types), self.table_name
+            assert isinstance(n, integer_types), (self.table_name, table4_parser)
 
             self._reset_vector_counter()
 
@@ -88,10 +167,28 @@ class FortranFormat:
 
             #n = op2_reader._skip_record()
             #n = table4_parser(datai, 300000)
-            if self.table_name in [b'R1TABRG', b'ONRGY1']:
+            #self.show(100, types='ifs', endian=None, force=False)
+            if self.table_name in {b'R1TABRG', b'ONRGY1', b'PVT', b'PVT0', b'PVTS'}:
+                # these tables are always fully parsed
+                # PVT/PVTS - we want to know what the PARAM cards are,
+                #            so we can determine the NXVER
                 data, ndata = op2_reader._read_record_ndata()
             else:
-                data, ndata = op2_reader._skip_record_ndata()
+                try:
+                    data, ndata = op2_reader._skip_record_ndata()
+                except EmptyRecordError:
+                    self.log.error('error round 2...')
+                    raise
+                    op2_reader.read_markers([1, 0], macro_rewind=False)
+                    marker146 = op2_reader.get_nmarkers4(1, rewind=True)
+                    if marker146 == 146:
+                        #print('marker146', marker146)
+                        return n
+                    self._cleanup_data_members()
+                    #n = self.n
+                    #return n
+                    raise
+
             n = table4_parser(data, ndata)
             if not isinstance(n, integer_types):
                 msg = 'n is not an integer; table_name=%s n=%s table4_parser=%s' % (
@@ -118,7 +215,7 @@ class FortranFormat:
         they have obj.itime which is their table3 counter
         """
         if not(hasattr(self, 'obj') and hasattr(self.obj, 'itime')):
-            #print('self.obj.name=%r doesnt have itime' % self.obj.__class__.__name__)
+            #print(f'self.obj.name={self.obj.__class__.__name__!r} doesnt have itime')
             return
         #ntotal = record_len // (self.num_wide * 4) * self._data_factor
 
@@ -146,6 +243,9 @@ class FortranFormat:
         # For a PCOMP, it's ntotal=sum(nelements*nlayers),
         # where each element can have a different number
         # of layers
+        #
+        # TODO: the or 1 flag breaks tests...that could be why shapes are bad...
+        #
         if self.obj.ntotal == self.obj.data.shape[1] or 1:
             #if self.table_name_str in ['OESRMS2', 'OESNO2', 'OSTRRMS2', 'OSTRNO2', 'OESATO2']:
                 #print('resetting %r indicies; itime=%s; shape=%s' % (
@@ -159,12 +259,12 @@ class FortranFormat:
             # can it happen any other time?
             #
             # yup, when you have sort2...
-            msga = 'self.obj.name=%r has itime' % self.obj.__class__.__name__
+            msga = f'self.obj.name={self.obj.__class__.__name__!r} has itime'
             self.log.debug(msga)
             msgb = 'ntotal=%s shape=%s shape[1]=%s _data_factor=%s\n' % (
                 self.obj.ntotal, str(self.obj.data.shape),
                 self.obj.data.shape[1], self._data_factor)
-            msgb += 'obj._ntotals=%s' % self.obj._ntotals
+            msgb += f'obj._ntotals={self.obj._ntotals}'
             self.log.error(msgb)
             raise RuntimeError(msga + '\n' + msgb)
 
@@ -190,8 +290,10 @@ class FortranFormat:
                 #raise RuntimeError(msg)
             self.obj._reset_indices()
             self.obj.ntimes += 1
-            ntotal = record_len // (self.num_wide * 4) * self._data_factor
-
+            #ntotal = record_len // (self.num_wide * 4) * self._data_factor
+            ntotal = record_len // (self.num_wide * self.size) * self._data_factor
+            #if self._data_factor == 2 and self.num_wide == 77:
+                #print(f'record_len={record_len} num_wide={self.num_wide}')
             # this has a problem with XYPLOT data if there is a result
             #    request in the same format (e.g. OESNLXD/OES1X1 tables
             #    if they both have the same element ID)
@@ -209,7 +311,7 @@ class FortranFormat:
             self.log.warning('obj=%s doesnt have ntimes' % self.obj.__class__.__name__)
         return
 
-    def _cleanup_data_members(self):
+    def _cleanup_data_members(self) -> None:
         """deletes variables from previous tables"""
         del_words = [
             'words',
@@ -249,7 +351,7 @@ class FortranFormat:
                 val = getattr(self, word)
                 if isinstance(val, list) and len(val) == 0:
                     continue
-                msg += '  %s=%s\n' % (word, val)
+                msg += f'  {word}={val}\n'
         if msg:
-            print(object_attributes(self))
+            print(object_attributes(self, filter_properties=True))
             print(msg)

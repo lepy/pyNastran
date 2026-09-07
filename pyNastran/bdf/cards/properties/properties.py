@@ -9,12 +9,14 @@ All ungrouped properties are defined in this file.  This includes:
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from pyNastran.utils.numpy_utils import integer_types
+from typing import Optional, TYPE_CHECKING
+from pyNastran.utils.numpy_utils import integer_types, float_types
+from pyNastran.bdf import MAX_INT
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
+from pyNastran.bdf.bdf_interface.internal_get import material_id, coord_id
 from pyNastran.bdf.bdf_interface.assign_type import (
-    integer, integer_or_blank, double, double_or_blank)
+    integer, integer_or_blank, double, double_or_blank, string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 if TYPE_CHECKING:  # pragma: no cover
@@ -60,20 +62,23 @@ class PFAST(Property):
         return PFAST(pid, d, kt1, kt2, kt3,
                      mcid=-1, mflag=0, kr1=0., kr2=0., kr3=0., mass=0., ge=0., comment='')
 
-    def __init__(self, pid, d, kt1, kt2, kt3, mcid=-1, mflag=0,
-                 kr1=0., kr2=0., kr3=0., mass=0., ge=0., comment=''):
+    def __init__(self, pid: int, d: float,
+                 kt1: float, kt2: float, kt3: float,
+                 mcid: int=-1, mflag: int=0,
+                 kr1: float=0., kr2: float=0., kr3: float=0.,
+                 mass: float=0., ge: float=0., comment: str='') -> PFAST:
         """
-        Creates a PAST card
+        Creates a PFAST card
 
         Parameters
         ----------
         pid : int
             property id
-        d : int
+        d : float
             diameter of the fastener
         kt1, kt2, kt3 : float
             stiffness values in directions 1-3
-        mcid : int; default=01
+        mcid : int; default=-1
             specifies the element stiffness coordinate system
         mflag : int; default=0
             0-absolute; 1-relative
@@ -111,7 +116,7 @@ class PFAST(Property):
         self.mass = mass
         #: Structural damping
         self.ge = ge
-        assert self.d > 0
+        #assert self.d > 0, d
         assert mflag in [0, 1]
         assert self.mcid >= -1
         self.mcid_ref = None
@@ -127,34 +132,35 @@ class PFAST(Property):
             a BDFCard object
         comment : str; default=''
             a comment for the card
+
         """
         pid = integer(card, 1, 'pid')
-        d = double(card, 2, 'd')
-        mcid = integer_or_blank(card, 3, 'mcid', -1)
-        mflag = integer_or_blank(card, 4, 'mflag', 0)
+        d = double(card, 2, 'diameter')
+        mcid = integer_or_blank(card, 3, 'mcid', default=-1)
+        mflag = integer_or_blank(card, 4, 'mflag', default=0)
 
         kt1 = double(card, 5, 'kt1')
         kt2 = double(card, 6, 'kt2')
         kt3 = double(card, 7, 'kt3')
 
-        kr1 = double_or_blank(card, 8, 'kr1', 0.0)
-        kr2 = double_or_blank(card, 9, 'kr2', 0.0)
-        kr3 = double_or_blank(card, 10, 'kr3', 0.0)
-        mass = double_or_blank(card, 11, 'mass', 0.0)
-        ge = double_or_blank(card, 12, 'ge', 0.0)
-        assert len(card) <= 13, 'len(PFAST card) = %i\ncard=%s' % (len(card), card)
+        kr1 = double_or_blank(card, 8, 'kr1', default=0.0)
+        kr2 = double_or_blank(card, 9, 'kr2', default=0.0)
+        kr3 = double_or_blank(card, 10, 'kr3', default=0.0)
+        mass = double_or_blank(card, 11, 'mass', default=0.0)
+        ge = double_or_blank(card, 12, 'ge', default=0.0)
+        assert len(card) <= 13, f'len(PFAST card) = {len(card):d}\ncard={card}'
         return PFAST(pid, d, kt1, kt2, kt3, mcid=mcid, mflag=mflag,
                      kr1=kr1, kr2=kr2, kr3=kr3, mass=mass, ge=ge,
                      comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PFAST card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -183,6 +189,20 @@ class PFAST(Property):
         if self.mcid != -1:
             self.mcid_ref = model.Coord(self.Mcid(), msg)
 
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = ', which is required by PFAST pid=%s' % self.pid
+        if self.mcid != -1:
+            self.mcid_ref = model.safe_coord(self.Mcid(), self.pid, xref_errors, msg)
+
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
         """Removes cross-reference links"""
@@ -190,12 +210,13 @@ class PFAST(Property):
         #if self.mcid != -1:
         self.mcid_ref = None
 
-    def Mcid(self):
-        if self.mcid_ref is None:
-            return self.mcid
-        return self.mcid_ref.cid
+    def Mcid(self) -> int:
+        return coord_id(self.mcid_ref, self.mcid)
+        # if self.mcid_ref is None:
+        #     return self.mcid
+        # return self.mcid_ref.cid
 
-    def Mass(self):
+    def Mass(self) -> float:
         return self.mass
 
     def raw_fields(self):
@@ -220,9 +241,162 @@ class PFAST(Property):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
+            if max([self.pid, self.mcid]) > MAX_INT:
+                return self.comment + print_card_16(card)
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
+
+class PWELD(Property):
+    """
+    +-------+-------+-------+-----+-----+-----+------+------+------+
+    |   1   |   2   |   3   |  4  |  5  |  6  |   7  |   8  |  9   |
+    +=======+=======+=======+=====+=====+=====+======+======+======+
+    | PWELD |  PID  |  MID  |  D  |     |     | MSET |      | TYPE |
+    +-------+-------+-------+-----+-----+-----+------+------+------+
+    |       | LDMIN | LDMAX |     |     |     |      |      |      |
+    +-------+-------+-------+-----+-----+-----+------+------+------+
+    | PWELD |  100  |   3   | 1.0 |     |     |      |      |      |
+    +-------+-------+-------+-----+-----+-----+------+------+------+
+    """
+    type = 'PWELD'
+    _field_map = {
+        1: 'pid', 2: 'mid', 3: 'd', 6: 'mset', 8: 'connect_type',
+        9: 'ldmin', 10: 'ldmax',
+    }
+    pname_fid_map = {
+        'MID': 'mid',
+        'D': 'd',
+        'LDMIN': 'ldmin',
+        'LDMAX': 'ldmax',
+    }
+    @classmethod
+    def _init_from_empty(cls):
+        pid = 1
+        mid = 2
+        d = 0.1
+        return PWELD(pid, mid, d, mset='OFF', connect_type='', ldmin=None, ldmax=None, comment='')
+
+    def __init__(self, pid: int, mid: int, d: float,
+                 mset: str='OFF', connect_type: str='',
+                 ldmin: Optional[float]=None,
+                 ldmax: Optional[float]=None,
+                 comment: str='') -> PWELD:
+        """
+        Creates a PWELD card
+
+        Parameters
+        ----------
+        pid : int
+            property id
+        mid : int
+            material id
+        d : float
+            diameter of the weld
+        mset : str; default='OFF'
+            flag to eliminate m-set degrees-of-freedom (DOFs)
+        ldmin : float; default=None
+            smallest ratio of length to diameter for stiffness calculation
+        ldmax : float; default=None
+            largest ratio of length to diameter for stiffness calculation
+        comment : str; default=''
+            a comment for the card
+        """
+        Property.__init__(self)
+        if comment:
+            self.comment = comment
+        #: Property ID
+        self.pid = pid
+        #: Material ID
+        self.mid = mid
+        self.mid_ref = None
+        #: Diameter of the weld
+        self.d = d
+        #: M-set flag
+        self.mset = mset
+        #: Type of weld
+        self.connect_type = connect_type
+        #: Minimum length of the weld
+        self.ldmin = ldmin
+        #: Maximum length of the weld
+        self.ldmax = ldmax
+        assert isinstance(d, float_types), d
+        assert isinstance(mset, str), mset
+        assert isinstance(connect_type, str), connect_type
+        assert connect_type in ['', 'SPOT'], connect_type
+
+    @classmethod
+    def add_card(cls, card, comment=''):
+        """
+        Adds a PWELD card from ``BDF.add_card(...)``
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+        """
+        pid = integer(card, 1, 'pid')
+        mid = integer(card, 2,'mid')
+        d = double(card, 3, 'd')
+        mset = string_or_blank(card, 6,'mset', default='OFF')
+        connect_type = string_or_blank(card, 8, 'connect_type', default='')
+        ldmin = double_or_blank(card, 9, 'ldmin')
+        ldmax = double_or_blank(card, 10, 'ldmax')
+        assert len(card) <= 11, f'len(PWELD card) = {len(card):d}\ncard={card}'
+        return PWELD(pid, mid, d, mset=mset, connect_type=connect_type,
+                     ldmin=ldmin, ldmax=ldmax, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
+        """
+        Adds a PWELD card from the OP2
+        Parameters
+        ----------
+        data : list[varies]
+            a list of fields defined in OP2 format
+        comment : str; default=''
+            a comment for the card
+        """
+        (pid, mid, d, mset, connect_type, ldmin, ldmax) = data
+        return PWELD(pid, mid, d, mset=mset, connect_type=connect_type, ldmin=ldmin, ldmax=ldmax, comment=comment)
+
+    def cross_reference(self, model: BDF) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = ', which is required by PWELD pid=%s' % self.pid
+        self.mid_ref = model.Material(self.mid, msg=msg)
+
+    def uncross_reference(self) -> None:
+        """Removes cross-reference links"""
+        self.mid = self.Mid()
+        self.mid_ref = None
+
+    def raw_fields(self):
+        fields = [
+            'PWELD', self.pid, self.Mid(), self.d, None, None, self.mset, None, self.connect_type,
+            self.ldmin, self.ldmax]
+        return fields
+
+    def repr_fields(self):
+        mset = set_blank_if_default(self.mset, 'OFF')
+        fields = [
+            'PWELD', self.pid, self.Mid(), self.d, None, None, mset, None, self.connect_type,
+            self.ldmin, self.ldmax]
+        return fields
+
+    def write_card(self, size: int=8, is_double: bool=False) -> str:
+        card = self.repr_fields()
+        if size == 8:
+            return self.comment + print_card_8(card)
+        return self.comment + print_card_16(card)
 
 class PGAP(Property):
     """
@@ -344,28 +518,28 @@ class PGAP(Property):
             a comment for the card
         """
         pid = integer(card, 1, 'pid')
-        u0 = double_or_blank(card, 2, 'u0', 0.)
-        f0 = double_or_blank(card, 3, 'f0', 0.)
-        ka = double_or_blank(card, 4, 'ka', 1.e8)
-        kb = double_or_blank(card, 5, 'kb', 1e-14 * ka)
-        mu1 = double_or_blank(card, 7, 'mu1', 0.)
-        kt = double_or_blank(card, 6, 'kt', mu1 * ka)
-        mu2 = double_or_blank(card, 8, 'mu2', mu1)
-        tmax = double_or_blank(card, 9, 'tmax', 0.)
-        mar = double_or_blank(card, 10, 'mar', 100.)
-        trmin = double_or_blank(card, 11, 'trmin', 0.001)
-        assert len(card) <= 12, 'len(PGAP card) = %i\ncard=%s' % (len(card), card)
+        u0 = double_or_blank(card, 2, 'u0', default=0.)
+        f0 = double_or_blank(card, 3, 'f0', default=0.)
+        ka = double_or_blank(card, 4, 'ka', default=1.e8)
+        kb = double_or_blank(card, 5, 'kb', default=1e-14 * ka)
+        mu1 = double_or_blank(card, 7, 'mu1', default=0.)
+        kt = double_or_blank(card, 6, 'kt', default=mu1 * ka)
+        mu2 = double_or_blank(card, 8, 'mu2', default=mu1)
+        tmax = double_or_blank(card, 9, 'tmax', default=0.)
+        mar = double_or_blank(card, 10, 'mar', default=100.)
+        trmin = double_or_blank(card, 11, 'trmin', default=0.001)
+        assert len(card) <= 12, f'len(PGAP card) = {len(card):d}\ncard={card}'
         return PGAP(pid, u0, f0, ka, kb, mu1, kt, mu2, tmax, mar, trmin,
                     comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PGAP card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -389,6 +563,9 @@ class PGAP(Property):
         assert isinstance(pid, int), 'pid=%r\n%s' % (pid, str(self))
 
     def cross_reference(self, model: BDF) -> None:
+        pass
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
         pass
 
     def uncross_reference(self) -> None:
@@ -428,11 +605,8 @@ class CrackProperty(Property):
     def __init__(self):
         Property.__init__(self)
 
-    def Mid(self):
-        # type: () -> int
-        if self.mid_ref is not None:
-            return self.mid_ref.mid
-        return self.mid
+    def Mid(self) -> int:
+        return material_id(self.mid_ref, self.mid)
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
@@ -509,7 +683,7 @@ class PRAC2D(CrackProperty):
         nsm = double_or_blank(card, 5, 'nsm', 0.)
         gamma = double_or_blank(card, 6, 'gamma', 0.5)
         phi = double_or_blank(card, 7, 'phi', 180.)
-        assert len(card) <= 8, 'len(PRAC2D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 8, f'len(PRAC2D card) = {len(card):d}\ncard={card}'
         return PRAC2D(pid, mid, thick, iplane, nsm, gamma, phi,
                       comment=comment)
 
@@ -528,6 +702,18 @@ class PRAC2D(CrackProperty):
         """
         msg = ', which is required by PRAC2D pid=%s' % self.pid
         self.mid_ref = model.Material(self.mid, msg)  # MAT1, MAT2, MAT8
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by PRAC2D pid=%s' % self.pid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg)  # MAT1, MAT2, MAT8
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -597,7 +783,7 @@ class PRAC3D(CrackProperty):
         mid = integer(card, 2, 'mid')
         gamma = double_or_blank(card, 3, 'gamma', 0.5)
         phi = double_or_blank(card, 4, 'gamma', 180.)
-        assert len(card) <= 5, 'len(PRAC3D card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(PRAC3D card) = {len(card):d}\ncard={card}'
         return PRAC3D(pid, mid, gamma, phi, comment=comment)
 
     def _verify(self, xref):
@@ -615,6 +801,18 @@ class PRAC3D(CrackProperty):
         """
         msg = ', which is required by PRAC3D pid=%s' % self.pid
         self.mid_ref = model.Material(self.mid, msg)  # MAT1, MAT9
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+        """
+        msg = ', which is required by PRAC3D pid=%s' % self.pid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg)  # MAT1, MAT9
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""

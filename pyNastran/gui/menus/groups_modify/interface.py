@@ -1,5 +1,6 @@
 from pyNastran.gui.menus.groups_modify.groups_modify import GroupsModify
 
+
 def on_set_modify_groups(self):
     """
     Opens a dialog box to set:
@@ -17,15 +18,15 @@ def on_set_modify_groups(self):
     if not len(self.groups):  # no 'main' group
         self.log_error('No main group to create.')
         return
-    print('groups.keys() = %s' % self.groups.keys())
+    #print('groups.keys() = %s' % list(self.groups.keys()))
 
     group_active = self.group_active
     assert isinstance(group_active, str), group_active
     data = {
-        'font_size' : self.settings.font_size,
-        0 : self.groups['main'],
-        'clicked_ok' : False,
-        'close' : False,
+        'font_size': self.settings.font_size,
+        0: self.groups['main'],
+        'clicked_ok': False,
+        'close': False,
     }
 
     i = 1

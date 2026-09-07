@@ -1,12 +1,20 @@
-from numpy import unique
+from __future__ import annotations
+from typing import Optional, TYPE_CHECKING
+import numpy as np
 
 from pyNastran.bdf.bdf import BDF
 from pyNastran.converters.cart3d.cart3d import Cart3D, read_cart3d
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
+if TYPE_CHECKING:  # pragma: no cover
+    from cpylog import SimpleLogger
+    CASE = dict[int, float]
+    LOADS_DICT = dict[int, CASE]
 
-
-def cart3d_to_nastran_model(cart3d_filename, log=None, debug=False):
+def cart3d_to_nastran_model(cart3d_filename: str,
+                            loads_map: Optional[LOADS_DICT]=None,
+                            log: Optional[SimpleLogger]=None,
+                            debug: bool=False) -> BDF:
     """
     Converts a Cart3D file to Nastran format and returns a BDF() object.
 
@@ -14,6 +22,9 @@ def cart3d_to_nastran_model(cart3d_filename, log=None, debug=False):
     ----------
     cart3d_filename : str
         path to the input Cart3D file
+    loads_map: dict[load_id, case]
+        case : dict[eid, pressure]
+        write the loads
     log : log / None
         log : a logger object
         None : a log will be defined
@@ -41,29 +52,34 @@ def cart3d_to_nastran_model(cart3d_filename, log=None, debug=False):
 
     i = 0
     nid = 1
-    cid = 0
     model = BDF(log=log, debug=debug)
-    for node in nodes:
-        card = ['GRID', nid, cid] + list(node)
-        model.add_card(card, 'GRID', is_list=True)
+    for xyz in nodes:
+        model.add_grid(nid, xyz)
         nid += 1
 
     eid = 1
-    for (n1, n2, n3), pid in zip(elements, regions):
-        card = ['CTRIA3', eid, pid, n1, n2, n3]
-        model.add_card(card, 'CTRIA3', is_list=True)
+    for nids, pid in zip(elements, regions):
+        model.add_ctria3(eid, pid, nids)
         #print(model.elements[eid])
         eid += 1
 
     t = 0.1
     E = 1e7
+    G = None
     nu = 0.3
-    for pid in unique(regions):
+    for pid in np.unique(regions):
         mid = pid
-        card = ['PSHELL', pid, mid, t]
-        model.add_card(card, 'PSHELL', is_list=True)
-        card = ['MAT1', mid, E, None, nu]
-        model.add_card(card, 'MAT1', is_list=True)
+        model.add_pshell(pid, mid1=mid, t=t)
+        model.add_mat1(mid, E, G, nu)
+
+    if loads_map:
+        for name, load_id in loads_map.items():
+            loads = cart3d.loads[name]
+            comment = name
+            for inid, Cp in enumerate(loads):
+                loadi = model.add_sload(load_id, [inid+1], [Cp], comment=comment)
+                comment = ''
+
     model.pop_parse_errors()
     return model
 
@@ -134,10 +150,44 @@ def cart3d_to_nastran_filename(cart3d_filename, bdf_filename, log=None, debug=Fa
         E = 1e7
         nu = 0.3
         bdf_file.write('$Properties\n')
-        for pid in unique(regions):
+        for pid in np.unique(regions):
             mid = pid
             card = print_card_8(['PSHELL', pid, mid, t])
             bdf_file.write(card)
             card = print_card_8(['MAT1', mid, E, None, nu])
             bdf_file.write(card)
+
+
+        load_id = 1
+        if 'Cp' in cart3d.loads:
+            Cp = cart3d.loads['Cp']
+            #+--------+-----+------+------+------+------+------+------+------+
+            #|    1   |   2 |  3   |  4   |   5  |   6  |   7  |   8  |   9  |
+            #+========+=====+======+======+======+=============+======+======+
+            #| PLOAD2 | SID |  P   | EID1 | EID2 | EID3 | EID4 | EID5 | EID6 |
+            #+--------+-----+------+------+------+------+------+------+------+
+
+            #from collections import defaultdict
+            #nid_to_eids = defaultdict(list)
+
+            assert len(Cp) == len(nodes)
+            inode1 = elements[:, 0] - 1
+            inode2 = elements[:, 1] - 1
+            inode3 = elements[:, 2] - 1
+            cp1 = Cp[inode1]
+            cp2 = Cp[inode2]
+            cp3 = Cp[inode3]
+            cp_avg = (cp1 + cp2 + cp3) / 3.
+
+            for eid, cp_avgi in enumerate(cp_avg):
+                card = print_card_8(['PLOAD2', load_id, cp_avgi, eid + 1])  # +1 b/c it's 0-based
+                bdf_file.write(card)
+
         bdf_file.write('ENDDATA\n')
+
+if __name__ == '__main__':  # pragma: no cover
+    import sys
+    cart3d_filename = sys.argv[1]
+    print(cart3d_filename)
+    bdf_filename = 'spike.bdf'
+    cart3d_to_nastran_filename(cart3d_filename, bdf_filename, log=None, debug=False)

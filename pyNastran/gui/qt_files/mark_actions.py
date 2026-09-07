@@ -3,11 +3,20 @@ defines:
  - MarkActions
 
 """
+from __future__ import annotations
+from typing import Optional, Any, TYPE_CHECKING
 import numpy as np
-import vtk
+from vtkmodules.vtkCommonDataModel import vtkSelection
+from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
+
+from pyNastran.gui.vtk_rendering_core import vtkBillboardTextActor3D
 
 from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.gui.vtk_common_core import vtkMath
 from pyNastran.gui.utils.vtk.vtk_utils import numpy_to_vtk_points, create_unstructured_point_grid
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.gui.main_window import MainWindow
+    from vtkmodules.vtkRenderingAnnotation import vtkBillboardTextActor3D
 
 
 class MarkActions:
@@ -16,7 +25,12 @@ class MarkActions:
         """creates MarkActions"""
         self.gui = gui
 
-    def create_annotation(self, text, x, y, z):
+    @property
+    def log(self):
+        return self.gui.log
+
+    def create_annotation(self, text: str,
+                          x: float, y: float, z: float) -> vtkBillboardTextActor3D:
         """
         Creates the actual annotation and appends it to slot
 
@@ -36,21 +50,36 @@ class MarkActions:
         annotation = create_annotation(self.gui, text, x, y, z)
         return annotation
 
-    def get_result_by_xyz_cell_id(self, node_xyz, cell_id):
+    def get_result_by_xyz_cell_id(self, node_xyz: np.ndarray,
+                                  cell_id: int,
+                                  icase: Optional[int]=None):
         """won't handle multiple cell_ids/node_xyz"""
-        case_key = self.gui.case_keys[self.gui.icase_fringe]
+        if icase is None:
+            icase = self.gui.icase_fringe
+        case_key = self.gui.case_keys[icase]
         result_name = self.gui.result_name
 
         grid = self.gui.grid_selected
         cell = grid.GetCell(cell_id)
+        if cell is None:
+            return
+        #if cell is None:
+            #print('cell_id = %s' % cell)
+            #self.log.error('cell_id = %s' % cell)
+            #return
         nnodes = cell.GetNumberOfPoints()
         points = cell.GetPoints()
 
         #node_xyz = array(node_xyz, dtype='float32')
         #point0 = array(points.GetPoint(0), dtype='float32')
         #dist_min = norm(point0 - node_xyz)
-        point0 = points.GetPoint(0)
-        dist_min = vtk.vtkMath.Distance2BetweenPoints(point0, node_xyz)
+
+        try:
+            point0 = points.GetPoint(0)
+        except ValueError:
+            #ValueError: expects 0 <= id && id < GetNumberOfPoints()
+            return None
+        dist_min = vtkMath.Distance2BetweenPoints(point0, node_xyz)
 
         point_min = point0
         imin = 0
@@ -58,7 +87,7 @@ class MarkActions:
             #point = array(points.GetPoint(ipoint), dtype='float32')
             #dist = norm(point - node_xyz)
             point = points.GetPoint(ipoint)
-            dist = vtk.vtkMath.Distance2BetweenPoints(point, node_xyz)
+            dist = vtkMath.Distance2BetweenPoints(point, node_xyz)
             if dist < dist_min:
                 dist_min = dist
                 imin = ipoint
@@ -70,8 +99,12 @@ class MarkActions:
         assert isinstance(case_key, integer_types), case_key
         (obj, (i, res_name)) = case
         unused_subcase_id = obj.subcase_id
-        case = obj.get_result(i, res_name)
-        result_values = case[node_id]
+        #method = obj.get_methods(i, res_name)[0]
+
+        is_value, values = get_plottable_values(obj, i, res_name)
+        if not is_value:
+            return None
+        result_values = values[node_id]
         assert not isinstance(xyz, int), xyz
         return result_name, result_values, node_id, xyz
 
@@ -82,7 +115,7 @@ class MarkActions:
 
         Parameters
         ----------
-        eids : int, List[int]
+        eids : int, list[int]
             the elements to apply a message to
         icase_result : int
             the case to draw the result from
@@ -139,11 +172,13 @@ class MarkActions:
             xi, yi, zi = centroid
             label_actors.append(self.create_annotation(texti, xi, yi, zi))
         if show_command:
-            self.gui.log_command('mark_elements_by_different_case(%s, %s, %s)' % (
+            self.gui.log_command('self.mark_elements_by_different_case(%s, %s, %s)' % (
                 eids, icase_result, icase_to_apply))
         self.gui.vtk_interactor.Render()
 
-    def get_result_by_cell_id(self, cell_id, world_position, icase=None):
+    def get_result_by_cell_id(self, cell_id: int,
+                              world_position: np.ndarray,
+                              icase: Optional[int]=None) -> tuple[str, Any, np.ndarray]:
         """should handle multiple cell_ids"""
         if icase is None:
             icase = self.gui.icase_fringe
@@ -152,27 +187,33 @@ class MarkActions:
 
         (obj, (i, res_name)) = case
         unused_subcase_id = obj.subcase_id
-        case = obj.get_result(i, res_name)
+        #method = obj.get_methods(i, res_name)[0]
+        is_value, values = get_plottable_values(obj, i, res_name)
+        if not is_value:
+            return None
 
         try:
-            result_values = case[cell_id]
+            result_values = values[cell_id]
         except IndexError:
-            msg = ('case[cell_id] is out of bounds; length=%s\n'
+            msg = ('values[cell_id] is out of bounds; length=%s\n'
                    'result_name=%r cell_id=%r case_key=%r\n' % (
-                       len(case), res_name, cell_id, case_key))
+                       len(values), res_name, cell_id, case_key))
             raise IndexError(msg)
 
-        cell = self.gui.grid_selected.GetCell(cell_id)
+        grid = self.gui.grid_selected
+        cell = grid.GetCell(cell_id)
+        if cell is None:
+            return
         nnodes = cell.GetNumberOfPoints()
         points = cell.GetPoints()
         cell_type = cell.GetCellType()
-        if cell_type in [5, 9, 22, 23, 28]:  # CTRIA3, CQUAD4, CTRIA6, CQUAD8, CQUAD
+        if cell_type in {5, 9, 22, 23, 28}:  # CTRIA3, CQUAD4, CTRIA6, CQUAD8, CQUAD
             node_xyz = np.zeros((nnodes, 3), dtype='float32')
             for ipoint in range(nnodes):
                 point = points.GetPoint(ipoint)
                 node_xyz[ipoint, :] = point
             xyz = node_xyz.mean(axis=0)
-        elif cell_type in [10, 12, 13, 14]: # CTETRA4, CHEXA8, CPENTA6, CPYRAM5
+        elif cell_type in {10, 12, 13, 14}: # CTETRA4, CHEXA8, CPENTA6, CPYRAM5
             # TODO: No idea how to get the center of the face
             #       vs. a point on a face that's not exposed
             #faces = cell.GetFaces()
@@ -182,15 +223,15 @@ class MarkActions:
                 #points = face.GetPoints()
             #faces
             xyz = world_position
-        elif cell_type in [24, 25, 26, 27]: # CTETRA10, CHEXA20, CPENTA15, CPYRAM13
+        elif cell_type in {24, 25, 26, 27}: # CTETRA10, CHEXA20, CPENTA15, CPYRAM13
             xyz = world_position
-        elif cell_type in [3]: # CBAR, CBEAM, CELASx, CDAMPx, CBUSHx
+        elif cell_type == 3: # CBAR, CBEAM, CELASx, CDAMPx, CBUSHx
             node_xyz = np.zeros((nnodes, 3), dtype='float32')
             for ipoint in range(nnodes):
                 point = points.GetPoint(ipoint)
                 node_xyz[ipoint, :] = point
             xyz = node_xyz.mean(axis=0)
-        elif cell_type in [21]: # CBEND
+        elif cell_type == 21: # CBEND
             # 21-QuadraticEdge
             node_xyz = np.zeros((nnodes, 3), dtype='float32')
             for ipoint in range(nnodes):
@@ -224,7 +265,7 @@ class MarkActions:
             raise NotImplementedError(msg)
         return res_name, result_values, xyz
 
-    def get_result_by_cell_ids(self, cell_ids, icase=None):
+    def get_result_by_cell_ids(self, cell_ids, icase: Optional[int]=None):
         """should handle multiple cell_ids"""
         if icase is None:
             icase = self.gui.icase_fringe
@@ -233,55 +274,58 @@ class MarkActions:
 
         (obj, (i, res_name)) = case
         unused_subcase_id = obj.subcase_id
-        case = obj.get_result(i, res_name)
+        #method = obj.get_methods(i, res_name)
+        is_value, values = get_plottable_values(obj, i, res_name)
+        if not is_value:
+            return None
 
         try:
-            result_values = case[cell_ids]
+            result_values = values[cell_ids]
         except IndexError:
-            msg = ('case[cell_id] is out of bounds; length=%s\n'
-                   'result_name=%r cell_id=%r case_key=%r\n' % (
-                       len(case), res_name, cell_ids, case_key))
+            msg = (
+                f'values[cell_id] is out of bounds; length={len(values)}\n'
+                f'result_name={res_name!r} cell_id={cell_ids} case_key={case_key}\n')
             raise IndexError(msg)
 
         return res_name, result_values
 
     def highlight_nodes_elements(self, nids=None, eids=None,
-                                 representation='wire',
+                                 representation: str='wire',
                                  model_name=None,
                                  #callback=self.on_focus_callback,
-                                 force=True):
+                                 force: bool=True):
         """
         Highlights a series of nodes/elements
 
         Parameters
         ----------
-        nids / eids : int, List[int]
+        nids / eids : int, list[int]
             the nodes/elements to highlight
         representation : str; default='wire'
             representation for elements
             allowed = {'wire', 'surface'}
-        model_name : str, List[str]
+        model_name : str, list[str]
             the name of the actor to highlight the nodes for
 
         """
         actors = []
-        if eids and representation in ['wire', 'surface']:
+        if eids and representation in {'wire', 'surface'}:
             actor = self.highlight_elements(self, eids, model_name=model_name)
             actors.append(actor)
-        if nids and representation in ['points']:
+        if nids and representation == 'points':
             actor = self.highlight_nodes(self, nids, model_name=model_name)
             actors.append(actor)
         return actors
 
-    def highlight_nodes(self, nids, model_name='', add_actor=True):
+    def highlight_nodes(self, nids, model_name: str='', add_actor: bool=True):
         """
         Highlights a series of nodes
 
         Parameters
         ----------
-        nids : int, List[int]
+        nids : int, list[int]
             the nodes to apply a message to
-        model_name : str, List[str]
+        model_name : str, list[str]
             the name of the actor to highlight the nodes for
 
         """
@@ -291,7 +335,7 @@ class MarkActions:
         i = np.searchsorted(all_nids, nids)
         xyz = all_xyz[i, :]
 
-        #ugrid = vtk.vtkUnstrucuturedGrid()
+        #ugrid = vtkUnstrucuturedGrid()
         points = numpy_to_vtk_points(xyz, points=None, dtype='<f', deep=1)
         ugrid = create_unstructured_point_grid(points, npoints)
         actor = self.gui.mouse_actions.create_highlighted_actor(
@@ -299,15 +343,15 @@ class MarkActions:
         self.gui.vtk_interactor.Render()
         return actor
 
-    def highlight_elements(self, eids, model_name='', add_actor=True):
+    def highlight_elements(self, eids, model_name: str='', add_actor: bool=True):
         """
         Highlights a series of elements
 
         Parameters
         ----------
-        eids : int, List[int]
+        eids : int, list[int]
             the elements to apply a message to
-        model_name : str, List[str]
+        model_name : str, list[str]
             the name of the actor to highlight the elements for
 
         """
@@ -316,14 +360,14 @@ class MarkActions:
         #all_eids = self.gui.get_element_ids(model_name=model_name, ids=None)
         #cell_ids = np.searchsorted(all_eids, eids)
 
-        #ids = vtk.vtkIdTypeArray()
+        #ids = vtkIdTypeArray()
         #ids.SetNumberOfComponents(1)
         #for cell_id in cell_ids:
             #ids.InsertNextValue(cell_id)
 
-        #selection_node = vtk.vtkSelectionNode()
-        #selection_node.SetFieldType(vtk.vtkSelectionNode.CELL)
-        #selection_node.SetContentType(vtk.vtkSelectionNode.INDICES)
+        #selection_node = vtkSelectionNode()
+        #selection_node.SetFieldType(vtkSelectionNode.CELL)
+        #selection_node.SetContentType(vtkSelectionNode.INDICES)
         #selection_node.SetSelectionList(ids)
 
         #actor = self._highlight_picker_by_selection_node(
@@ -331,17 +375,18 @@ class MarkActions:
         #return actor
 
     def _highlight_picker_by_selection_node(self, grid, selection_node,
-                                            representation='surface', add_actor=True):
+                                            representation: str='surface',
+                                            add_actor: bool=True):
         """
         helper method for:
             - _highlight_picker_cell
             #- _highlight_picker_node
 
         """
-        selection = vtk.vtkSelection()
+        selection = vtkSelection()
         selection.AddNode(selection_node)
 
-        extract_selection = vtk.vtkExtractSelection()
+        extract_selection = vtkExtractSelection()
         extract_selection.SetInputData(0, grid)
         extract_selection.SetInputData(1, selection)
         extract_selection.Update()
@@ -351,17 +396,17 @@ class MarkActions:
             ugrid, representation=representation, add_actor=add_actor)
         return actor
 
-    def mark_nodes(self, nids, icase, text):
+    def mark_nodes(self, nids: list[int], icase: int, text: str) -> None:
         """
         Marks a series of nodes with custom text labels
 
         Parameters
         ----------
-        nids : int, List[int]
+        nids : int, list[int]
             the nodes to apply a message to
         icase : int
             the key in label_actors to slot the result into
-        text : str, List[str]
+        text : str, list[str]
             the text to display
 
         0 corresponds to the NodeID result
@@ -372,8 +417,8 @@ class MarkActions:
 
         """
         if icase not in self.gui.label_actors:
-            msg = 'icase=%r not in label_actors=[%s]' % (
-                icase, ', '.join(self.gui.label_actors))
+            names = ', '.join(self.gui.label_actors)
+            msg = f'icase={icase} not in label_actors=[{names}]'
             self.gui.log_error(msg)
             return
         slot = self.gui.label_actors[icase]
@@ -424,9 +469,9 @@ def create_marked_node_actors(gui, node_ids, nids, text, xyz_cid0):
         ???
     node_ids : (nnodes, ) int ndarray
         all the nodes
-    nids : int, List[int]
+    nids : int, list[int]
         the nodes to apply a message to
-    text : str, List[str]
+    text : str, list[str]
         the text to display
     xyz_cid0 : (nnodes, 3) float ndarray
         the xyz locations of node_ids
@@ -450,7 +495,9 @@ def create_marked_node_actors(gui, node_ids, nids, text, xyz_cid0):
         slot.append(create_annotation(gui, texti, xi, yi, zi))
     return slot
 
-def create_annotation(gui, text, x, y, z):
+def create_annotation(gui: MainWindow,
+                      text: str,
+                      x: float, y: float, z: float) -> vtkBillboardTextActor3D:
     """
     Creates the actual annotation and appends it to slot
 
@@ -474,7 +521,7 @@ def create_annotation(gui, text, x, y, z):
     #self.convert_units(icase, result_value, x, y, z)
 
     settings = gui.settings
-    text_actor = vtk.vtkBillboardTextActor3D()
+    text_actor = vtkBillboardTextActor3D()
     text_actor.SetPosition(x, y, z)
     text_actor.SetInput(str(text))
     text_actor.PickableOff()
@@ -503,3 +550,16 @@ def create_annotation(gui, text, x, y, z):
     #camera.GetClippingRange()
     #camera.GetFocalPoint()
     return text_actor
+
+def get_plottable_values(obj, i, res_name) -> tuple[bool, Optional[np.ndarray]]:
+    """returns a vector -> fringe depending on what's available"""
+    is_value = False
+    fringe, vector = obj.get_fringe_vector_result(i, res_name)
+
+    if vector is None:
+        if fringe is not None:
+            vector = fringe
+        else:
+            return is_value, None
+    is_values = True
+    return is_values, vector

@@ -10,15 +10,20 @@ All static loads are defined in this file.  This includes:
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING
 import numpy as np
 
+from pyNastran.bdf import MAX_INT
 #from pyNastran.bdf.errors import CrossReferenceError
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
-from pyNastran.bdf.cards.base_card import BaseCard, _node_ids
+from pyNastran.bdf.cards.base_card import BaseCard, _node_ids, write_card
+
+from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
+from pyNastran.bdf.bdf_interface.internal_get import (
+    coord_id, element_id, node_id as fnode_id)
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank, components_or_blank,
-    string, string_or_blank)
+    string_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
@@ -40,7 +45,7 @@ class Load(BaseCard):
         """get the node ids"""
         try:
             return self._node_ids()
-        except:
+        except Exception:
             #raise
             raise RuntimeError('error processing nodes for \n%s' % str(self))
 
@@ -66,9 +71,9 @@ class LoadCombination(BaseCard):
             load id
         scale : float
             overall scale factor
-        scale_factors : List[float]
+        scale_factors : list[float]
             individual scale factors (corresponds to load_ids)
-        load_ids : List[int]
+        load_ids : list[int]
             individual load_ids (corresponds to scale_factors)
         comment : str; default=''
             a comment for the card
@@ -111,7 +116,7 @@ class LoadCombination(BaseCard):
             assert isinstance(load_id, integer_types), load_id
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         sid = integer(card, 1, 'sid')
         scale = double(card, 2, 'scale')
 
@@ -130,7 +135,7 @@ class LoadCombination(BaseCard):
         return cls(sid, scale, scale_factors, load_ids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         sid = data[0]
         scale = data[1]
         scale_factors = data[2]
@@ -155,10 +160,12 @@ class LoadCombination(BaseCard):
         load_ids = []
         supported_loads = [
             'FORCE', 'FORCE1', 'FORCE2', 'MOMENT', 'MOMENT1', 'MOMENT2',
-            'PLOAD', 'PLOAD1', 'PLOAD2', 'PLOAD4', 'GRAV', 'SPCD', 'GMLOAD',
+            'PLOAD', 'PLOAD1', 'PLOAD2', 'PLOAD4', 'GRAV', 'SPCD',
+            # 'GMLOAD',
             'RLOAD1', 'RLOAD2', 'TLOAD1', 'TLOAD2', 'PLOADX1', 'LOAD',
             'RFORCE', 'RFORCE1', #'RFORCE2'
             'ACCEL', 'ACCEL1', 'SLOAD', 'ACSRCE',
+            'QBDY3',
         ]
         for loads in self.load_ids_ref:
             load_idsi = []
@@ -295,7 +302,7 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
         self.tid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a LSEQ card from ``BDF.add_card(...)``
 
@@ -314,17 +321,17 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
         if load_id is None and temp_id is None:
             msg = 'LSEQ load_id/temp_id must not be None; load_id=%s temp_id=%s' % (load_id, temp_id)
             raise RuntimeError(msg)
-        assert len(card) <= 5, 'len(LSEQ card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(LSEQ card) = {len(card):d}\ncard={card}'
         return LSEQ(sid, excite_id, load_id, tid=temp_id, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an LSEQ card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -333,7 +340,11 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
         sid = data[0]
         excite_id = data[1]
         lid = data[2]
+        if lid == 0:
+            lid = None
         tid = data[3]
+        if tid == 0:
+            tid = None
         return LSEQ(sid, excite_id, lid, tid, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
@@ -346,7 +357,7 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
             the BDF object
 
         """
-        msg = ', which is required by LSEQ=%s' % (self.sid)
+        msg = f', which is required by LSEQ={self.sid:d}'
         if self.lid is not None:
             self.lid_ref = model.Load(self.lid, consider_load_combinations=True, msg=msg)
         #self.excite_id = model.Node(self.excite_id, msg=msg)
@@ -355,7 +366,7 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
             self.tid_ref = model.Load(self.tid, consider_load_combinations=True, msg=msg)
             #self.tid_ref = model.Table(self.tid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         return self.cross_reference(model)
 
     def uncross_reference(self) -> None:
@@ -365,8 +376,7 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
         self.lid_ref = None
         self.tid_ref = None
 
-    def LoadID(self, lid):
-        # type: (int) -> int
+    def LoadID(self, lid: int) -> int:
         if isinstance(lid, list):
             sid = self.LoadID(lid[0])
         elif isinstance(lid, integer_types):
@@ -375,12 +385,10 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
             sid = lid.sid
         return sid
 
-    def get_loads(self):
-        # type: () -> Any
+    def get_loads(self) -> Any:
         return self.lid_ref
 
-    def Lid(self):
-        # type: () -> int
+    def Lid(self) -> int:
         if self.lid_ref is not None:
             return self.LoadID(self.lid_ref)
         return self.lid
@@ -397,7 +405,7 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
             #return self.tid_ref.tid
         #return self.tid
 
-    def Tid(self):
+    def Tid(self) -> int:
         if self.tid_ref is not None:
             return self.LoadID(self.tid_ref)
         return self.tid
@@ -411,7 +419,7 @@ class LSEQ(BaseCard):  # Requires LOADSET in case control deck
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
-        return self.comment + print_card_8(card)
+        return write_card(self.comment, card, size, is_double)
 
 
 class LOADCYN(Load):
@@ -437,7 +445,7 @@ class LOADCYN(Load):
         self.segment_type = segment_type
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a LOADCYN card from ``BDF.add_card(...)``
 
@@ -477,7 +485,7 @@ class LOADCYN(Load):
         """Removes cross-reference links"""
         pass
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         return self.cross_reference(model)
 
     def raw_fields(self):
@@ -493,7 +501,7 @@ class LOADCYN(Load):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
-        return self.comment + print_card_8(card)
+        return write_card(self.comment, card, size, is_double)
 
 
 class LOADCYH(BaseCard):
@@ -543,7 +551,7 @@ class LOADCYH(BaseCard):
         assert htype in {'C', 'S', 'CSTAR', 'SSTAR', 'GRAV', 'RFORCE', None}, htype
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a LOADCYH card from ``BDF.add_card(...)``
 
@@ -571,17 +579,17 @@ class LOADCYH(BaseCard):
         if load2 != 0:
             load_ids.append(load2)
             scales.append(scale2)
-        assert len(card) <= 7, 'len(LOADCYH card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(LOADCYH card) = {len(card):d}\ncard={card}'
         return LOADCYH(sid, scale, hid, htype, scales, load_ids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an LSEQ card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -604,9 +612,10 @@ class LOADCYH(BaseCard):
             the BDF object
 
         """
-        msg = ', which is required by LOADCYH=%s' % (self.sid)
+        pass
+        #msg = ', which is required by LOADCYH=%s' % (self.sid)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         pass
 
     def uncross_reference(self) -> None:
@@ -626,7 +635,7 @@ class LOADCYH(BaseCard):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
-        return self.comment + print_card_8(card)
+        return write_card(self.comment, card, size, is_double)
 
 class DAREA(BaseCard):
     """
@@ -655,7 +664,10 @@ class DAREA(BaseCard):
         scales = [1.]
         return DAREA(sid, nodes, components, scales, comment='')
 
-    def __init__(self, sid, nodes, components, scales, comment=''):
+    def __init__(self, sid: int,
+                 nodes: list[int],
+                 components: list[int],
+                 scales: list[float], comment: str=''):
         """
         Creates a DAREA card
 
@@ -663,11 +675,11 @@ class DAREA(BaseCard):
         ----------
         sid : int
             darea id
-        nodes : List[int]
+        nodes : list[int]
             GRID, EPOINT, SPOINT id
-        components : List[int]
+        components : list[int]
             Component number. (0-6; 0-EPOINT/SPOINT; 1-6 GRID)
-        scales : List[float]
+        scales : list[float]
             Scale (area) factor
         comment : str; default=''
             a comment for the card
@@ -680,6 +692,8 @@ class DAREA(BaseCard):
             nodes = [nodes]
         if isinstance(components, integer_types):
             components = [components]
+        elif isinstance(components, str):
+            components = [int(components)]
         if isinstance(scales, float):
             scales = [scales]
 
@@ -693,22 +707,22 @@ class DAREA(BaseCard):
         self.nodes_ref = None
 
     @classmethod
-    def add_card(cls, card, icard=0, comment=''):
+    def add_card(cls, card: BDFCard, icard: int=0, comment: str=''):
         noffset = 3 * icard
         sid = integer(card, 1, 'sid')
         nid = integer(card, 2 + noffset, 'p')
-        component = int(components_or_blank(card, 3 + noffset, 'c', 0))
+        component = int(components_or_blank(card, 3 + noffset, 'c', '0'))
         scale = double(card, 4 + noffset, 'scale')
-        return DAREA(sid, nid, component, scale, comment=comment)
+        return DAREA(sid, [nid], [component], [scale], comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a DAREA card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -742,18 +756,18 @@ class DAREA(BaseCard):
             the BDF object
 
         """
-        msg = ', which is required by DAREA=%s' % (self.sid)
+        msg = f', which is required by DAREA={self.sid:d}'
         self.nodes_ref = model.Nodes(self.node_ids, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors, debug=True):
+    def safe_cross_reference(self, model: BDF, xref_errors, debug=True):
         nids2 = []
-        msg = ', which is required by DAREA=%s' % (self.sid)
+        msg = f', which is required by DAREA={self.sid:d}'
         for nid in self.node_ids:
             try:
                 nid2 = model.Node(nid, msg=msg)
             except KeyError:
                 if debug:
-                    msg = 'Couldnt find nid=%i, which is required by DAREA=%s' % (
+                    msg = 'Couldnt find nid=%d, which is required by DAREA=%s' % (
                         nid, self.sid)
                     print(msg)
                 continue
@@ -768,18 +782,25 @@ class DAREA(BaseCard):
     def node_ids(self):
         if self.nodes_ref is None:
             return self.nodes
-        msg = ', which is required by DAREA=%s' % (self.sid)
+        msg = f', which is required by DAREA={self.sid:d}'
         return _node_ids(self, nodes=self.nodes_ref, allow_empty_nodes=False, msg=msg)
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
+        list_fields = ['DAREA', self.sid]
         for nid, comp, scale in zip(self.node_ids, self.components, self.scales):
-            list_fields = ['DAREA', self.sid, nid, comp, scale]
+            list_fields += [nid, comp, scale]
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         msg = self.comment
-        for nid, comp, scale in zip(self.node_ids, self.components, self.scales):
-            msg += print_card_8(['DAREA', self.sid, nid, comp, scale])
+        node_ids = self.node_ids
+
+        _print_card = print_card_8
+        if max(node_ids) > MAX_INT:
+            _print_card = print_card_16
+
+        for nid, comp, scale in zip(node_ids, self.components, self.scales):
+            msg += _print_card(['DAREA', self.sid, nid, comp, scale])
         return msg
 
 
@@ -810,23 +831,27 @@ class SPCD(Load):
         sid = 1
         nodes = [1]
         components = ['1']
-        enforced = 1.
+        enforced = [1.]
         return SPCD(sid, nodes, components, enforced, comment='')
 
-    def __init__(self, sid, nodes, components, enforced, comment=''):
+    def __init__(self, sid: int,
+                 nodes: list[int],
+                 components: list[str],
+                 enforced: list[float],
+                 comment: str=''):
         """
         Creates an SPCD card, which defines the degree of freedoms to be
         set during enforced motion
 
         Parameters
         ----------
-        conid : int
+        sid : int
             constraint id
-        nodes : List[int]
+        nodes : list[int]
             GRID/SPOINT ids
-        components : List[str]
+        components : list[str]
             the degree of freedoms to constrain (e.g., '1', '123')
-        enforced : List[float]
+        enforced : list[float]
             the constrained value for the given node (typically 0.0)
         comment : str; default=''
             a comment for the card
@@ -858,7 +883,7 @@ class SPCD(Load):
 
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a SPCD card from ``BDF.add_card(...)``
 
@@ -873,7 +898,7 @@ class SPCD(Load):
         sid = integer(card, 1, 'sid')
         if card.field(5) in [None, '']:
             nodes = [integer(card, 2, 'G1'),]
-            components = [components_or_blank(card, 3, 'C1', 0)]
+            components = [components_or_blank(card, 3, 'C1', '0')]
             enforced = [double_or_blank(card, 4, 'D1', 0.0)]
         else:
             nodes = [
@@ -881,20 +906,20 @@ class SPCD(Load):
                 integer(card, 5, 'G2'),
             ]
             # :0 if scalar point 1-6 if grid
-            components = [components_or_blank(card, 3, 'C1', 0),
-                          components_or_blank(card, 6, 'C2', 0)]
+            components = [components_or_blank(card, 3, 'C1', '0'),
+                          components_or_blank(card, 6, 'C2', '0')]
             enforced = [double_or_blank(card, 4, 'D1', 0.0),
                         double_or_blank(card, 7, 'D2', 0.0)]
         return SPCD(sid, nodes, components, enforced, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an SPCD card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -907,20 +932,10 @@ class SPCD(Load):
         return SPCD(sid, nodes, components, enforced, comment=comment)
 
     @property
-    def constraints(self):
-        self.deprecated('constraints', 'components', '1.2')
-        return self.components
-
-    @constraints.setter
-    def constraints(self, constraints):
-        self.deprecated('constraints', 'components', '1.2')
-        self.components = constraints
-
-    @property
     def node_ids(self):
         if self.nodes_ref is None:
             return self.nodes
-        msg = ', which is required by SPCD=%s' % (self.sid)
+        msg = f', which is required by SPCD={self.sid:d}'
         return _node_ids(self, nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
 
     def cross_reference(self, model: BDF) -> None:
@@ -933,11 +948,11 @@ class SPCD(Load):
             the BDF object
 
         """
-        msg = ', which is required by SPCD=%s' % (self.sid)
+        msg = f', which is required by SPCD={self.sid:d}'
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors, debug=True):
-        msg = ', which is required by SPCD=%s' % (self.sid)
+    def safe_cross_reference(self, model: BDF, xref_errors, debug=True):
+        msg = f', which is required by SPCD={self.sid:d}'
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
     def uncross_reference(self) -> None:
@@ -957,11 +972,8 @@ class SPCD(Load):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
-        if size == 8:
-            return self.comment + print_card_8(card)
-        elif is_double:
-            return self.comment + print_card_double(card)
-        return self.comment + print_card_16(card)
+        return write_card(self.comment, card, size, is_double)
+
 
 class DEFORM(Load):
     """
@@ -984,10 +996,11 @@ class DEFORM(Load):
         deformation = 1.
         return DEFORM(sid, eid, deformation, comment='')
 
-    def __init__(self, sid, eid, deformation, comment=''):
+    def __init__(self, sid: int, eid: int, deformation: float,
+                 comment: str=''):
         """
         Creates an DEFORM card, which defines applied deformation on
-        a 1D elemment.  Links to the DEFORM card in the case control
+        a 1D element.  Links to the DEFORM card in the case control
         deck.
 
         Parameters
@@ -1010,7 +1023,7 @@ class DEFORM(Load):
         self.eid_ref = None
 
     @classmethod
-    def add_card(cls, card, icard=0, comment=''):
+    def add_card(cls, card: BDFCard, icard: int=0, comment: str=''):
         """
         Adds a DEFORM card from ``BDF.add_card(...)``
 
@@ -1029,13 +1042,13 @@ class DEFORM(Load):
         return DEFORM(sid, eid, deformation, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an DEFORM card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1056,11 +1069,11 @@ class DEFORM(Load):
             the BDF object
 
         """
-        msg = ', which is required by DEFORM=%s' % (self.sid)
+        msg = f', which is required by DEFORM={self.sid:d}'
         self.eid_ref = model.Element(self.eid, msg)
 
-    def safe_cross_reference(self, model, xref_errors, debug=True):
-        msg = ', which is required by DEFORM=%s' % (self.sid)
+    def safe_cross_reference(self, model: BDF, xref_errors, debug=True):
+        msg = f', which is required by DEFORM={self.sid:d}'
         self.eid_ref = model.safe_element(self.eid, self.sid, xref_errors, msg)
 
     def uncross_reference(self) -> None:
@@ -1068,20 +1081,19 @@ class DEFORM(Load):
         self.eid = self.Eid()
         self.eid_ref = None
 
-    def get_loads(self):
+    def get_loads(self) -> list:
         return [self]
 
-    def Eid(self):
-        if self.eid_ref is None:
-            return self.eid
-        return self.eid_ref.eid
-    def raw_fields(self):
+    def Eid(self) -> int:
+        return element_id(self.eid_ref, self.eid)
+
+    def raw_fields(self) -> list:
         fields = ['DEFORM', self.sid, self.Eid(), self.deformation]
         return fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
-        return self.comment + print_card_8(card)
+        return write_card(self.comment, card, size, is_double)
 
 
 class SLOAD(Load):
@@ -1112,7 +1124,8 @@ class SLOAD(Load):
         mags = [1.]
         return SLOAD(sid, nodes, mags, comment='')
 
-    def __init__(self, sid, nodes, mags, comment=''):
+    def __init__(self, sid: int, nodes: list[int],
+                 mags: list[float], comment: str=''):
         """
         Creates an SLOAD (GRID/SPOINT load)
 
@@ -1120,9 +1133,9 @@ class SLOAD(Load):
         ----------
         sid : int
             load id
-        nodes : int; List[int]
+        nodes : int; list[int]
             the GRID/SPOINT ids
-        mags : float; List[float]
+        mags : float; list[float]
             the load magnitude
         comment : str; default=''
             a comment for the card
@@ -1144,7 +1157,7 @@ class SLOAD(Load):
         assert len(self.nodes) == len(self.mags), 'len(nodes)=%s len(mags)=%s' % (len(self.nodes), len(self.mags))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a SLOAD card from ``BDF.add_card(...)``
 
@@ -1157,7 +1170,6 @@ class SLOAD(Load):
 
         """
         sid = integer(card, 1, 'sid')
-
         nfields = len(card) - 2
         ngroups = nfields // 2
         if nfields % 2 == 1:
@@ -1174,13 +1186,13 @@ class SLOAD(Load):
         return SLOAD(sid, nodes, mags, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an SLOAD card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1199,13 +1211,13 @@ class SLOAD(Load):
             the BDF object
 
         """
-        msg = ', which is required by SLOAD=%s' % (self.sid)
+        msg = f', which is required by SLOAD={self.sid:d}'
         self.nodes_ref = []
         for nid in self.nodes:
             self.nodes_ref.append(model.Node(nid, msg=msg))
         #self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         return self.cross_reference(model)
         #msg = ', which is required by SLOAD=%s' % (self.sid)
         #self.nodes_ref = model.safe_empty_nodes(self.nodes, msg=msg)
@@ -1215,35 +1227,41 @@ class SLOAD(Load):
         self.nodes = self.node_ids
         self.nodes_ref = None
 
-    def Nid(self, node):
+    def Nid(self, node) -> int:
         if isinstance(node, integer_types):
             return node
         return node.nid
 
-    def get_loads(self):
+    def get_loads(self) -> list:
         """
         .. todo::  not done
         """
         return []
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         if self.nodes_ref is None:
             return self.nodes
         return [self.Nid(nid) for nid in self.nodes_ref]
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         list_fields = ['SLOAD', self.sid]
         for nid, mag in zip(self.node_ids, self.mags):
             list_fields += [nid, mag]
         return list_fields
 
-    def repr_fields(self):
+    def repr_fields(self) -> list:
         return self.raw_fields()
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.raw_fields()
-        return self.comment + print_card_8(card)
+        return write_card(self.comment, card, size, is_double)
+
+    def write_card_16(self, is_double: bool=False) -> str:
+        card = self.raw_fields()
+        if is_double:
+            return self.comment + print_card_double(card)
+        return self.comment + print_card_16(card)
 
 
 class RFORCE(Load):
@@ -1255,12 +1273,14 @@ class RFORCE(Load):
         sid = 1
         nid = 1
         scale = 1.
-        r123 = [1., 0., 1.]
+        r123 = np.array([1., 0., 1.])
         return RFORCE(sid, nid, scale, r123,
                       cid=0, method=1, racc=0., mb=0, idrf=0, comment='')
 
-    def __init__(self, sid, nid, scale, r123, cid=0, method=1, racc=0.,
-                 mb=0, idrf=0, comment=''):
+    def __init__(self, sid: int, nid: int, scale: float,
+                 r123: np.ndarray, cid: int=0,
+                 method: int=1, racc: float=0.,
+                 mb: int=0, idrf: int=0, comment: str=''):
         """
         idrf doesn't exist in MSC 2005r2; exists in MSC 2016
 
@@ -1272,7 +1292,7 @@ class RFORCE(Load):
             grid point through which the rotation vector acts
         scale : float
             scale factor of the angular velocity in revolutions/time
-        r123 : List[float, float, float] / (3, ) float ndarray
+        r123 : list[float, float, float] / (3, ) float ndarray
             rectangular components of the rotation vector R that passes
             through point G (R1**2+R2**2+R3**2 > 0 unless A and RACC are
             both zero).
@@ -1299,9 +1319,12 @@ class RFORCE(Load):
             IDRF entry.
         comment : str; default=''
             a comment for the card
+
         """
         if comment:
             self.comment = comment
+        # if isinstance(r123, list):
+        r123 = np.asarray(r123)
         self.sid = sid
         self.nid = nid
         self.cid = cid
@@ -1317,7 +1340,9 @@ class RFORCE(Load):
 
     def validate(self):
         assert self.method in [1, 2], self.method
-        assert isinstance(self.r123, list), self.r123
+        if isinstance(self.r123, list):
+            self.r123 = np.array(self.r123, dtype='float64')
+        assert isinstance(self.r123, np.ndarray), self.r123
         assert isinstance(self.scale, float), self.scale
         assert isinstance(self.cid, int), self.cid
         assert isinstance(self.mb, int), self.mb
@@ -1325,7 +1350,7 @@ class RFORCE(Load):
         assert isinstance(self.racc, float), self.racc
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RFORCE card from ``BDF.add_card(...)``
 
@@ -1338,28 +1363,29 @@ class RFORCE(Load):
 
         """
         sid = integer(card, 1, 'sid')
-        nid = integer_or_blank(card, 2, 'nid', 0)
-        cid = integer_or_blank(card, 3, 'cid', 0)
-        scale = double_or_blank(card, 4, 'scale', 1.)
-        r1 = double_or_blank(card, 5, 'r1', 0.)
-        r2 = double_or_blank(card, 6, 'r2', 0.)
-        r3 = double_or_blank(card, 7, 'r3', 0.)
-        method = integer_or_blank(card, 8, 'method', 1)
-        racc = double_or_blank(card, 9, 'racc', 0.)
-        mb = integer_or_blank(card, 10, 'mb', 0)
-        idrf = integer_or_blank(card, 11, 'idrf', 0)
-        assert len(card) <= 12, 'len(RFORCE card) = %i\ncard=%s' % (len(card), card)
-        return RFORCE(sid, nid, scale, [r1, r2, r3],
+        nid = integer_or_blank(card, 2, 'nid', default=0)
+        cid = integer_or_blank(card, 3, 'cid', default=0)
+        scale = double_or_blank(card, 4, 'scale', default=1.)
+        r1 = double_or_blank(card, 5, 'r1', default=0.)
+        r2 = double_or_blank(card, 6, 'r2', default=0.)
+        r3 = double_or_blank(card, 7, 'r3', default=0.)
+        method = integer_or_blank(card, 8, 'method', default=1)
+        racc = double_or_blank(card, 9, 'racc', default=0.)
+        mb = integer_or_blank(card, 10, 'mb', default=0)
+        idrf = integer_or_blank(card, 11, 'idrf', default=0)
+        assert len(card) <= 12, f'len(RFORCE card) = {len(card):d}\ncard={card}'
+        r123 = np.array([r1, r2, r3])
+        return RFORCE(sid, nid, scale, r123,
                       cid=cid, method=method, racc=racc, mb=mb, idrf=idrf, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a RFORCE card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1385,7 +1411,7 @@ class RFORCE(Load):
             self.nid_ref = model.Node(self.nid, msg=msg)
         self.cid_ref = model.Coord(self.cid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         msg = ', which is required by RFORCE sid=%s' % self.sid
         if self.nid > 0:
             self.nid_ref = model.Node(self.nid, msg=msg)
@@ -1399,28 +1425,24 @@ class RFORCE(Load):
         self.cid_ref = None
 
     @property
-    def node_id(self):
-        if self.nid_ref is not None:
-            return self.nid_ref.nid
-        return self.nid
+    def node_id(self) -> int:
+        return fnode_id(self.nid_ref, self.nid)
 
-    def Nid(self):
+    def Nid(self) -> int:
         return self.node_id
 
-    def Cid(self):
-        if self.cid_ref is not None:
-            return self.cid_ref.cid
-        return self.cid
+    def Cid(self) -> int:
+        return coord_id(self.cid_ref, self.cid)
 
-    def get_loads(self):
+    def get_loads(self) -> list:
         return [self]
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         list_fields = (['RFORCE', self.sid, self.node_id, self.Cid(), self.scale] +
                        list(self.r123) + [self.method, self.racc, self.mb, self.idrf])
         return list_fields
 
-    def repr_fields(self):
+    def repr_fields(self) -> list:
         #method = set_blank_if_default(self.method,1)
         racc = set_blank_if_default(self.racc, 0.)
         mb = set_blank_if_default(self.mb, 0)
@@ -1431,11 +1453,7 @@ class RFORCE(Load):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
-        if size == 8:
-            return self.comment + print_card_8(card)
-        elif is_double:
-            return self.comment + print_card_double(card)
-        return self.comment + print_card_16(card)
+        return write_card(self.comment, card, size, is_double)
 
 
 class RFORCE1(Load):
@@ -1462,8 +1480,11 @@ class RFORCE1(Load):
         return RFORCE1(sid, nid, scale, group_id,
                        cid=0, r123=None, racc=0., mb=0, method=2, comment='')
 
-    def __init__(self, sid, nid, scale, group_id,
-                 cid=0, r123=None, racc=0., mb=0, method=2, comment=''):
+    def __init__(self, sid: int, nid: int, scale: float,
+                 group_id: int, cid: int=0,
+                 r123: Optional[np.ndarray]=None,
+                 racc: float=0., mb: int=0, method: int=2,
+                 comment: str=''):
         """
         Creates an RFORCE1 card
 
@@ -1475,11 +1496,11 @@ class RFORCE1(Load):
             grid point through which the rotation vector acts
         scale : float
             scale factor of the angular velocity in revolutions/time
-        r123 : List[float, float, float] / (3, ) float ndarray
+        r123 : list[float, float, float] / (3, ) float ndarray
             rectangular components of the rotation vector R that passes
             through point G (R1**2+R2**2+R3**2 > 0 unless A and RACC are
             both zero).
-        racc : int; default=0.0
+        racc : float; default=0.0
             Scale factor of the angular acceleration in revolutions per
             unit time squared.
         mb : int; default=0
@@ -1516,13 +1537,13 @@ class RFORCE1(Load):
         self.nid_ref = None
         self.cid_ref = None
 
-    def validate(self):
+    def validate(self) -> None:
         if not np.linalg.norm(self.r123) > 0.:
             msg = 'r123=%s norm=%s' % (self.r123, np.linalg.norm(self.r123))
             raise RuntimeError(msg)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RFORCE1 card from ``BDF.add_card(...)``
 
@@ -1535,23 +1556,23 @@ class RFORCE1(Load):
 
         """
         sid = integer(card, 1, 'sid')
-        nid = integer_or_blank(card, 2, 'nid', 0)
-        cid = integer_or_blank(card, 3, 'cid', 0)
-        scale = double_or_blank(card, 4, 'scale', 1.)
+        nid = integer_or_blank(card, 2, 'nid', default=0)
+        cid = integer_or_blank(card, 3, 'cid', default=0)
+        scale = double_or_blank(card, 4, 'scale', default=1.)
         r123 = [
-            double_or_blank(card, 5, 'r1', 1.),
-            double_or_blank(card, 6, 'r2', 0.),
-            double_or_blank(card, 7, 'r3', 0.),
+            double_or_blank(card, 5, 'r1', default=1.),
+            double_or_blank(card, 6, 'r2', default=0.),
+            double_or_blank(card, 7, 'r3', default=0.),
         ]
-        method = integer_or_blank(card, 8, 'method', 1)
-        racc = double_or_blank(card, 9, 'racc', 0.)
-        mb = integer_or_blank(card, 10, 'mb', 0)
-        group_id = integer_or_blank(card, 11, 'group_id', 0)
-        assert len(card) <= 12, 'len(RFORCE1 card) = %i\ncard=%s' % (len(card), card)
+        method = integer_or_blank(card, 8, 'method', default=1)
+        racc = double_or_blank(card, 9, 'racc', default=0.)
+        mb = integer_or_blank(card, 10, 'mb', default=0)
+        group_id = integer_or_blank(card, 11, 'group_id', default=0)
+        assert len(card) <= 12, f'len(RFORCE1 card) = {len(card):d}\ncard={card}'
         return RFORCE1(sid, nid, scale, cid=cid, r123=r123, racc=racc,
                        mb=mb, group_id=group_id, method=method, comment=comment)
 
-    def get_loads(self):
+    def get_loads(self) -> list:
         return [self]
 
     def cross_reference(self, model: BDF) -> None:
@@ -1569,7 +1590,7 @@ class RFORCE1(Load):
         self.nid_ref = model.Node(self.nid, msg=msg)
         self.cid_ref = model.Coord(self.cid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         msg = ', which is required by RFORCE1 sid=%s' % self.sid
         #if self.nid > 0:  # TODO: why was this every here?
         self.nid_ref = model.Node(self.nid, msg=msg)
@@ -1583,20 +1604,18 @@ class RFORCE1(Load):
         self.cid_ref = None
 
     @property
-    def node_id(self):
+    def node_id(self) -> int:
         if self.nid_ref is not None:
             return self.nid_ref.nid
         return self.nid
 
-    def Nid(self):
+    def Nid(self) -> int:
         return self.node_id
 
-    def Cid(self):
-        if self.cid_ref is not None:
-            return self.cid_ref.cid
-        return self.cid
+    def Cid(self) -> int:
+        return coord_id(self.cid_ref, self.cid)
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         list_fields = (['RFORCE1', self.sid, self.node_id, self.Cid(), self.scale]
                        + list(self.r123) + [self.method, self.racc,
                                             self.mb, self.group_id])
@@ -1604,8 +1623,4 @@ class RFORCE1(Load):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
-        if size == 8:
-            return self.comment + print_card_8(card)
-        if is_double:
-            return self.comment + print_card_double(card)
-        return self.comment + print_card_16(card)
+        return write_card(self.comment, card, size, is_double)

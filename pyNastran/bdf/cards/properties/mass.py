@@ -9,33 +9,41 @@ All mass properties are PointProperty and Property objects.
 
 """
 from __future__ import annotations
+import warnings
 from typing import TYPE_CHECKING
 
-from pyNastran.bdf.cards.base_card import expand_thru_by, expand_thru, BaseCard, Property
+import numpy as np
+
+from pyNastran.bdf.cards.expand_card import remove_blanks_capitalize, set_list_print
+from pyNastran.bdf.cards.base_card import (
+    expand_thru_by, expand_thru, BaseCard, Property)
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_string, double, double_or_blank, string)
+from pyNastran.bdf.bdf_interface.assign_type_force import (
+    force_double_or_blank)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.utils.numpy_utils import integer_types, float_types
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 class NSMx(Property):
     """Common class for NSM and NSML"""
     _field_map = {
-        1: 'sid', 2:'Type', 3:'id', 4:'value'
+        1: 'sid', 2: 'Type', 3: 'id', 4: 'value'
     }
 
     #: Set points to either Property entries or Element entries.
     #: Properties are:
     valid_properties = [
-        'PSHELL', 'PCOMP', 'PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PBCOMP',
-        'PROD', 'CONROD', 'PBEND', 'PSHEAR', 'PTUBE', 'PCONEAX', 'PRAC2D',
+        'PSHELL', 'PCOMP', 'PCOMPG', 'PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PBCOMP',
+        'PROD', 'CONROD', 'PBEND', 'PSHEAR', 'PTUBE', 'PRAC2D',  # 'PCONEAX',
         'ELEMENT', 'PDUM8',
     ]
 
-    def __init__(self, sid, nsm_type, pid_eid, value, comment=''):
+    def __init__(self, sid: int, nsm_type: str, pid_eid: int, value: float, comment: str=''):
         """
         Creates an NSM/NSM1 card
 
@@ -97,13 +105,13 @@ class NSMx(Property):
         return cls(sid, nsm_type, pid_eid, value, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an NSM/NSM1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -120,14 +128,8 @@ class NSMx(Property):
     def cross_reference(self, model: BDF) -> None:
         pass
 
-    @property
-    def Type(self):
-        """gets the nsm_type"""
-        return self.nsm_type
-    @Type.setter
-    def Type(self, nsm_type):
-        """sets the nsm_type"""
-        self.nsm_type = nsm_type
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        self.cross_reference(model)
 
     def raw_fields(self):
         #nodes = self.node_ids
@@ -147,12 +149,15 @@ class NSMx(Property):
 class NSM1x(Property):
     """Common class for NSM1 and NSML1"""
     valid_properties = [
-        'PSHELL', 'PCOMP', 'PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PBCOMP',
-        'PROD', 'CONROD', 'PBEND', 'PSHEAR', 'PTUBE', 'PCONEAX', 'PRAC2D',
+        'PSHELL', 'PCOMP', 'PCOMPG', 'PBAR', 'PBARL', 'PBEAM', 'PBEAML', 'PBCOMP',
+        'PROD', 'CONROD', 'PBEND', 'PSHEAR', 'PTUBE', 'PRAC2D',  # 'PCONEAX',
+        'PBUSH',
         'ELEMENT',
     ]
 
-    def __init__(self, sid, nsm_type, value, ids, comment=''):
+    def __init__(self, sid: int, nsm_type: str,
+                 value: float, ids: list[int],
+                 comment: str=''):
         """
         Creates an NSM1/NSML1 card
 
@@ -171,7 +176,7 @@ class NSM1x(Property):
             NSM1:  the non-structural pass per unit length/area
             NSML1: the total non-structural pass per unit length/area;
                    the nsm will be broken down based on a weighted area/length
-        ids : List[int]
+        ids : list[int]
             property ids or element ids depending on nsm_type
         comment : str; default=''
             a comment for the card
@@ -182,9 +187,18 @@ class NSM1x(Property):
 
         if isinstance(ids, integer_types):
             ids = [ids]
-        if isinstance(ids, str):
-            assert ids == 'ALL', 'ids=%r is not ALL' % ids
+        elif isinstance(ids, str):
+            assert ids == 'ALL', f'ids={ids!r} is not ALL'
             ids = [ids]
+        elif isinstance(ids, list):
+            pass
+        elif isinstance(ids, np.ndarray):
+            ids = ids.tolist()
+        else:  # pragma: no cover
+            raise TypeError((ids, type(ids)))
+
+        if ids == ['ALL']:
+            pass
         else:
             # With the 'THRU' and 'THRU', 'BY' forms, blanks fields are
             # allowed for readability. Any combination of a list of IDs
@@ -203,7 +217,8 @@ class NSM1x(Property):
         if self.nsm_type not in self.valid_properties:
             raise TypeError('nsm_type=%r must be in [%s]' % (
                 self.nsm_type, ', '.join(self.valid_properties)))
-        assert isinstance(ids, list), 'ids=%r is not a list' % (ids)
+        assert isinstance(ids, list), f'ids={ids} is not a list'
+        self.ids_ref = None
 
     @property
     def Type(self):
@@ -218,7 +233,7 @@ class NSM1x(Property):
     @classmethod
     def add_card(cls, card, comment=''):
         """
-        Adds a NSM1/NSML1 card from ``BDF.add_card(...)``
+        Adds an NSM1/NSML1 card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -248,11 +263,17 @@ class NSM1x(Property):
         return cls(sid, nsm_type, value, ids, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
-        pass
+        self.ids_ref = _xref_nsm(self, model, stop_on_failure=True)
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        self.ids_ref = _xref_nsm(self, model, stop_on_failure=False)
+
+    def get_ids(self):
+        return nsm_ids(self)
 
     def raw_fields(self):
-        #nodes = self.node_ids
-        list_fields = [self.type, self.sid, self.nsm_type, self.value] + self.ids
+        ids = self.get_ids()
+        list_fields = [self.type, self.sid, self.nsm_type, self.value] + ids
         return list_fields
 
     def repr_fields(self):
@@ -283,14 +304,15 @@ class NSM1(NSM1x):
     def _init_from_empty(cls):
         sid = 1
         nsm_type = 'PSHELL'
-        pid_eid = 42
+        pid_eid = [42]
         value = 1.
-        return NSM1(sid, nsm_type, value, pid_eid, comment='')
+        return NSM1(sid, nsm_type, value, pid_eid)
 
-    def __init__(self, sid, nsm_type, value, pid_eid, comment=''):
+    def __init__(self, sid: int, nsm_type: str, value: float, pid_eid: int,
+                 comment: str=''):
         """See ``NSM1x``"""
-        assert isinstance(value, float), 'NSM1; value=%r and must be a float' % (value)
-        NSM1x.__init__(self, sid, nsm_type, value, pid_eid, comment='')
+        assert isinstance(value, float), f'NSM1; value={value!r} and must be a float'
+        NSM1x.__init__(self, sid, nsm_type, value, pid_eid, comment)
 
 
 class NSM(NSMx):
@@ -312,11 +334,12 @@ class NSM(NSMx):
         nsm_type = 'PSHELL'
         pid_eid = 42
         value = 1.
-        return NSM(sid, nsm_type, pid_eid, value, comment='')
+        return NSM(sid, nsm_type, pid_eid, value)
 
-    def __init__(self, sid, nsm_type, pid_eid, value, comment=''):
+    def __init__(self, sid: int, nsm_type: str, pid_eid: int, value: float,
+                 comment: str=''):
         """See ``NSMx``"""
-        NSMx.__init__(self, sid, nsm_type, pid_eid, value, comment='')
+        NSMx.__init__(self, sid, nsm_type, pid_eid, value, comment=comment)
 
 
 class NSML(NSMx):
@@ -363,6 +386,20 @@ class NSML(NSMx):
             a comment for the card
         """
         NSMx.__init__(self, sid, nsm_type, pid_eid, value, comment=comment)
+
+
+def get_id_id0(ids: list[int] | list[str],
+               mydict: dict[int, BaseCard]) -> tuple[list[int], int]:
+    if ids == ['ALL']:
+        all_ids = list(mydict)
+        id0 = all_ids[0]
+    else:
+        id0 = ids[0]
+        all_ids = ids
+        assert isinstance(all_ids, list), all_ids
+        assert isinstance(all_ids[0], integer_types), all_ids
+    assert isinstance(id0, integer_types), (ids, all_ids)
+    return all_ids, id0
 
 
 class NSML1(NSM1x):
@@ -428,13 +465,163 @@ class NSML1(NSM1x):
             }
         value : float
             the non-structural pass per unit length/area
-        ids : List[int]
+        ids : list[int]
             property ids or element ids depending on nsm_type
         comment : str; default=''
             a comment for the card
         """
-        assert isinstance(value, float), 'NSML1; value=%r and must be a float' % (value)
+        assert isinstance(value, float), f'NSML1; value={value!r} and must be a float'
         NSM1x.__init__(self, sid, nsm_type, value, ids, comment=comment)
+
+    def get_eid_mass_cg_by_element(self, model: BDF) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """lumped mass to be distributed
+
+        - Area element calculation (for example, CQUAD4):
+          Mass for a particular element = (Element area) x (VALUE / ΣElement area for all IDs)
+        - Line element calculation (for example, CBEAM):
+          Mass for a particular element = (Element length) x (VALUE / ΣElement length for all IDs)
+
+        """
+        value = self.value
+        divide_by_sum = True
+
+        use_length = False
+        use_area = False
+
+        line_elements = {
+            'CBAR', 'CBEAM', 'CROD', 'CTUBE', 'CBUSH', 'CONROD'}
+        shell_elements = {
+            'CTRIA3', 'CTRIA6', 'CTRIAR',
+            'CQUAD4', 'CQUADR', 'CQUAD8', 'CQUAD'}
+
+        line_properties = {
+            'PROD', 'PTUBE',
+            'PBAR', 'PBARL', 'PBEAM', 'PBEAML',
+            'PBUSH',
+        }
+
+        if self.nsm_type in {'ELEMENT', 'CONROD'}:
+            all_ids, id0 = get_id_id0(self.ids, model.elements)
+
+            if self.nsm_type == 'CONROD':
+                all_ids = [eid for eid in all_ids
+                           if model.elements[eid].type == 'CONROD']
+                id0 = all_ids[0]
+
+            ncards = len(all_ids)
+            eids = np.zeros(ncards, dtype='int32')
+            cg = np.zeros((ncards, 3), dtype='float64')
+
+            elem0 = model.elements[id0]
+            etype = elem0.type
+            if etype in line_elements:
+                use_length = True
+                length = np.zeros(ncards, dtype='float64')
+                for i, eid in enumerate(all_ids):
+                    eids[i] = eid
+                    elem = model.elements[eid]
+                    assert elem.type in line_elements, elem.type
+                    length[i] = elem.Length()
+                    cg[i, :] = elem.Centroid()
+            elif etype in shell_elements:
+                use_area = True
+                area = np.zeros(ncards, dtype='float64')
+                for i, eid in enumerate(all_ids):
+                    eids[i] = eid
+                    elem = model.elements[eid]
+                    assert elem.type in shell_elements, elem.type
+                    area[i] = elem.Area()
+                    cg[i, :] = elem.Centroid()
+                #raise NotImplementedError((self.nsm_type, 'shell'))
+            else:
+                raise NotImplementedError((self.nsm_type, 'shell', etype))
+
+        elif self.nsm_type in line_properties:
+            pline_properties = {self.nsm_type}
+            if self.nsm_type in {'PBAR', 'PBARL'}:
+                pline_properties = {'PBAR', 'PBARL'}
+                allowed_etype = 'CBAR'
+            elif self.nsm_type in {'PBEAM', 'PBEAML'}:
+                pline_properties = {'PBEAM', 'PBEAML'}
+                allowed_etype = 'CBEAM'
+            elif self.nsm_type == 'PROD':
+                allowed_etype = 'CROD'
+            elif self.nsm_type == 'PTUBE':
+                allowed_etype = 'CTUBE'
+            elif self.nsm_type == 'PBUSH':
+                allowed_etype = 'CBUSH'
+            else:
+                raise NotImplementedError((self.nsm_type, 'line'))
+
+            if self.ids == ['ALL']:
+                all_ids = [pid for pid, prop in model.properties.items()
+                           if prop.type in pline_properties]
+                id0 = all_ids[0]
+            else:
+                all_ids, id0 = get_id_id0(self.ids, model.properties)
+
+            use_length = True
+            prop = model.properties[id0]
+            ptype = prop.type
+            assert ptype in pline_properties, f'allowed={pline_properties}\n{prop}'
+            elems = [(eid, elem) for eid, elem in sorted(model.elements.items())
+                     if elem.type == allowed_etype and elem.pid in self.ids]
+
+            ncards = len(elems)
+            eids = np.zeros(ncards, dtype='int32')
+            length = np.zeros(ncards, dtype='float64')
+            cg = np.zeros((ncards, 3), dtype='float64')
+            for i, (eid, elem) in enumerate(elems):
+                eids[i] = eid
+                elem = model.elements[eid]
+                assert prop.type in pline_properties, (elem, prop)
+                length[i] = elem.Length()
+                cg[i, :] = elem.Centroid()
+
+        elif self.nsm_type in {'PSHELL', 'PCOMP', 'PCOMPG'}:
+            use_area = True
+
+            if self.nsm_type == 'PSHELL':
+                shell_properties = {'PSHELL'}
+            elif self.nsm_type in {'PCOMP', 'PCOMPG'}:
+                shell_properties = {'PCOMP', 'PCOMPG'}
+            else:
+                raise NotImplementedError((self.nsm_type, 'shell'))
+
+            if self.ids == ['ALL']:
+                all_ids = [pid for pid, prop in model.properties.items()
+                           if prop.type in shell_properties]
+            else:
+                all_ids = self.ids
+            id0 = all_ids[0]
+
+            prop = model.properties[id0]
+            ptype = prop.type
+            assert ptype in shell_properties, prop
+            elems = [(eid, elem) for eid, elem in sorted(model.elements.items())
+                     if elem.type in shell_elements and elem.pid in self.ids]
+
+            ncards = len(elems)
+            eids = np.zeros(ncards, dtype='int32')
+            area = np.zeros(ncards, dtype='float64')
+            cg = np.zeros((ncards, 3), dtype='float64')
+            for i, (eid, elem) in enumerate(elems):
+                eids[i] = eid
+                elem = model.elements[eid]
+                assert prop.type in shell_properties, (elem, prop)
+                area[i] = elem.Area()
+                cg[i, :] = elem.Centroid()
+        else:  # pragma: no cover
+            raise NotImplementedError(self.nsm_type)
+
+        # here's where we do the distribution
+        if use_area:
+            mass = value * area / area.sum()
+        elif use_length:
+            mass = value * length / length.sum()
+        else:
+            raise RuntimeError((use_area, use_length))
+        return eids, mass, cg
 
 
 class NSMADD(BaseCard):
@@ -448,7 +635,7 @@ class NSMADD(BaseCard):
     +--------+----+----+-----+
     """
     type = 'NSMADD'
-    _properties = ['nsm_ids']
+    _properties = ['ids', 'nsm_ids', 'conid']
 
     @classmethod
     def _init_from_empty(cls):
@@ -456,7 +643,7 @@ class NSMADD(BaseCard):
         sets = [1, 2]
         return NSMADD(sid, sets, comment='')
 
-    def __init__(self, sid, sets, comment=''):
+    def __init__(self, sid: int, sets: list[int], comment: str=''):
         """
         Creates an NSMADD card, which sum NSM sets
 
@@ -464,23 +651,36 @@ class NSMADD(BaseCard):
         ----------
         sid : int
             the NSM Case Control value
-        sets : List[int]
+        sets : list[int]
             the NSM, NSM1, NSML, NSML1 values
         comment : str; default=''
             a comment for the card
+
         """
         BaseCard.__init__(self)
         if comment:
             self.comment = comment
         self.sid = sid
-        self.sets = expand_thru(sets)
+
+        sets_clean = remove_blanks_capitalize(sets)
+        if len(sets) != len(sets_clean):
+            warnings.warn(f'{self.type}={sid} set length is changed\n'
+                          f'old; n={len(sets)}: {set_list_print(sets)}\n'
+                          f'new; n={len(sets_clean)}: {set_list_print(sets_clean)}')
+        self.sets = expand_thru(sets_clean)
         self.sets.sort()
         self.sets_ref = None
 
+    def validate(self):
+        usets = np.unique(self.sets)
+        if not len(self.sets) == len(usets):
+            warnings.warn(f'NSMADD sid={self.sid} has duplicate set ids\n{str(self.sets)}')
+        self.sets_ref = None
+
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
-        Adds a NSMADD card from ``BDF.add_card(...)``
+        Adds an NSMADD card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -494,13 +694,13 @@ class NSMADD(BaseCard):
         return NSMADD(sid, sets, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds an NSMADD card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -525,6 +725,14 @@ class NSMADD(BaseCard):
                 raise TypeError('type=%s; nsm=\n%s' % (type(nsm), nsm))
         return nsm_ids
 
+    @property
+    def ids(self):
+        return self.nsm_ids
+
+    @property
+    def conid(self) -> int:
+        return self.sid
+
     def cross_reference(self, model: BDF) -> None:
         """
         Cross links the card so referenced cards can be extracted directly
@@ -535,24 +743,30 @@ class NSMADD(BaseCard):
             the BDF object
         """
         msg = ', which is required by NSMADD=%s' % self.sid
-        nsms = []
-        for nsm in self.sets:
-            nsms.append(model.NSM(nsm, msg=msg))
+        nsms, failed_nsms = self._nsm_failed(model)
+        if failed_nsms:
+            nsm_list = list(model.nsms)
+            raise KeyError(f'failed_nsms={failed_nsms}; nsms={nsm_list}{msg}')
         self.sets_ref = nsms
 
-    def safe_cross_reference(self, model, debug=True):
-        nsms = []
+    def _nsm_failed(self, model: BDF) -> tuple[list[NSM], list[int]]:
         msg = ', which is required by NSMADD=%s' % self.sid
+        nsms = []
+        failed_nsms = []
         for nsm_id in self.sets:
             try:
                 nsm = model.NSM(nsm_id, msg=msg)
+                nsms.append(nsm)
             except KeyError:
-                if debug:
-                    msg = 'Couldnt find NSM=%i, which is required by NSMADD=%s' % (
-                        nsm_id, self.sid)
-                    print(msg)
-                continue
-            nsms.append(nsm)
+                failed_nsms.append(nsm_id)
+        return nsms, failed_nsms
+
+    def safe_cross_reference(self, model: BDF, debug: bool=True):
+        msg = ', which is required by NSMADD=%s' % self.sid
+        nsms, failed_nsms = self._nsm_failed(model)
+        if failed_nsms:
+            nsm_list = list(model.nsms)
+            model.log.warning(f'failed_nsms={failed_nsms}; nsms={nsm_list}{msg}')
         self.sets_ref = nsms
 
     def uncross_reference(self) -> None:
@@ -588,11 +802,11 @@ class PMASS(Property):
     """
     type = 'PMASS'
     _field_map = {
-        1: 'pid', 2:'mass',
+        1: 'pid', 2: 'mass',
     }
     pname_fid_map = {
         # 1-based
-        3 : 'mass',
+        3: 'mass',
     }
     _properties = ['node_ids']
 
@@ -602,7 +816,7 @@ class PMASS(Property):
         mass = 1.
         return PMASS(pid, mass, comment='')
 
-    def __init__(self, pid, mass, comment=''):
+    def __init__(self, pid: int, mass: float, comment: str=''):
         """
         Creates an PMASS card, which defines a mass applied to a single DOF
 
@@ -622,7 +836,7 @@ class PMASS(Property):
         self.mass = mass
 
     @classmethod
-    def add_card(cls, card, icard=0, comment=''):
+    def add_card(cls, card: BDFCard, icard: int=0, comment: str=''):
         """
         Adds a PMASS card from ``BDF.add_card(...)``
 
@@ -638,17 +852,37 @@ class PMASS(Property):
         icard *= 2
         #: Property ID
         pid = integer(card, 1 + icard, 'pid')
-        mass = double_or_blank(card, 2 + icard, 'mass', 0.)
+        mass = double_or_blank(card, 2 + icard, 'mass', default=0.)
         return PMASS(pid, mass, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, icard: int=0, comment: str=''):
+        """
+        Adds a PMASS card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        icard : int; default=0
+            the index of the card that's being parsed
+        comment : str; default=''
+            a comment for the card
+        """
+        icard *= 2
+        #: Property ID
+        pid = integer(card, 1 + icard, 'pid')
+        mass = force_double_or_blank(card, 2 + icard, 'mass', default=0.)
+        return PMASS(pid, mass, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PMASS card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -658,6 +892,9 @@ class PMASS(Property):
         return PMASS(pid, mass, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
+        pass
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
         pass
 
     def uncross_reference(self) -> None:
@@ -670,7 +907,7 @@ class PMASS(Property):
         assert isinstance(pid, integer_types), 'pid=%r' % pid
         assert isinstance(mass, float), 'mass=%r' % mass
 
-    def Mass(self):
+    def Mass(self) -> float:
         return self.mass
 
     def raw_fields(self):
@@ -685,3 +922,167 @@ class PMASS(Property):
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
+
+PROPERTIES_XREF = {'PSHELL', 'PCOMP', 'PCOMPG', 'PBAR', 'PBEAM', 'PBUSH', 'PTUBE', 'PROD',
+                   'PBARL', 'PBEAML'}
+
+def xref_nsm(self, model: BDF) -> None:
+    _xref_nsm(self, model, stop_on_failure=True)
+
+# def _xref_nsm(self, model: BDF, stop_on_failure) -> None:
+#     msg = f', which is required by {self.type}={self.sid}'
+#     missing_ids = []
+#     if self.nsm_type == 'ELEMENT':
+#         ids = self.ids
+#         if ids == ['ALL']:
+#             ids = list(model.elements)
+#         assert len(ids) > 0, ids
+#
+#         elements = []
+#         for eid in ids:
+#             try:
+#                 elem = model.Element(eid, msg=msg)
+#             except KeyError:
+#                 missing_ids.append(eid)
+#                 continue
+#             elements.append(elem)
+#         if missing_ids:
+#             missing_ids.sort()
+#             element_ids = np.array(list(model.elements), dtype='int32')
+#             element_ids.sort()
+#             raise KeyError(f'Missing elements on {self.type}={self.sid}: {missing_ids}; element_ids={element_ids}')
+#         assert len(elements) > 0, elements
+#         self.ids_ref = elements
+#
+#     elif self.nsm_type in PROPERTIES_XREF:
+#         properties = []
+#         ids = self.ids
+#         if ids == ['ALL']:
+#             ids = list(model.properties)
+#         assert len(ids) > 0, ids
+#
+#         for pid in ids:
+#             try:
+#                 prop = model.Property(pid, msg=msg)
+#             except KeyError:
+#                 missing_ids.append(pid)
+#                 continue
+#             properties.append(prop)
+#         if missing_ids:
+#             missing_ids.sort()
+#             raise KeyError(f'Missing properties on {self.type}={self.sid}: {missing_ids}')
+#         assert len(properties) > 0, properties
+#         self.ids_ref = properties
+#     else:  # pragma: no cover
+#         model.log.error(f'nsm_type={self.nsm_type!r} is not supported for {self.type}={self.sid}')
+#         return
+#         # raise NotImplementedError(self.nsm_type)
+#     assert len(self.ids_ref) > 0, self.ids_ref
+#
+# def safe_xref_nsm(self, model: BDF) -> None:
+#     _xref_nsm(self, model, stop_on_failure=False)
+
+
+def _xref_nsm(self, model: BDF, stop_on_failure: bool=True) -> list:  # old
+    msg = f', which is required by {self.type}={self.sid}'
+    log = model.log
+    missing_ids = []
+    # if self.nsm_type in {'CROD', 'CONROD'}:
+    #     return
+    ids = self.ids
+
+    ELEMENTS_REF = ['CONROD', 'CROD', 'CTUBE']
+    if self.nsm_type == 'ELEMENT':
+        if ids == ['ALL']:
+            ids = list(model.elements)
+        assert len(ids) > 0, ids
+
+        elements = []
+        for eid in ids:
+            try:
+                elem = model.Element(eid, msg=msg)
+            except KeyError:
+                missing_ids.append(eid)
+                elements.append(eid)
+                continue
+            elements.append(elem)
+        if missing_ids:
+            missing_ids.sort()
+            element_ids = np.array(list(model.elements), dtype='int32')
+            element_ids.sort()
+            if stop_on_failure:
+                raise RuntimeError(f'Missing elements on {self.type}={self.sid}: {missing_ids}')
+            log.warning(f'Missing elements on {self.type}={self.sid}: {missing_ids}')
+        assert len(elements) > 0, elements
+        ids_ref = elements
+
+    elif self.nsm_type in ELEMENTS_REF:
+        elements = []
+        if ids == ['ALL']:
+            ids = list(model.elements)
+        assert len(ids) > 0, ids
+        for eid in ids:
+            try:
+                prop = model.Element(eid, msg=msg)
+            except KeyError:
+                missing_ids.append(eid)
+                elements.append(eid)
+                continue
+            elements.append(prop)
+        if missing_ids:
+            missing_ids.sort()
+            if stop_on_failure:
+                raise RuntimeError(f'Missing {self.nsm_type} elements on {self.type}={self.sid}: {missing_ids}')
+            log.warning(f'Missing {self.nsm_type} elements on {self.type}={self.sid}: {missing_ids}')
+        assert len(elements) > 0, elements
+        ids_ref = elements
+
+    elif self.nsm_type in PROPERTIES_XREF:
+        properties = []
+        if ids == ['ALL']:
+            ids = list(model.properties)
+        assert len(ids) > 0, ids
+
+        for pid in ids:
+            try:
+                prop = model.Property(pid, msg=msg)
+            except KeyError:
+                missing_ids.append(pid)
+                properties.append(pid)
+                continue
+            properties.append(prop)
+        if missing_ids:
+            missing_ids.sort()
+            # if stop_on_failure:
+            #     raise RuntimeError(f'Missing properties on {self.type}={self.sid}: {missing_ids}')
+            log.warning(f'Missing properties on {self.type}={self.sid}: {missing_ids}')
+        assert len(properties) > 0, properties
+        ids_ref = properties
+    else:  # pragma: no cover
+        if stop_on_failure:
+            raise RuntimeError(f'nsm_type={self.nsm_type!r} is not supported for {self.type}={self.sid}')
+        log.error(f'nsm_type={self.nsm_type!r} is not supported for {self.type}={self.sid}')
+        return []
+    assert len(ids_ref) > 0, ids_ref
+    return ids_ref
+
+
+def nsm_ids(self) -> list[int]:
+    if self.ids_ref is None:
+        return self.ids
+    assert len(self.ids_ref) > 0, self.ids_ref
+    ids = []
+    for id_ref in self.ids_ref:
+        if isinstance(id_ref, integer_types):
+            ids.append(id_ref)
+        elif hasattr(id_ref, 'eid'):
+            ids.append(id_ref.eid)
+        elif hasattr(id_ref, 'pid'):
+            ids.append(id_ref.pid)
+        else:
+            raise RuntimeError(f'id_ref {id_ref!r} is not a number')
+    assert len(ids) > 0, f'ids={ids} self.ids={self.ids}'
+    return ids
+
+NSMs = NSM | NSM1 | NSML | NSML1

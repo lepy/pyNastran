@@ -28,11 +28,13 @@ defines some methods for working with arrays:
 from __future__ import annotations
 from struct import calcsize
 from itertools import count
-from typing import Optional, Dict, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 import numpy as np
-from numpy import arccos, sqrt, pi, in1d, cos, unique, cross, ndarray
+from numpy import arccos, sqrt, pi, cos, unique, cross, ndarray
 if TYPE_CHECKING:  # pragma: no cover
-    from pyNastran.bdf.bdf import CORDx # , CORD1R, CORD1C, CORD1S, CORD2R, CORD2C, CORD2S
+    from cpylog import SimpleLogger
+    from pyNastran.bdf.bdf import Coord
+    from pyNastran.nptyping_interface import NDArrayN3float, NDArrayN2int, NDArrayNint, NDArray3float
 
 
 def filter1d(a: ndarray, b: Optional[ndarray]=None, zero_tol: float=0.001):
@@ -83,7 +85,7 @@ def where_searchsorted(a, v, side='left', x=None, y=None):
     assert x is None, x
     assert y is None, y
     assert side == 'left', side
-    i = np.where(in1d(a, v), x=x, y=y)
+    i = np.where(np.isin(a, v), x=x, y=y)
     return i
 
 def sortedsum1d(ids, values, axis=None):
@@ -210,6 +212,7 @@ def abs_max_min_global(values):
         don't input mixed types
 
     nvalues >= 1
+      >>> from pyNastran.op2.vector_utils import abs_max_min_global
       >>> element1 = [0.0, -1.0, 2.0]  # 2.0
       >>> element2 = [0.0, -3.0, 2.0]  # -3.0
       >>> values = abs_max_min_global([element1, element2])
@@ -251,15 +254,15 @@ def abs_max_min_global(values):
     return values2[j]
 
 
-def abs_max_min_vector(values):
+def abs_max_min_vector(values: np.ndarray) -> np.ndarray:
     """
     This is useful for figuring out principal stresses across multiple
     elements.
 
     Parameters
     ----------
-    values: ndarray/listtuple
-        an array of values, where the rows are interated over
+    values: ndarray/list/tuple
+        an array of values, where the rows are iterated over
         and the columns are going to be compressed
 
         common NDARRAY/list/tuple shapes:
@@ -273,11 +276,12 @@ def abs_max_min_vector(values):
         don't input mixed types
 
     ::
+       >>> from pyNastran.op2.vector_utils import abs_max_min_vector
        >>> element1 = [0.0,  1.0, 2.0]  # 2.0
        >>> element2 = [0.0, -1.0, 2.0]  # 2.0
        >>> element3 = [0.0, -3.0, 2.0]  # -3.0
-       >>> values = [element1 element2, element3]
-       >>> values0 = abs_max_min_vectorized(values)
+       >>> values = [element1, element2, element3]
+       >>> values0 = abs_max_min_vector(values)
        >>> values0
        [2.0, 2.0, -3.0]
 
@@ -309,12 +313,12 @@ def abs_max_min_vector(values):
         j = np.where(absolute_max == abs_vals[:, i])[0][0]
 
         # get the raw value from the absoluted value, so:
-        # value = npabs(raw_value)
+        # value = np.abs(raw_value)
         outs[i] = maxs_mins[j, i]
     return outs
 
 
-def abs_max_min(values, global_abs_max=True):
+def abs_max_min(values: np.ndarray, global_abs_max: bool=True):
     """
     Gets the maximum value of x and -x.
     This is used for getting the max/min principal stress.
@@ -351,7 +355,7 @@ def principal_3d(o11, o22, o33, o12, o23, o13):
 
 
 def transform_force(force_in_local,
-                    coord_out: CORDx, coords: Dict[int, CORDx],
+                    coord_out: Coord, coords: dict[int, Coord],
                     nid_cd: int, unused_icd_transform):
     """
     Transforms force/moment from global to local and returns all the forces.
@@ -364,10 +368,10 @@ def transform_force(force_in_local,
         forces in the local frame
     coord_out : CORD()
         the desired local frame
-    coords : dict[int] = CORDx
+    coords : dict[int] = Coord
         all the coordinate systems
         key : int
-        value : CORDx
+        value : Coord
     nid_cd : (M, 2) int ndarray
         the (BDF.point_ids, cd) array
     icd_transform : dict[cd] = (Mi, ) int ndarray
@@ -388,7 +392,7 @@ def transform_force(force_in_local,
     cds = nid_cd[:, 1]
     ucds = unique(cds)
 
-    coord_out_cid = coord_out.cid
+    unused_coord_out_cid = coord_out.cid
     coord_out_T = coord_out.beta()
 
     for cd in ucds:
@@ -407,12 +411,12 @@ def transform_force(force_in_local,
 
 
 def transform_force_moment(force_in_local, moment_in_local,
-                           coord_out: CORDx, coords: Dict[int, CORDx],
-                           nid_cd: int, icd_transform: Dict[int, ndarray],
+                           coord_out: Coord, coords: dict[int, Coord],
+                           nid_cd: int, icd_transform: dict[int, ndarray],
                            xyz_cid0: ndarray,
-                           summation_point_cid0: Optional[ndarray]=None,
+                           summation_point_cid0: Optional[NDArray3float]=None,
                            consider_rxf: bool=True,
-                           debug: bool=False, log=None):
+                           debug: bool=False, log: Optional[SimpleLogger]=None):
     """
     Transforms force/moment from global to local and returns all the forces.
 
@@ -422,12 +426,12 @@ def transform_force_moment(force_in_local, moment_in_local,
         forces in the local frame
     moment_in_local : (N, 3) ndarray
         moments in the local frame
-    coord_out : CORDx()
+    coord_out : Coord()
         the desired local frame
-    coords : dict[int] = CORDx
+    coords : dict[int] = Coord
         all the coordinate systems
         key : int
-        value : CORDx
+        value : Coord
     nid_cd : (M, 2) int ndarray
         the (BDF.point_ids, cd) array
     icd_transform : dict[cd] = (Mi, ) int ndarray
@@ -469,10 +473,8 @@ def transform_force_moment(force_in_local, moment_in_local,
     """
     #print('consider_rxf =', consider_rxf)
     #debug = True
-    assert log is not None
     assert nid_cd.shape[0] == force_in_local.shape[0]
     dtype = force_in_local.dtype
-    #dtype = 'float64'
 
     force_in_local_sum = force_in_local.sum(axis=0)
     force_out = np.zeros(force_in_local.shape, dtype=dtype)
@@ -486,8 +488,9 @@ def transform_force_moment(force_in_local, moment_in_local,
     beta_out = coord_out.beta().T
 
     if debug:
+        assert log is not None
         log.debug('beta_out =\n%s' % beta_out)
-        log.debug(coord_out)
+        log.debug(str(coord_out))
         if consider_rxf:
             for ii in range(xyz_cid0.shape[0]):
                 log.debug('***i=%s xyz=%s nid=%s cd=%s' % (
@@ -536,8 +539,8 @@ def transform_force_moment(force_in_local, moment_in_local,
         # rotate the forces/moments into a coordinate system coincident
         # with the local frame and with the same primary directions
         # as the global frame
-        force_in_globali = force_in_locali.dot(beta_cd)
-        moment_in_globali = moment_in_locali.dot(beta_cd)
+        force_in_globali = force_in_locali @ beta_cd
+        moment_in_globali = moment_in_locali @ beta_cd
 
         # rotate the forces and moments into a coordinate system coincident
         # with the output frame and with the same primary directions
@@ -546,8 +549,8 @@ def transform_force_moment(force_in_local, moment_in_local,
         #if 0 and np.array_equal(beta_out, eye):
             #force_outi = force_in_globali
             #moment_outi = moment_in_globali
-        force_outi = force_in_globali.dot(beta_out)
-        moment_outi = moment_in_globali.dot(beta_out)
+        force_outi = force_in_globali @ beta_out
+        moment_outi = moment_in_globali @ beta_out
 
         if debug:
             #if show_local:
@@ -568,9 +571,9 @@ def transform_force_moment(force_in_local, moment_in_local,
         # point.  Then we transform it to the output XYZ frame
         if consider_rxf:
             delta = xyz_cid0[i, :] - summation_point_cid0[np.newaxis, :]
-            rxf = cross(delta, force_in_globali)
+            rxf = np.cross(delta, force_in_globali)
 
-            rxf_in_cid = rxf.dot(beta_out)
+            rxf_in_cid = rxf @ beta_out
             if debug:
                 log.debug('delta_moment = %s' % delta)
                 #log.debug('rxf = %s' % rxf.T)
@@ -585,10 +588,9 @@ def transform_force_moment(force_in_local, moment_in_local,
     #return force_out2, moment_out2
     return force_out, moment_out
 
-
-def transform_force_moment_sum(force_in_local, moment_in_local,
-                               coord_out, coords,
-                               nid_cd, icd_transform,
+def transform_force_moment_sum(force_in_local: NDArrayN3float, moment_in_local: NDArrayN3float,
+                               coord_out: Coord, coords: dict[int, Coord],
+                               nid_cd: NDArrayN2int, icd_transform: dict[int, NDArrayNint],
                                xyz_cid0, summation_point_cid0=None,
                                consider_rxf=True,
                                debug=False, log=None):
@@ -601,12 +603,12 @@ def transform_force_moment_sum(force_in_local, moment_in_local,
         forces in the local frame
     moment_in_local : (N, 3) ndarray
         moments in the local frame
-    coord_out : CORDx()
+    coord_out : Coord()
         the desired local frame
-    coords : dict[int] = CORDx
+    coords : dict[int] = Coord
         all the coordinate systems
         key : int
-        value : CORDx
+        value : Coord
     nid_cd : (M, 2) int ndarray
         the (BDF.point_ids, cd) array
     icd_transform : dict[cd] = (Mi, ) int ndarray
@@ -636,7 +638,9 @@ def transform_force_moment_sum(force_in_local, moment_in_local,
     .. todo:: doesn't seem to handle cylindrical/spherical systems
 
     """
-    assert log is not None
+    if log is None:
+        debug = False
+
     out = transform_force_moment(
         force_in_local, moment_in_local,
         coord_out, coords, nid_cd,

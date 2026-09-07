@@ -1,4 +1,4 @@
-SOL 145
+SOL SEFLUTTR
 CEND
 TITLE = MSC.Nastran job created on 29-Nov-17 at 14:54:26
 ECHO = NONE
@@ -12,6 +12,7 @@ SUBCASE 1
    FMETHOD = 50
 BEGIN BULK
 $
+MDLPRM,HDF5,1
 $--------------------------------------------------------------------------
 include 'aero_cards.inc'
 include 'flutter_cards.inc'

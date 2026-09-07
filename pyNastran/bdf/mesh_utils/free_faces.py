@@ -9,12 +9,13 @@ defines:
 """
 from copy import deepcopy
 from collections import defaultdict
-from typing import List, Optional, Any
+from typing import Optional, Any
 
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.bdf import read_bdf, BDF
 
-def get_element_faces(model: BDF, element_ids: Optional[List[int]]=None) -> Any:
+def get_element_faces(model: BDF,
+                      element_ids: Optional[list[int]]=None) -> Any:
     """
     Gets the elements and faces that are skinned from solid elements.
     This includes internal faces.
@@ -23,13 +24,13 @@ def get_element_faces(model: BDF, element_ids: Optional[List[int]]=None) -> Any:
     ----------
     model : BDF()
         the BDF object
-    element_ids : List[int] / None
+    element_ids : list[int] / None
         skin a subset of element faces
         default=None -> all elements
 
     Returns
     -------
-    eid_faces : (int, List[(int, int, ...)])
+    eid_faces : (int, list[(int, int, ...)])
        value1 : element id
        value2 : face
 
@@ -64,10 +65,10 @@ def get_solid_skin_faces(model: BDF) -> Any:
 
     Returns
     -------
-    eid_set : Dict[tuple(int, int, ...)] = List[int]
+    eid_set : dict[tuple(int, int, ...)] = list[int]
        key : sorted face
        value : list of element ids with that face
-    face_map : Dict[tuple(int, int, ...)] = List[int]
+    face_map : dict[tuple(int, int, ...)] = list[int]
        key : sorted face
        value : unsorted face
 
@@ -81,7 +82,7 @@ def get_solid_skin_faces(model: BDF) -> Any:
         raw_face = deepcopy(face)
         try:
             face.sort()
-        except:
+        except Exception:
             print('face = %s' % str(face))
             raise
         tface = tuple(face)
@@ -209,11 +210,12 @@ def write_skin_solid_faces(model, skin_filename,
                             write_solids=write_solids, write_shells=write_shells,
                             size=size, is_double=is_double, encoding=encoding)
 
-def _write_skin_solid_faces(model, skin_filename, face_map,
-                            nids_to_write, eids_to_write, mids_to_write, eid_set,
-                            eid_shell, pid_shell, mid_shell,
-                            write_solids=False, write_shells=True,
-                            size=8, is_double=False, encoding=None):
+def _write_skin_solid_faces(model: BDF, skin_filename: str, face_map,
+                            nids_to_write: list[int], eids_to_write: list[int], mids_to_write: list[int],
+                            eid_set,
+                            eid_shell: int, pid_shell: int, mid_shell: int,
+                            write_solids: bool=False, write_shells: bool=True,
+                            size: int=8, is_double: bool=False, encoding=None):
     """
     helper method for ``write_skin_solid_faces``
 
@@ -224,15 +226,15 @@ def _write_skin_solid_faces(model, skin_filename, face_map,
     skin_filename : str
         the file to write
     face_map : dict[sorted_face] : face
-        sorted_face : List[int, int, int] / List[int, int, int, int]
-        face : List[int, int, int] / List[int, int, int, int]
-    nids_to_write : List[int, int, ...]
+        sorted_face : list[int, int, int] / list[int, int, int, int]
+        face : list[int, int, int] / list[int, int, int, int]
+    nids_to_write : list[int, int, ...]
         list of node ids to write
-    eids_to_write : List[int, int, ...]
+    eids_to_write : list[int, int, ...]
         list of element ids to write
-    mids_to_write : List[int, int, ...]
+    mids_to_write : list[int, int, ...]
         list of material ids to write
-    eid_set : Set[int]
+    eid_set : set[int]
         is the type right???
     eid_shell : int
         the next id to use for the shell id
@@ -278,14 +280,17 @@ def _write_skin_solid_faces(model, skin_filename, face_map,
             del eid, pid, mid
 
         if write_shells:
-            eid_shell = _write_shells(bdf_file, model, eid_set, face_map, eid_shell, pid_shell, mid_shell, mids_to_write)
+            eid_shell = _write_shells(bdf_file, model, eid_set, face_map,
+                                      eid_shell, pid_shell, mid_shell, mids_to_write)
         bdf_file.write('ENDDATA\n')
     #if 0:
         #model = model.__class__.__init__()
         #model.read_bdf(skin_filename)
 
 
-def _write_shells(bdf_file, model, eid_set, face_map, eid_shell, pid_shell, mid_shell, mids_to_write):
+def _write_shells(bdf_file, model: BDF,
+                  eid_set: dict, face_map: dict,
+                  eid_shell: int, pid_shell: int, mid_shell: int, mids_to_write):
     """helper method for ``_write_skin_solid_faces``"""
     mids_to_write.sort()
     for imid, mid in enumerate(mids_to_write):

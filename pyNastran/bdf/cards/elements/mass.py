@@ -13,42 +13,48 @@ All mass elements are PointMassElement and Element objects.
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+import warnings
+from typing import Optional, TYPE_CHECKING
 import numpy as np
 
 from pyNastran.utils.numpy_utils import integer_types
-from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
+from pyNastran.bdf.field_writer_8 import (
+    set_blank_if_default, print_card_8, print_float_8,
+    print_int_default_8, print_float_default_8)
 from pyNastran.bdf.cards.base_card import Element
+from pyNastran.bdf.cards.nodes import GRID
+from pyNastran.bdf.bdf_interface.internal_get import coord_id
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank)
+from pyNastran.bdf.bdf_interface.assign_type_force import (
+    force_double_or_blank)
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 def is_positive_semi_definite(A, tol=1e-8):
     """is the 3x3 matrix positive within tolerance"""
-    vals = np.linalg.eigh(A)[0]
+    vals = np.linalg.eigvalsh(A)
     return np.all(vals > -tol), vals
+
 
 class PointMassElement(Element):
     def __init__(self):
         Element.__init__(self)
 
-    def repr_fields(self):
-        # type: () -> List[Optional[int, float, str]]
+    def repr_fields(self) -> list[Optional[int | float | str]]:
         return self.raw_fields()
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
-        # type: (int, bool) -> str
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
-    def write_card_16(self, is_double=False):
-        # type: (bool) -> str
+    def write_card_16(self, is_double: bool=False) -> str:
         card = self.repr_fields()
         return self.comment + print_card_16(card)
 
@@ -84,8 +90,7 @@ class CMASS1(PointMassElement):
         nids = [1, 2]
         return CMASS1(eid, pid, nids, c1=0, c2=0, comment='')
 
-    def __init__(self, eid, pid, nids, c1=0, c2=0, comment=''):
-        # type: (int, int, [int, int], int, int, str) -> CMASS1
+    def __init__(self, eid: int, pid: int, nids: list[int], c1: int=0, c2: int=0, comment: str=''):
         """
         Creates a CMASS1 card
 
@@ -95,7 +100,7 @@ class CMASS1(PointMassElement):
             element id
         pid : int
             property id (PMASS)
-        nids : List[int, int]
+        nids : list[int]
             node ids
         c1 / c2 : int; default=0
             DOF for nid1 / nid2
@@ -115,7 +120,7 @@ class CMASS1(PointMassElement):
         self.pid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CMASS1 card from ``BDF.add_card(...)``
 
@@ -133,17 +138,17 @@ class CMASS1(PointMassElement):
         c1 = integer_or_blank(card, 4, 'c1')
         g2 = integer_or_blank(card, 5, 'g2')
         c2 = integer_or_blank(card, 6, 'c2')
-        assert len(card) <= 7, 'len(CMASS1 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(CMASS1 card) = {len(card):d}\ncard={card}'
         return CMASS1(eid, pid, [g1, g2], c1, c2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CMASS1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -155,6 +160,8 @@ class CMASS1(PointMassElement):
         g2 = data[3]
         c1 = data[4]
         c2 = data[5]
+        assert 0 <= c1 < 7
+        assert 0 <= c2 < 7
         return CMASS1(eid, pid, [g1, g2], c1, c2, comment=comment)
 
     def Mass(self):
@@ -188,7 +195,7 @@ class CMASS1(PointMassElement):
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.PropertyMass(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -201,7 +208,7 @@ class CMASS1(PointMassElement):
         self.nodes_ref, missing_nodes = model.safe_empty_nodes(self.node_ids, msg=msg)
         self.pid_ref = model.safe_property_mass(self.pid, self.eid, xref_errors, msg=msg)
         if missing_nodes:
-            model.log.warning(missing_nodes)
+            model.log.warning(str(missing_nodes))
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -242,8 +249,15 @@ class CMASS1(PointMassElement):
         c = (p1 + p2) / factor
         return c
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         return self.Centroid()
+
+    def grid_component(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        g1 = 0 if self.nodes[0] is None else self.G1()
+        g2 = 0 if self.nodes[1] is None else self.G2()
+        c1 = 0 if self.c1 is None else self.c1
+        c2 = 0 if self.c2 is None else self.c2
+        return ((g1, c1), (g2, c2))
 
     @property
     def node_ids(self):
@@ -256,7 +270,7 @@ class CMASS1(PointMassElement):
             nodes.append(g2)
         return nodes
 
-    def Pid(self):
+    def Pid(self) -> int:
         if self.pid_ref is None:
             return self.pid
         return self.pid_ref.pid
@@ -302,7 +316,8 @@ class CMASS2(PointMassElement):
         nids = [1, 2]
         return CMASS2(eid, mass, nids, c1=0, c2=0, comment='')
 
-    def __init__(self, eid, mass, nids, c1, c2, comment=''):
+    def __init__(self, eid: int, mass: float, nids: list[int],
+                 c1: int=0, c2: int=0, comment: str=''):
         """
         Creates a CMASS2 card
 
@@ -312,9 +327,9 @@ class CMASS2(PointMassElement):
             element id
         mass : float
             mass
-        nids : List[int, int]
+        nids : list[int]
             node ids
-        c1 / c2 : int; default=None
+        c1 / c2 : int; default=0
             DOF for nid1 / nid2
         comment : str; default=''
             a comment for the card
@@ -352,7 +367,7 @@ class CMASS2(PointMassElement):
         h5_file.create_dataset('components', data=components)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CMASS2 card from ``BDF.add_card(...)``
 
@@ -367,20 +382,20 @@ class CMASS2(PointMassElement):
         eid = integer(card, 1, 'eid')
         mass = double_or_blank(card, 2, 'mass', 0.)
         g1 = integer_or_blank(card, 3, 'g1')
-        c1 = integer_or_blank(card, 4, 'c1')
+        c1 = integer_or_blank(card, 4, 'c1', default=0)
         g2 = integer_or_blank(card, 5, 'g2')
-        c2 = integer_or_blank(card, 6, 'c2')
-        assert len(card) <= 7, 'len(CMASS2 card) = %i\ncard=%s' % (len(card), card)
+        c2 = integer_or_blank(card, 6, 'c2', default=0)
+        assert len(card) <= 7, f'len(CMASS2 card) = {len(card):d}\ncard={card}'
         return CMASS2(eid, mass, [g1, g2], c1, c2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CMASS2 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -402,14 +417,16 @@ class CMASS2(PointMassElement):
         else:
             assert g2 > 0, f'g2={g2}; g1={g1} c1={c1} c2={c2}'
 
-        assert 0 <= c1 <= 123456, 'c1=%s data=%s' % (c1, data)
-        assert 0 <= c2 <= 123456, 'c2=%s data=%s' % (c2, data)
+        assert 0 <= c1 < 7
+        assert 0 <= c2 < 7
+        #assert 0 <= c1 <= 123456, 'c1=%s data=%s' % (c1, data)
+        #assert 0 <= c2 <= 123456, 'c2=%s data=%s' % (c2, data)
         return CMASS2(eid, mass, [g1, g2], c1, c2, comment=comment)
 
-    def validate(self):
+    def validate(self) -> None:
         assert len(self.nodes) == 2, self.nodes
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool):
         eid = self.eid
         pid = self.Pid()
         mass = self.Mass()
@@ -420,12 +437,15 @@ class CMASS2(PointMassElement):
         assert isinstance(eid, integer_types), 'eid=%r' % eid
         assert isinstance(pid, integer_types), 'pid=%r' % pid
         assert isinstance(mass, float), 'mass=%r' % mass
-        assert c1 is None or isinstance(c1, integer_types), 'c1=%r' % c1
-        assert c2 is None or isinstance(c2, integer_types), 'c2=%r' % c2
+        assert isinstance(c1, integer_types), 'c1=%r' % c1
+        assert isinstance(c2, integer_types), 'c2=%r' % c2
 
-    #@property
-    #def nodes(self):
-        #return [self.g1, self.g2]
+    def grid_component(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        g1 = 0 if self.nodes[0] is None else self.G1()
+        g2 = 0 if self.nodes[1] is None else self.G2()
+        c1 = self.c1
+        c2 = self.c2
+        return ((g1, c1), (g2, c2))
 
     @property
     def node_ids(self):
@@ -473,9 +493,9 @@ class CMASS2(PointMassElement):
 
         """
         msg = ', which is required by CMASS2 eid=%s' % self.eid
-        self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
+        self.nodes_ref = xref_cmass_nodes(self.nodes, model, msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -486,9 +506,9 @@ class CMASS2(PointMassElement):
 
         """
         msg = ', which is required by CMASS2 eid=%s' % self.eid
-        self.nodes_ref, missing_nodes = model.safe_empty_nodes(self.node_ids, msg=msg)
+        self.nodes_ref, missing_nodes = safe_xref_cmass_nodes(self.nodes, model, msg)
         if missing_nodes:
-            model.log.warning(missing_nodes)
+            model.log.warning(str(missing_nodes))
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -496,12 +516,12 @@ class CMASS2(PointMassElement):
         self.nodes_ref = None
 
     def G1(self):
-        if self.nodes_ref is not None and self.nodes_ref[0] is not None:
+        if self.nodes_ref is not None and isinstance(self.nodes_ref[0], GRID):
             return self.nodes_ref[0].nid
         return self.nodes[0]
 
     def G2(self):
-        if self.nodes_ref is not None and self.nodes_ref[1] is not None:
+        if self.nodes_ref is not None and isinstance(self.nodes_ref[1], GRID):
             return self.nodes_ref[1].nid
         return self.nodes[1]
 
@@ -549,7 +569,8 @@ class CMASS3(PointMassElement):
         nids = [1, 2]
         return CMASS3(eid, pid, nids, comment='')
 
-    def __init__(self, eid, pid, nids, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 comment: str=''):
         """
         Creates a CMASS3 card
 
@@ -559,7 +580,7 @@ class CMASS3(PointMassElement):
             element id
         pid : int
             property id (PMASS)
-        nids : List[int, int]
+        nids : list[int]
             SPOINT ids
         comment : str; default=''
             a comment for the card
@@ -576,7 +597,7 @@ class CMASS3(PointMassElement):
         self.pid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CMASS3 card from ``BDF.add_card(...)``
 
@@ -592,17 +613,17 @@ class CMASS3(PointMassElement):
         pid = integer_or_blank(card, 2, 'pid', eid)
         s1 = integer_or_blank(card, 3, 's1')
         s2 = integer_or_blank(card, 4, 's2')
-        assert len(card) <= 5, 'len(CMASS3 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(CMASS3 card) = {len(card):d}\ncard={card}'
         return CMASS3(eid, pid, [s1, s2], comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CMASS3 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -614,21 +635,26 @@ class CMASS3(PointMassElement):
         s2 = data[3]
         return CMASS3(eid, pid, [s1, s2], comment=comment)
 
-    def Mass(self):
+    def grid_component(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        g1 = self.S1()
+        g2 = self.S2()
+        return ((g1, 0), (g2, 0))
+
+    def Mass(self) -> float:
         return self.pid_ref.mass
 
-    def S1(self):
+    def S1(self) -> int:
         if self.nodes_ref is not None:
             return self.nodes_ref[0].nid
         return self.nodes[0]
 
-    def S2(self):
+    def S2(self) -> int:
         if self.nodes_ref is not None:
             return self.nodes_ref[1].nid
         return self.nodes[1]
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.S1(), self.S2()]
 
     def cross_reference(self, model: BDF) -> None:
@@ -645,6 +671,9 @@ class CMASS3(PointMassElement):
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.PropertyMass(self.pid, msg=msg)
 
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        self.cross_reference(model)
+
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
         self.pid = self.Pid()
@@ -654,13 +683,13 @@ class CMASS3(PointMassElement):
     #def Mass(self):
         #return self.mass
 
-    def Centroid(self):
+    def Centroid(self) -> np.ndarray:
         return np.zeros(3)
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         return self.Centroid()
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         fields = ['CMASS3', self.eid, self.Pid(), self.S1(), self.S2()]
         return fields
 
@@ -702,7 +731,7 @@ class CMASS4(PointMassElement):
         nids = [1, 2]
         return CMASS4(eid, pid, nids, comment='')
 
-    def __init__(self, eid, mass, nids, comment=''):
+    def __init__(self, eid: int, mass: float, nids: list[int], comment: str=''):
         """
         Creates a CMASS4 card
 
@@ -712,7 +741,7 @@ class CMASS4(PointMassElement):
             element id
         mass : float
             SPOINT mass
-        nids : List[int, int]
+        nids : list[int]
             SPOINT ids
         comment : str; default=''
             a comment for the card
@@ -728,23 +757,23 @@ class CMASS4(PointMassElement):
         self.nodes_ref = None
 
     @classmethod
-    def add_card(cls, card, icard=0, comment=''):
+    def add_card(cls, card: BDFCard, icard: int=0, comment: str=''):
         ioffset = icard * 4
         eid = integer(card, 1 + ioffset, 'eid')
-        mass = double_or_blank(card, 2 + ioffset, 'mass', 0.)
+        mass = double_or_blank(card, 2 + ioffset, 'mass', default=0.)
         s1 = integer(card, 3 + ioffset, 's1')
-        s2 = integer_or_blank(card, 4 + ioffset, 's2', 0)
-        assert len(card) <= 9, 'len(CMASS4 card) = %i\ncard=%s' % (len(card), card)
+        s2 = integer_or_blank(card, 4 + ioffset, 's2', default=0)
+        assert len(card) <= 9, f'len(CMASS4 card) = {len(card):d}\ncard={card}'
         return CMASS4(eid, mass, [s1, s2], comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CMASS4 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -756,25 +785,30 @@ class CMASS4(PointMassElement):
         s2 = data[3]
         return CMASS4(eid, mass, [s1, s2], comment=comment)
 
-    def Mass(self):
+    def grid_component(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        g1 = self.S1()
+        g2 = self.S2()
+        return ((g1, 0), (g2, 0))
+
+    def Mass(self) -> float:
         return self.mass
 
-    def Centroid(self):
+    def Centroid(self) -> np.ndarray:
         return np.zeros(3)
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         return self.Centroid()
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.S1(), self.S2()]
 
-    def S1(self):
+    def S1(self) -> int:
         if self.nodes_ref is not None and self.nodes_ref[0] is not None:
             return self.nodes_ref[0].nid
         return self.nodes[0]
 
-    def S2(self):
+    def S2(self) -> int:
         if self.nodes_ref is not None and self.nodes_ref[1] is not None:
             return self.nodes_ref[1].nid
         return self.nodes[1]
@@ -792,7 +826,7 @@ class CMASS4(PointMassElement):
         msg = ', which is required by CMASS4 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         self.cross_reference(model)
 
     def uncross_reference(self) -> None:
@@ -800,7 +834,7 @@ class CMASS4(PointMassElement):
         self.nodes = [self.S1(), self.S2()]
         self.nodes_ref = None
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         fields = ['CMASS4', self.eid, self.mass] + self.node_ids
         return fields
 
@@ -905,11 +939,12 @@ class CONM1(PointMassElement):
         mass_matrix = np.zeros((6, 6))
         return CONM1(eid, nid, mass_matrix, cid=0, comment='')
 
-    def _finalize_hdf5(self, encoding):
+    def _finalize_hdf5(self, encoding: str) -> None:
         """hdf5 helper function"""
         self.mass_matrix = np.asarray(self.mass_matrix)
 
-    def __init__(self, eid, nid, mass_matrix, cid=0, comment=''):
+    def __init__(self, eid: int, nid: int, mass_matrix: np.ndarray,
+                 cid: int=0, comment: str=''):
         """
         Creates a CONM1 card
 
@@ -947,7 +982,7 @@ class CONM1(PointMassElement):
         self.cid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CONM2 card from ``BDF.add_card(...)``
 
@@ -985,17 +1020,17 @@ class CONM1(PointMassElement):
         m[5, 3] = double_or_blank(card, 22, 'M64', 0.)
         m[5, 4] = double_or_blank(card, 23, 'M65', 0.)
         m[5, 5] = double_or_blank(card, 24, 'M66', 0.)
-        assert len(card) <= 25, 'len(CONM1 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 25, f'len(CONM1 card) = {len(card):d}\ncard={card}'
         return CONM1(eid, nid, m, cid=cid, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CONM1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1027,34 +1062,32 @@ class CONM1(PointMassElement):
         m[5, 5] = m6f  # M66
         return CONM1(eid, nid, m, cid=cid, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool):
         eid = self.eid
         assert isinstance(eid, integer_types), 'eid=%r' % eid
 
-    @staticmethod
-    def Mass():
-        return 0.0
+    def Mass(self) -> float:
+        mass = (self.mass_matrix[0, 0] + self.mass_matrix[1, 1] + self.mass_matrix[2, 2]) / 3.
+        return mass
 
     @staticmethod
-    def Centroid():
+    def Centroid() -> np.ndarray:
         return np.zeros(3, dtype='float64')
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         return self.Centroid()
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.Nid()]
 
-    def Nid(self):
+    def Nid(self) -> int:
         if self.nid_ref is not None:
             return self.nid_ref.nid
         return self.nid
 
-    def Cid(self):
-        if self.cid_ref is not None:
-            return self.cid_ref.cid
-        return self.cid
+    def Cid(self) -> int:
+        return coord_id(self.cid_ref, self.cid)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -1070,7 +1103,7 @@ class CONM1(PointMassElement):
         self.nid_ref = model.Node(self.nid, msg=msg)
         self.cid_ref = model.Coord(self.cid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1098,6 +1131,7 @@ class CONM1(PointMassElement):
         cid = set_blank_if_default(self.Cid(), 0)
         nid = self.Nid()
         m = self.mass_matrix
+        # lower triangular
         list_fields = [
             'CONM1', self.eid, nid, cid, m[0, 0], m[1, 0], m[1, 1],
             m[2, 0], m[2, 1], m[2, 2], m[3, 0], m[3, 1], m[3, 2],
@@ -1139,7 +1173,7 @@ class CONM2(PointMassElement):
     _field_map = {
         1: 'eid', 2:'nid', 3:'cid', 4:'mass',
     }
-    def update_by_cp_name(self, name, value):
+    def update_by_cp_name(self, name: str, value: float):
         if name == 'M':
             self.mass = value
         elif name == 'X1':
@@ -1162,8 +1196,9 @@ class CONM2(PointMassElement):
         elif name == 'I33':
             self.I[5] = value
         else:
-            raise NotImplementedError('element_type=%r has not implemented %r in cp_name_map' % (
-                self.type, name))
+            allowed = ', '.join(['M', 'X1', 'X2', 'X3', 'I11', 'I21', 'I22', 'I31', 'I32', 'I33'])
+            raise NotImplementedError(f'element_type={self.type} has not implemented {name!r}'
+                                      f' in cp_name_map; allowed=[{allowed}]')
 
     def _update_field_helper(self, n, value):
         if n == 5:
@@ -1189,28 +1224,28 @@ class CONM2(PointMassElement):
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, eids):
+    def export_to_hdf5(cls, h5_file, model: BDF, eids: np.ndarray):
         """exports the elements in a vectorized way"""
         unused_comments = []
         nid = []
         cid = []
         mass = []
-        X = []
-        I = []
+        offset = []
+        inertia = []
         for eid in eids:
             element = model.masses[eid]
             #comments.append(element.comment)
             nid.append(element.nid)
             cid.append(element.cid)
             mass.append(element.mass)
-            X.append(element.X)
-            I.append(element.I)
+            offset.append(element.X)
+            inertia.append(element.I)
         #h5_file.create_dataset('_comment', data=comments)
         h5_file.create_dataset('eid', data=eids)
         h5_file.create_dataset('nid', data=nid)
         h5_file.create_dataset('cid', data=cid)
-        h5_file.create_dataset('X', data=X)
-        h5_file.create_dataset('I', data=I)
+        h5_file.create_dataset('X', data=offset)
+        h5_file.create_dataset('I', data=inertia)
         h5_file.create_dataset('mass', data=mass)
 
         #self.eid = eid
@@ -1220,7 +1255,10 @@ class CONM2(PointMassElement):
         #self.X = np.asarray(X)
         #self.I = np.asarray(I)
 
-    def __init__(self, eid, nid, mass, cid=0, X=None, I=None, comment=''):
+    def __init__(self, eid: int, nid: int, mass: float,
+                 cid: int=0,
+                 X: Optional[list[int]]=None,
+                 I: Optional[list[int]]=None, comment: str=''):
         """
         Creates a CONM2 card
 
@@ -1234,9 +1272,9 @@ class CONM2(PointMassElement):
            the mass of the CONM2
         cid : int; default=0
            coordinate frame of the offset (-1=absolute coordinates)
-        X : (3, ) List[float]; default=None -> [0., 0., 0.]
+        X : (3, ) list[float]; default=None -> [0., 0., 0.]
             xyz offset vector relative to nid
-        I : (6, ) List[float]; default=None -> [0., 0., 0., 0., 0., 0.]
+        I : (6, ) list[float]; default=None -> [0., 0., 0., 0., 0., 0.]
             mass moment of inertia matrix about the CG
             I11, I21, I22, I31, I32, I33 = I
         comment : str; default=''
@@ -1254,7 +1292,7 @@ class CONM2(PointMassElement):
 
         #: Coordinate system identification number.
         #: For CID of -1; see X1, X2, X3 below.
-        #: (Integer > -1; Default = 0)
+        #: (Integer >= -1; Default=0)
         self.cid = cid
 
         #: Mass value. (Real)
@@ -1262,6 +1300,7 @@ class CONM2(PointMassElement):
 
         if X is None:
             X = np.zeros(3)
+
         #: Offset distances from the grid point to the center of gravity of
         #: the mass in the coordinate system defined in field 4, unless
         #: CID = -1, in which case X1, X2, X3 are the coordinates, not
@@ -1289,21 +1328,21 @@ class CONM2(PointMassElement):
         assert len(self.X) == 3, self.X
         assert len(self.I) == 6, self.I
 
-        I11, I12, I22, I13, I23, I33 = self.I
-        I = np.array([
-            [I11, I12, I13],
-            [I12, I22, I23],
-            [I13, I23, I33],
+        i11, i12, i22, i13, i23, i33 = self.I
+        inertia = np.array([
+            [i11, -i12, -i13],
+            [-i12, i22, -i23],
+            [-i13, -i23, i33],
         ], dtype='float32')
-        is_psd, eigi = is_positive_semi_definite(I)
+        is_psd, eigi = is_positive_semi_definite(inertia)
         if not is_psd:
-            msg = 'The eig(I) >= 0.\n'
-            msg += 'I=\n%s\n' % str(I)
-            msg += 'eigenvalues=%s' % str(eigi)
-            raise RuntimeError(msg)
+            msg = (f'The eig(I) >= 0. for CONM2 eid={self.eid:d}\n'
+                   f'I=\n{inertia}\n'
+                   f'eigenvalues={eigi}')
+            warnings.warn(msg)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CONM2 card from ``BDF.add_card(...)``
 
@@ -1320,13 +1359,13 @@ class CONM2(PointMassElement):
         cid = integer_or_blank(card, 3, 'cid', 0)
         mass = double_or_blank(card, 4, 'mass', 0.)
 
-        X = [
+        offset = [
             double_or_blank(card, 5, 'x1', 0.0),
             double_or_blank(card, 6, 'x2', 0.0),
             double_or_blank(card, 7, 'x3', 0.0),
         ]
 
-        I = [
+        inertia = [
             double_or_blank(card, 9, 'I11', 0.0),
             double_or_blank(card, 10, 'I21', 0.0),
             double_or_blank(card, 11, 'I22', 0.0),
@@ -1334,17 +1373,52 @@ class CONM2(PointMassElement):
             double_or_blank(card, 13, 'I32', 0.0),
             double_or_blank(card, 14, 'I33', 0.0),
         ]
-        assert len(card) <= 15, 'len(CONM2 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 15, f'len(CONM2 card) = {len(card):d}\ncard={card}'
+        return CONM2(eid, nid, mass, cid=cid, X=offset, I=inertia, comment=comment)
+
+    @classmethod
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a CONM2 card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        eid = integer(card, 1, 'eid')
+        nid = integer(card, 2, 'nid')
+        cid = integer_or_blank(card, 3, 'cid', default=0)
+        mass = force_double_or_blank(card, 4, 'mass', default=0.0)
+
+        X = [
+            force_double_or_blank(card, 5, 'x1', default=0.0),
+            force_double_or_blank(card, 6, 'x2', default=0.0),
+            force_double_or_blank(card, 7, 'x3', default=0.0),
+        ]
+
+        I = [
+            force_double_or_blank(card, 9, 'I11', default=0.0),
+            force_double_or_blank(card, 10, 'I21', default=0.0),
+            force_double_or_blank(card, 11, 'I22', default=0.0),
+            force_double_or_blank(card, 12, 'I31', default=0.0),
+            force_double_or_blank(card, 13, 'I32', default=0.0),
+            force_double_or_blank(card, 14, 'I33', default=0.0),
+        ]
+        assert len(card) <= 15, f'len(CONM2 card) = {len(card):d}\ncard={card}'
         return CONM2(eid, nid, mass, cid=cid, X=X, I=I, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CONM2 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -1365,37 +1439,49 @@ class CONM2(PointMassElement):
         mass = self.Mass()
         c = self.Centroid()
 
-        assert isinstance(eid, integer_types), 'eid=%r' % eid
-        assert isinstance(nid, integer_types), 'nid=%r' % nid
-        assert isinstance(cid, integer_types), 'cid=%r' % cid
-        assert isinstance(mass, float), 'mass=%r' % mass
+        assert isinstance(eid, integer_types), 'CONM2: eid=%r' % eid
+        assert isinstance(nid, integer_types), 'CONM2: nid=%r' % nid
+        assert isinstance(cid, integer_types), 'CONM2: cid=%r' % cid
+        assert isinstance(mass, float), 'CONM2: mass=%r' % mass
         for i in range(3):
-            assert isinstance(c[i], float), 'centroid[%i]=%r' % (i, c[i])
+            assert isinstance(c[i], float), 'CONM2: centroid[%i]=%r' % (i, c[i])
 
     def Mass(self):
         return self.mass
 
-    def Inertia(self):
+    def Inertia(self) -> np.ndarray:
         """
         Returns the 3x3 inertia matrix
         .. warning:: doesnt handle offsets or coordinate systems
 
         """
         I = self.I
-        A = [[I[0], -I[1], -I[3]],
-             [-I[1], I[2], -I[4]],
-             [-I[3], -I[4], I[5]]]
-        if self.Cid() in [0, -1]:
-            return A
+        inertia = np.array([
+            [I[0], -I[1], -I[3]],
+            [-I[1], I[2], -I[4]],
+            [-I[3], -I[4], I[5]],
+        ])
+        cid = self.Cid()
+        if cid in [0, -1]:
+            return inertia
         else:
             # transform to global
             #dx = self.cid_ref.transform_node_to_global(self.X)
-            #matrix = self.cid_ref.beta()
-            raise NotImplementedError('CONM2 intertia method for CID != 0 is not implemented.')
-            #A2 = A * matrix
-            #return A2  # correct for offset using dx???
+            coord_type = self.cid_ref.type
+            if coord_type not in ['CORD1R', 'CORD2R']:
+                warnings.warn(f'CONM2 (eid={self.eid}) inertia method for {coord_type} CID = {cid} is not implemented')
+                return np.zeros((3, 3))
+            else:
+                # about CG matches FEMAP (outside of the flipped signs I applied above)
+                # TODO: hasn't been verified about the origin, but should be ok
+                xform = self.cid_ref.beta()  # T_LG: transform (local to global)
+                # T_GL = T_LG.T
+                inertia2 = xform.T @ inertia @ xform  # M_GG = T_GL @ M_LL @ T_LG
+                # warnings.warn(f'CONM2 (eid={self.eid}) inertia method for {coord_type} cid={self.cid} is not validated\n'
+                #               f'inertia={inertia} xform(local->global)={xform} inertia2={inertia2}')
+            return inertia2  # correct for offset using dx; I don't think so???
 
-    def offset(self, xyz_nid):
+    def offset(self, xyz_nid: np.ndarray) -> np.ndarray:
         cid = self.Cid()
         if cid == 0:
             # no transform needed
@@ -1452,9 +1538,12 @@ class CONM2(PointMassElement):
             # if CID references a spherical or cylindrical coordinate system. This is similar
             # to the manner in which displacement coordinate systems are defined.
             # this statement is not supported...
-
+            cid_ref = self.cid_ref
+            if cid_ref is None:
+                raise RuntimeError(f'CONM2 error eid={self.eid} cid={self.cid}; '
+                                   f'cid_ref is None\n{str(self)}')
             # convert self.X into the global frame
-            x = self.cid_ref.transform_node_to_global(self.X)
+            x = cid_ref.transform_node_to_global(self.X)
 
             # self.X is an offset
             dx = x - self.cid_ref.origin
@@ -1463,7 +1552,7 @@ class CONM2(PointMassElement):
             X2 = self.nid_ref.get_position() + dx
         return X2
 
-    def Centroid_no_xref(self, model):
+    def Centroid_no_xref(self, model: BDF) -> np.ndarray:
         """
         This method seems way more complicated than it needs to be thanks
         to all these little caveats that don't seem to be supported.
@@ -1502,8 +1591,34 @@ class CONM2(PointMassElement):
             X2 = nid_ref.get_position() + dx
         return X2
 
-    def center_of_mass(self):
+    def centroid_mass_inertia(self) -> tuple[np.ndarray, float, np.ndarray]:
+        centroid = self.Centroid()
+        mass = self.mass
+        inertia = self.Inertia()
+        return centroid, mass, inertia
+
+    def center_of_mass(self) -> np.ndarray:
         return self.Centroid()
+
+    def mass_matrix(self, fdtype: str='float32') -> np.ndarray:
+        """gets the 6x6 mass matrix"""
+        mass = self.Mass()
+        unused_rx, unused_ry, unused_rz = self.X
+        mass_mat = np.zeros((6, 6), dtype=fdtype)
+        mass_mat[0, 0] = mass
+        mass_mat[1, 1] = mass
+        mass_mat[2, 2] = mass
+        #mass_mat[3, 3] = i11
+        #mass_mat[3, 4] = mass_mat[4, 3] = -i12
+        #mass_mat[3, 5] = mass_mat[5, 3] = -i13
+        #mass_mat[4, 4] = i22
+        #mass_mat[4, 5] = mass_mat[5, 4] = -i23
+        #mass_mat[5, 5] = i33
+        inertia = self.Inertia()
+        #inertia = np.ones((3, 3))
+        mass_mat[3:, 3:] = inertia
+        #print(mass_mat)
+        return mass_mat
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -1522,7 +1637,7 @@ class CONM2(PointMassElement):
         if cid != -1:
             self.cid_ref = model.Coord(cid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1549,41 +1664,64 @@ class CONM2(PointMassElement):
     def node_ids(self):
         return [self.Nid()]
 
-    def Nid(self):
+    def Nid(self) -> int:
         if self.nid_ref is not None:
             return self.nid_ref.nid
         return self.nid
 
-    def Cid(self):
-        if self.cid_ref is not None:
-            return self.cid_ref.cid
-        return self.cid
+    def Cid(self) -> int:
+        return coord_id(self.cid_ref, self.cid)
 
     def raw_fields(self):
         list_fields = (['CONM2', self.eid, self.Nid(), self.Cid(), self.mass] +
                        list(self.X) + [None] + list(self.I))
         return list_fields
 
-    def repr_fields(self):
-        I = []
+    def repr_fields(self) -> list:
+        inertia = []
         for i in self.I:
             if i == 0.:
-                I.append(None)
+                inertia.append(None)
             else:
-                I.append(i)
-        X = []
+                inertia.append(i)
+        offset = []
         for x in self.X:
             if x == 0.:
-                X.append(None)
+                offset.append(None)
             else:
-                X.append(x)
+                offset.append(x)
 
         cid = set_blank_if_default(self.Cid(), 0)
-        list_fields = (['CONM2', self.eid, self.Nid(), cid, self.mass] + X +
-                       [None] + I)
+        list_fields = (['CONM2', self.eid, self.Nid(), cid, self.mass] + offset +
+                       [None] + inertia)
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
+        # if 0:  # pragma: no cover
+        #     is_inertia = max(self.I) != 0 or min(self.I) != 0.0
+        #     if size == 8:
+        #         x, y, z = self.X
+        #         msg = 'CONM2   %8d%8d%s%s%s%s%s\n' % (
+        #             self.eid, self.Nid(),
+        #             print_int_default_8(self.Cid(), 0),
+        #             print_float_8(self.mass),
+        #             print_float_8(x),
+        #             print_float_8(y),
+        #             print_float_8(z))
+        #         if is_inertia:
+        #             ixx, ixy, iyy, ixz, iyz, izz = self.I
+        #             msg += '        %s%s%s%s%s%s\n' % (
+        #                 print_float_default_8(ixx, 0.0),
+        #                 print_float_default_8(ixy, 0.0),
+        #                 print_float_default_8(iyy, 0.0),
+        #                 print_float_default_8(ixz, 0.0),
+        #                 print_float_default_8(iyz, 0.0),
+        #                 print_float_default_8(izz, 0.0),
+        #             )
+        #         print(msg.rstrip())
+        #         return self.comment + msg
+
+        # card = self.raw_fields()
         card = self.repr_fields()
         if size == 8:
             return self.comment + print_card_8(card)
@@ -1592,3 +1730,28 @@ class CONM2(PointMassElement):
     def write_card_16(self, is_double=False):
         card = self.repr_fields()
         return self.comment + print_card_16(card)
+
+def xref_cmass_nodes(nodes: list[int], model: BDF, msg: str) -> list[Optional[int]]:
+    nodes_ref = []
+    for nid in nodes:
+        if nid is None:
+            node_ref = 0
+        else:
+            node_ref = model.Node(nid, msg=msg)
+        nodes_ref.append(node_ref)
+    return nodes_ref
+
+def safe_xref_cmass_nodes(nodes: list[int], model: BDF, msg: str) -> list[Optional[int]]:
+    nodes_ref = []
+    missing_nodes = set([])
+    for nid in nodes:
+        if nid in {0, None}:
+            node_ref = None
+        else:
+            try:
+                node_ref = model.Node(nid, msg=msg)
+            except KeyError:
+                node_ref = None
+                missing_nodes.add(nid)
+        nodes_ref.append(node_ref)
+    return nodes_ref, missing_nodes

@@ -1,5 +1,7 @@
-from typing import Dict, Any
+from typing import Any
 import numpy as np
+from pyNastran.utils.mathematics import trapezoid
+
 
 class RandomObjects:
     prefix = ''
@@ -11,6 +13,7 @@ class RandomObjects:
         self.load_vectors = {}
         self.spc_forces = {}
         self.mpc_forces = {}
+        self.pressures = {}
 
         self.crod_force = {}
         self.conrod_force = {}
@@ -37,10 +40,12 @@ class RandomObjects:
         self.ctetra_strain = {}
         self.cpenta_strain = {}
         self.chexa_strain = {}
+        self.cpyram_strain = {}
 
         self.ctetra_stress = {}
         self.cpenta_stress = {}
         self.chexa_stress = {}
+        self.cpyram_stress = {}
 
         self.celas1_stress = {}
         self.celas2_stress = {}
@@ -107,9 +112,9 @@ class RandomObjects:
         self.ctria6_composite_strain = {}
         self.ctriar_composite_strain = {}
 
-    def get_table_types(self):
+    def get_table_types(self, include_class: bool=True) -> list[str]:
         tables = [
-            'displacements', 'velocities', 'accelerations',
+            'displacements', 'velocities', 'accelerations', 'pressures',
             'load_vectors', 'spc_forces', 'mpc_forces',
 
             'celas1_force', 'celas2_force', 'celas3_force', 'celas4_force',
@@ -123,14 +128,14 @@ class RandomObjects:
             'cbar_stress', 'cbeam_stress',
             'ctria3_stress', 'ctriar_stress', 'ctria6_stress',
             'cquadr_stress', 'cquad4_stress', 'cquad8_stress',
-            'ctetra_stress', 'cpenta_stress', 'chexa_stress',
+            'ctetra_stress', 'cpenta_stress', 'chexa_stress', 'cpyram_stress',
 
             'celas1_strain', 'celas2_strain', 'celas3_strain', 'celas4_strain',
             'crod_strain', 'conrod_strain', 'ctube_strain',
             'cbar_strain', 'cbeam_strain',
             'ctria3_strain', 'ctriar_strain', 'ctria6_strain',
             'cquadr_strain', 'cquad4_strain', 'cquad8_strain',
-            'ctetra_strain', 'cpenta_strain', 'chexa_strain',
+            'ctetra_strain', 'cpenta_strain', 'chexa_strain', 'cpyram_strain',
 
             'cquad4_composite_stress', 'cquad8_composite_stress', 'cquadr_composite_stress',
             'ctria3_composite_stress', 'ctria6_composite_stress', 'ctriar_composite_stress',
@@ -145,11 +150,13 @@ class RandomObjects:
             'cbush_force',
             'cdamp1_force', 'cdamp2_force', 'cdamp3_force', 'cdamp4_force',
             'cvisc_force',
-
         ]
+        if not include_class:
+            return tables
         return [self.prefix + table + self.postfix for table in tables]
 
-class PSDObjects():
+
+class PSDObjects:
     """storage class for the ATO objects"""
     prefix = 'psds.'
     postfix = ''
@@ -206,7 +213,7 @@ class PSDObjects():
                 msg += '\n'
         return msg
 
-    def get_psds_by_subtitles(self) -> Dict[Any, Any]:
+    def get_psds_by_subtitles(self) -> dict[Any, Any]:
         psd_results = self.get_results()
         if not psd_results:
             return {}
@@ -226,7 +233,7 @@ class PSDObjects():
 
         import matplotlib.pyplot as plt
         for subtitle, psds in psds_subtitle.items():
-            fig = plt.figure(1)
+            unused_fig = plt.figure(1)
             for (res_type, nid, dof), psd in psds.items():
                 freqs, psd = psd[:, 0], psd[:, 1]
                 plt.plot(freqs, psd, name=f'(restype,nid,dof)=({res_type}, {nid}, {dof})')
@@ -248,7 +255,6 @@ class PSDObjects():
             'stress' : 'EL STR',
             'strain' : 'STRAIN',
         }
-        from scipy.integrate import trapz
         for subtitle, psds in psds_subtitle.items():
             f06.write(subtitle + '\n')
             f06.write('0                             X Y - O U T P U T  S U M M A R Y  ( A U T O  O R  P S D F )\n')
@@ -280,13 +286,13 @@ class PSDObjects():
                 # If you want the RMS value, this is computed as RMS = SQRT(SUM(PSD*DF)) and,
                 # where DF is the spectral resolution, where you integarate from Fmin to Fmax,
                 # i.e. your lowest and highest analysis frequency of interest, respectively.
-                psd_f = trapz(psd, freqs)
+                psd_f = trapezoid(psd, freqs)
                 rms = psd_f ** 0.5
                 if psd_f == 0.0:
                     # really this is nan, but that's Nastran for you
                     no_crossings = 0.0
                 else:
-                    f2_psd_f = trapz(freqs**2 * psd, freqs)
+                    f2_psd_f = trapezoid(freqs**2 * psd, freqs)
                     no_crossings = (f2_psd_f / psd_f) ** 0.5  # Hz
 
                 #print('ymin=%s ymax=%s xmin=%s xmax=%s fmin=%s fmax=%s' % (ymin, ymax, xmin, xmax, fmin, fmax))
@@ -324,6 +330,86 @@ class NumberOfCrossingsObjects(RandomObjects):
     prefix = 'no.'
     #postfix = ''
 
+class ScaledResponseSpectra:
+    """common class for Scaled Response Spectra objectse"""
+    prefix = ''
+    postfix = ''
+    def __init__(self):
+        self.displacements = {}
+        self.velocities = {}
+        self.accelerations = {}
+        self.spc_forces = {}
+        self.mpc_forces = {}
+
+        self.celas1_force = {}
+        self.celas1_stress = {}
+        self.celas1_strain = {}
+
+        self.celas2_force = {}
+        self.celas2_stress = {}
+        self.celas2_strain = {}
+
+        self.celas3_force = {}
+        self.celas3_stress = {}
+        self.celas3_strain = {}
+
+        self.celas4_force = {}
+        self.celas4_stress = {}
+        self.celas4_strain = {}
+
+        self.cbush_force = {}
+        self.cbush_stress = {}
+        self.cbush_strain = {}
+
+        self.cbar_force = {}
+        self.cbar_stress = {}
+        self.cbar_strain = {}
+
+        self.cbeam_force = {}
+        self.cbeam_stress = {}
+        self.cbeam_strain = {}
+
+        self.ctria3_stress = {}
+        self.ctria3_strain = {}
+        self.ctria3_force = {}
+
+        self.cquad4_stress = {}
+        self.cquad4_strain = {}
+        self.cquad4_force = {}
+
+        self.ctria6_stress = {}
+        self.ctria6_strain = {}
+        self.ctria6_force = {}
+
+        self.cquad8_stress = {}
+        self.cquad8_strain = {}
+        self.cquad8_force = {}
+
+    def get_table_types(self) -> list[str]:
+        tables = [
+            'displacements', 'velocities', 'accelerations', 'spc_forces', 'mpc_forces',
+            'cbar_force',
+            'cquad4_stress',
+            'cquad4_force',
+        ]
+        return [self.prefix + table + self.postfix for table in tables]
+
+class SRSS(RandomObjects):
+    """storage class for the Scaled Response Spectra, SRSS objects"""
+    prefix = 'srss.'
+    postfix = ''
+
+class ABS(RandomObjects):
+    """storage class for the Scaled Response Spectra, ABS objects"""
+    prefix = 'abs.'
+    postfix = ''
+
+class NRL(RandomObjects):
+    """storage class for the Scaled Response Spectra, NRL objects"""
+    prefix = 'nrl.'
+    postfix = ''
+
+
 class RAECONS:
     """storage class for the RAECONS objects"""
     def __init__(self):
@@ -341,6 +427,8 @@ class RAECONS:
 class RASCONS:
     """storage class for the RASCONS objects"""
     def __init__(self):
+        self.cbar_stress = {}
+
         self.ctetra_stress = {}
         self.cpenta_stress = {}
         self.chexa_stress = {}
@@ -366,6 +454,7 @@ class RASCONS:
     def get_table_types(self):
         tables = [
             # OES - isotropic CTRIA3/CQUAD4 stress
+            'cbar_stress',
             'ctria3_stress', 'ctriar_stress', 'ctria6_stress',
             'cquadr_stress', 'cquad4_stress', 'cquad8_stress',
 
@@ -377,6 +466,43 @@ class RASCONS:
             'ctetra_strain', 'chexa_strain', 'cpenta_strain',
         ]
         return ['RASCONS.' + table for table in tables]
+
+
+class RAQCONS:
+    """
+    storage class for the RAQCONS objects
+    Constraint mode ply strain table
+    """
+    def __init__(self):
+        self.cquad4_composite_strain = {}
+        self.cquad8_composite_strain = {}
+        self.cquadr_composite_strain = {}
+        self.ctria3_composite_strain = {}
+        self.ctria6_composite_strain = {}
+        self.ctriar_composite_strain = {}
+
+    def get_table_types(self):
+        tables = [
+            'cquad4_composite_strain',
+            'cquad8_composite_strain',
+            'cquadr_composite_strain',
+            'ctria3_composite_strain',
+            'ctria6_composite_strain',
+            'ctriar_composite_strain',
+        ]
+        return ['RAQCONS.' + table for table in tables]
+
+class RARCONS:
+    """
+    storage class for the RARCONS objects
+    Reaction Force Constraint Mode
+    """
+    def __init__(self):
+        self.spc_forces = {}
+
+    def get_table_types(self):
+        tables = ['spc_forces', ]
+        return ['RARCONS.' + table for table in tables]
 
 class RAPCONS:
     """storage class for the RAPCONS objects"""
@@ -553,6 +679,48 @@ class ROUGV1:
         ]
         return ['ROUGV1.' + table for table in tables]
 
+class ROQGM1:
+    """storage class for the ROQGM1 objects"""
+    def __init__(self):
+        self.mpc_forces = {}
+
+    def get_table_types(self):
+        tables = ['mpc_forces']
+        return ['ROQGM1.' + table for table in tables]
+
+class RAREATC:
+    """storage class for the RAREATC objects"""
+    def __init__(self):
+        self.spc_forces = {}
+    def get_table_types(self):
+        tables = [
+            'spc_forces',
+        ]
+        return ['RAREATC.' + table for table in tables]
+
+class RAQEATC:
+    """storage class for the RAQEATC objects
+    Attachment mode ply strain table
+    """
+    def __init__(self):
+        self.cquad4_composite_strain = {}
+        self.cquad8_composite_strain = {}
+        self.cquadr_composite_strain = {}
+        self.ctria3_composite_strain = {}
+        self.ctria6_composite_strain = {}
+        self.ctriar_composite_strain = {}
+
+    def get_table_types(self):
+        tables = [
+            'cquad4_composite_strain',
+            'cquad8_composite_strain',
+            'cquadr_composite_strain',
+            'ctria3_composite_strain',
+            'ctria6_composite_strain',
+            'ctriar_composite_strain',
+        ]
+        return ['RAQEATC.' + table for table in tables]
+
 class RAFEATC:
     """storage class for the RAFEATC objects"""
     def __init__(self):
@@ -572,13 +740,15 @@ class RAFEATC:
 class RASEATC:
     """storage class for the RASEATC objects"""
     def __init__(self):
+        self.cbar_stress = {}
         self.chexa_stress = {}
         self.cquad4_stress = {}
 
     def get_table_types(self):
         tables = [
-            'chexa_stress',
+            'cbar_stress',
             'cquad4_stress',
+            'chexa_stress',
         ]
         return ['RASEATC.' + table for table in tables]
 

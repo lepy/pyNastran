@@ -4,10 +4,14 @@ http://gun.teipir.gr/VRML-amgem/spec/part1/examples.html
 import os
 import numpy as np
 
-from cpylog import get_logger2
 from pyNastran.utils import print_bad_path
 from pyNastran.converters.dev.vrml.vrml_pyparsing import remove_comments, get_vrml_format
 from pyNastran.converters.dev.vrml.vrml_to_dict import todict
+from cpylog import __version__ as CPYLOG_VERSION
+if CPYLOG_VERSION > '1.6.0':
+    from cpylog import get_logger
+else:  # pragma: no cover
+    from cpylog import get_logger2 as get_logger
 
 
 def read_vrml(vrml_filename: str, debug=False, log=None):
@@ -71,10 +75,11 @@ def vrml_to_nastran(vrml_filename: str, nastran_filename: str, debug=False, log=
                 card = ['CQUAD4', ntris + ie + 1, pid, ] + n1234.tolist()
                 bdf_file.write(print_card_8(card))
 
+
 class VRML:
     def __init__(self, log=None, debug=False):
         self.debug = debug
-        self.log = get_logger2(log=log, debug=debug, encoding='utf-8')
+        self.log = get_logger(log, debug, encoding='utf-8')
 
     def read_vrml(self, vrml_filename: str):
         """reads a VRML file"""
@@ -86,7 +91,7 @@ class VRML:
 
         lines = remove_comments(lines)
         txt = '\n'.join(lines)
-        model = vrml_format.parseString(txt, parseAll=True)
+        model = vrml_format.parse_string(txt, parse_all=True)
 
         dict_model = todict(model, self.log)
         return dict_model

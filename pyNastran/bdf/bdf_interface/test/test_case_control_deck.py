@@ -1,17 +1,128 @@
 """tests the CaseControlDeck"""
+import io
 import os
 import unittest
 
 import pyNastran
 from pyNastran.bdf.bdf import BDF
 from pyNastran.bdf.case_control_deck import CaseControlDeck
-from pyNastran.bdf.bdf_interface.subcase_utils import write_set, collapse_thru_packs
+from pyNastran.bdf.bdf_interface.subcase.utils import write_set, collapse_thru_packs
+from pyNastran.bdf.bdf_interface.encoding import decode_lines
 
 PKG_PATH = pyNastran.__path__[0]
 TEST_PATH = os.path.join(PKG_PATH, 'bdf', 'test')
 
 
 class CaseControlTest(unittest.TestCase):
+    def test_decode_lines(self):
+        alines = ['aaa', 'bbb']
+        blines = [b'aaa', b'bbb']
+        lines = decode_lines(blines, 'utf8')
+        assert lines == alines
+        lines = decode_lines(blines, 'utf-8')
+        assert lines == alines
+
+        lines = decode_lines(alines, 'utf-8')
+        assert lines == alines
+
+        clines = [1, 'aaa']
+        with self.assertRaises(TypeError):
+            decode_lines(clines)
+
+    def test_case_control_null_1(self):
+        model = BDF(debug=False)
+        model.create_subcases()
+    def test_case_control_null_2(self):
+        model = BDF(debug=False)
+        model.create_subcases(1)
+    def test_case_control_null_3(self):
+        model = BDF(debug=False)
+        model.create_subcases(subcase_ids=[1, 2])
+
+    def test_subcase_op2(self):
+        model = BDF(debug=False)
+        subcases = model.create_subcases(1)
+        data_code_dict = {
+            'table_name': b'OUGV1',  # disp
+            'table_code': 1,   # disp
+            'sort_code': 1,    # sort2?
+            'device_code': 1,  # plot
+            'thermal': 0,      # not thermal
+
+            'title': 'mytitle',
+            'subtitle': 'subtitle',
+            'label': 'label',
+        }
+        msg = ''
+        log = model.log
+        subcase = subcases[1]
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'thermal': 1})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'OAG1', 'table_code': 11,
+                               'thermal': 0})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'OAGPSD1'})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        # data_code_dict.update({'table_name': b'OAGATO1'})
+        # subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OAGCRM1'})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OAGRMS1'})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OAGNO1'})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'OUPV1', 'table_code': 1})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OUPV1', 'table_code': 10})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OUPV1', 'table_code': 11})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'OUXY1', 'table_code': 15})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OUXY1', 'table_code': 16})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OUXY1', 'table_code': 17})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'OESC1', 'table_code': -1})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'DOES1', 'table_code': -1})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'OESXRM1C', 'table_code': 805})
+        subcase.add_op2_data(data_code_dict, msg, log)
+        data_code_dict.update({'table_name': b'OESXNO1C', 'table_code': 905})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+        data_code_dict.update({'table_name': b'TOUGV1', 'table_code': 11})
+        subcase.add_op2_data(data_code_dict, msg, log)
+
+
+    def test_get_op2_data(self):
+        model = BDF(debug=False)
+        subcases = model.create_subcases(1)
+        subcase = subcases[1]
+        subcase.add_result_type('TITLE', 'mytitle', [])
+        subcase.add_result_type('ECHO', 'UNSORT', [])
+        subcase.add_integer_type('LOAD', 4)
+        subcase.add_result_type('DISP', 'ALL', ['PLOT', 'SORT1', 'PHASE'])
+        subcase.add_result_type('ACCEL', 'ALL', ['PUNCH', 'SORT2', 'REAL'])
+        subcase.add_result_type('STRESS', 'ALL', ['PRINT', 'IMAG', 'VONMISES', 'FIBER'])
+        subcase.add_result_type('STRAIN', 'ALL', ['PRINT', 'RANDOM'])
+        subcase.add_result_type('FORCE', 'ALL', ['SORT2'])
+        subcase.add_result_type('GPFORCE', '5', ['PRINT', 'SORT1'])
+
+        solmap_to_value = model._solmap_to_value
+        subcase.get_op2_data(101, solmap_to_value)
+        subcase.suppress_output()
+        subcase.get_op2_data(101, solmap_to_value)
+
     def test_case_control_01(self):
         lines = ['SPC=2',
                  'MPC =3',
@@ -91,8 +202,6 @@ class CaseControlTest(unittest.TestCase):
             '$pyNastran: version=msc',
             '$pyNastran: punch=False',
             '$pyNastran: encoding=utf-8',
-            '$pyNastran: nnodes=1',
-            '$pyNastran: nelements=0',
             '$EXECUTIVE CONTROL DECK',
             'SOL 101',
             'CEND',
@@ -375,6 +484,187 @@ class CaseControlTest(unittest.TestCase):
         assert sc3.params['SET 100'] == [[100, 101], 100, 'SET-type']
         assert sc4.params['SET 100'] == [[100], 100, 'SET-type']
 
+    def test_echo_str(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = UNSORT'
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_echo_str_str(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = PUNCH,SORT',
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_echo_list_list(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = SORT(EXCEPT DMI,DMIG),PUNCH(BSTBULK)',
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_echo_str_list(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = PUNCH,SORT(MAT1,PARAM)',
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_echo_list(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = SORT(EXCEPT DMI,DMIG)',
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_echo_list_long(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = SORT(PARAM,EIGC,EIGRL,FREQ,DESVAR,DCONSTR,DRESP1,DRESP2,',
+            '       DVPREL1)',
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_echo_list_long_str(self):
+        """tests ECHO"""
+        lines = [
+            'ECHO = SORT(PARAM,EIGC,EIGRL,FREQ,DESVAR,DCONSTR,DRESP1,DRESP2),',
+            '       PUNCH',
+        ]
+        lines_expected = lines
+
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+        #ECHO = SORT(PARAM,EIGC,EIGRL,FREQ,DESVAR,DCONSTR,DRESP1,DRESP2,DEQATN,DVPREL1)
+        #ECHO = PUNCH,SORT(MAT1,PARAM)
+
+    def test_real_matrices_1(self):
+        """tests real matrices without a Subcase"""
+        lines = [
+            #'SET 1 = 1.*MAT1,2.*MAT2,3.*MAT3,4.*MAT4,5.*MAT5,6.*MAT6,'
+            #' 7.*MAT7,8.*MAT8,9.*MAT9',
+            'K2GG = 1.*MAT1,2.*MAT2,3.*MAT3,4.*MAT4,5.*MAT5,6.*MAT6,'
+            ' 7.*MAT7,8.*MAT8,9.*MAT9',
+            'DISPLACEMENT = ALL',
+        ]
+        lines_expected = [
+            #'SET 1 = 1.*MAT1,2.*MAT2,3.*MAT3,4.*MAT4,5.*MAT5,6.*MAT6,'
+            #' 7.*MAT7,8.*MAT8,9.*MAT9',
+            'DISPLACEMENT = ALL',
+            'K2GG = 1.0*MAT1,2.0*MAT2,3.0*MAT3,4.0*MAT4,5.0*MAT5,6.0*MAT6,',
+            ' 7.0*MAT7,8.0*MAT8,9.0*MAT9',
+            #'BEGIN BULK',
+            #'',
+        ]
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_real_matrices_2(self):
+        """tests real matrix with a Subcase"""
+        lines = [
+            'SUBCASE 1',
+            '  K2GG = 1.*MAT1,2.*MAT2,3.*MAT3,4.*MAT4,5.*MAT5,6.*MAT6,'
+            '   7.*MAT7,8.*MAT8,9.*MAT9',
+            '  DISPLACEMENT = ALL',
+        ]
+        lines_expected = [
+            'SUBCASE 1',
+            '    DISPLACEMENT = ALL',
+            '    K2GG = 1.0*MAT1,2.0*MAT2,3.0*MAT3,4.0*MAT4,5.0*MAT5,6.0*MAT6,',
+            '     7.0*MAT7,8.0*MAT8,9.0*MAT9',
+        ]
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_imag_matrices_1(self):
+        """tests imaginary matrices without a Subcase"""
+        lines = [
+            'K2PP = (1.,1.)*MAT1,(2.,2.)*MAT2,(3.,3.)*MAT3,(4.,4.)*MAT4,(5.,5.)*MAT5,(6.,6.)*MAT6,'
+            ' (7.,7.)*MAT7,(8.,8.)*MAT8,(9.,9.)*MAT9',
+            'DISPLACEMENT = ALL',
+        ]
+        lines_expected = [
+            'DISPLACEMENT = ALL',
+            'K2PP = (1.0,1.0)*MAT1,(2.0,2.0)*MAT2,(3.0,3.0)*MAT3,(4.0,4.0)*MAT4,',
+            ' (5.0,5.0)*MAT5,(6.0,6.0)*MAT6,(7.0,7.0)*MAT7,(8.0,8.0)*MAT8,',
+            ' (9.0,9.0)*MAT9',
+            #'BEGIN BULK',
+            #'',
+        ]
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
+
+    def test_imag_matrices_2(self):
+        """tests imaginary matrix with a Subcase"""
+        lines = [
+            'SUBCASE 1',
+            '  K2PP = (1.,1.)*MAT1,(2.,2.)*MAT2,(3.,3.)*MAT3,(4.,4.)*MAT4,(5.,5.)*MAT5,(6.123456,6.123456)*MAT6,'
+            '   (7.,7.)*MAT7,(8.,8.)*MAT8,(9.,9.)*MAT9',
+            '  DISPLACEMENT = ALL',
+        ]
+        lines_expected = [
+            'SUBCASE 1',
+            '    DISPLACEMENT = ALL',
+            '    K2PP = (1.0,1.0)*MAT1,(2.0,2.0)*MAT2,(3.0,3.0)*MAT3,(4.0,4.0)*MAT4,',
+            '     (5.0,5.0)*MAT5,(6.123456,6.123456)*MAT6,(7.0,7.0)*MAT7,',
+            '     (8.0,8.0)*MAT8,(9.0,9.0)*MAT9',
+        ]
+        deck = CaseControlDeck(lines)
+        deck_msg = '%s' % deck
+        #print('%s' % deck_msg)
+        deck_lines = deck_msg.split('\n')
+        compare_lines(self, deck_lines, lines_expected, has_endline=False)
 
     def test_groundcheck_1(self):
         """tests GROUNDCHECk"""
@@ -522,12 +812,44 @@ class CaseControlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             deck = CaseControlDeck(lines)
 
+    def test_case_control_set(self):
+        """tests adding SETs"""
+        deck = CaseControlDeck([], log=None)
+        subcase = deck.create_new_subcase(1)
+        subcase.params['SET 42'] = [[1, 2, 3, 4, 5], 42, 'SET-type']
+        set_str = write_set(41, [1, 2, 3]).rstrip()
+        set_str2 = set_str.split('=', 1)[1]
+        assert set_str2 == ' 1, 2, 3', set_str2
+        subcase.add('SET 52', set_str2, 52, 'SET-type')
+        subcase.add_set_from_values(100, [1, 2, 10])
+        # subcase.add('SET', value, options, param_type)  # TODO: doesn't work
+
+    def test_case_control_simple(self):
+        model = BDF(debug=False)
+        model.sol = 101
+        model.case_control_deck = CaseControlDeck([])
+
+        subcase = model.case_control_deck.create_new_subcase(1)
+        set_str = ' 1, 2, 3'
+        subcase.add('SET 52', set_str, 52, 'SET-type')
+        subcase.add_set_from_values(100, [1, 2, 10])
+        subcase.add('DISP', 'ALL', ['PLOT'], 'STRESS-type')
+        subcase.add('TSTEP', 10, [], 'STRESS-type')
+        subcase.add_integer_type('METHOD', 11)
+        subcase.add_result_type('ACCEL', 'ALL', ['PLOT'])
+        #print(model.case_control_deck)
+        bdf_file = io.StringIO()
+        model.write_bdf(bdf_file, close=False)
+        bdf_file.seek(0)
+        msg = bdf_file.readlines()
+        print(msg)
+
 def compare_lines(self, lines, lines_expected, has_endline):
     i = 0
     for line, line_expected in zip(lines, lines_expected):
         line = line.rstrip()
         line_expected = line_expected.rstrip()
-        msg = 'The lines are not the same...i=%s\n' % i
+        msg = f'The lines are not the same...i=%{i:d}\n'
         msg += 'line     = %r\n' % line
         msg += 'expected = %r\n' % line_expected
         if has_endline:

@@ -1,16 +1,13 @@
-from collections import OrderedDict
-from cpylog import get_logger2
-
-
-def read_input_cntl(input_cntl_filename, log=None, debug=False):
-    cntl = InputCntlReader(log=log, debug=debug)
-    cntl.read_input_cntl(input_cntl_filename)
-    return cntl
+from cpylog import __version__ as CPYLOG_VERSION
+if CPYLOG_VERSION > '1.6.0':
+    from cpylog import get_logger
+else:  # pragma: no cover
+    from cpylog import get_logger2 as get_logger
 
 
 class InputCntlReader:
     def __init__(self, log=None, debug=False):
-        self.log = get_logger2(log, debug=debug)
+        self.log = get_logger(log, debug)
 
     def read_input_cntl(self, input_cntl_filename):
         self.log.info('reading input_cntl=%r' % input_cntl_filename)
@@ -95,7 +92,8 @@ class InputCntlReader:
             else:
                 raise NotImplementedError(post_processing_type)
 
-    def get_boundary_conditions(self):
+    def get_boundary_conditions(self) -> tuple[int, int, int,
+                                               int, int, int, dict[int, list[float]]]:
         section = self.sections['Boundary_Conditions']
         name, comment, table = section
         self.log.debug(str(table))
@@ -150,9 +148,9 @@ class InputCntlReader:
                surf_bcs)
         return bcs
 
-    def _read_sections(self, lines):
+    def _read_sections(self, lines: list[str]) -> dict[str, str, list[str]]:
         name = 'Header'
-        sections = OrderedDict()
+        sections = {}
         comment = ''
         data = []
         for line in lines:
@@ -199,6 +197,11 @@ class InputCntlReader:
                 self.log.debug(datai)
             self.log.debug('#' * 80)
         return sections
+
+def read_input_cntl(input_cntl_filename, log=None, debug=False) -> InputCntlReader:
+    cntl = InputCntlReader(log=log, debug=debug)
+    cntl.read_input_cntl(input_cntl_filename)
+    return cntl
 
 def main():  # pragma: no cover
     input_cntl_filename = r'F:\work\pyNastran\pyNastran\master2\pyNastran\converters\cart3d\models\bJet\input.cntl'

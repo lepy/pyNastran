@@ -1,6 +1,12 @@
-from typing import List
 import numpy as np
 from pyNastran.utils import object_attributes
+
+
+def write_float_10e(val: float) -> str:
+    v2 = '%10.3E' % val
+    if v2 in (' 0.000E+00', '-0.000E+00'):
+        v2 = ' 0.0'
+    return v2
 
 
 def write_float_11e(val: float) -> str:
@@ -9,6 +15,7 @@ def write_float_11e(val: float) -> str:
     if v2 in (' 0.0000E+00', '-0.0000E+00'):
         v2 = ' 0.0'
     return v2
+
 
 def write_float_12e(val: float) -> str:
     """writes a Nastran formatted 12.5 float"""
@@ -20,13 +27,21 @@ def write_float_12e(val: float) -> str:
 
 def write_float_13e(val: float) -> str:
     """writes a Nastran formatted 13.6 float"""
+    # assert isinstance(val, (float, np.float32, np.float64)), (val, type(val))
     val2 = '%13.6E' % val
     if val2 in (' 0.000000E+00', '-0.000000E+00'):
         val2 = ' 0.0'
     return val2
 
 
-def write_floats_10e(vals: List[float]) -> List[str]:
+def write_float_13e_long(val: float) -> str:
+    """writes a Nastran formatted 13.6 float"""
+    #assert isinstance(val, (float, np.float32, np.float64)), val
+    val2 = '%13.6E' % val
+    return val2
+
+
+def write_floats_10e(vals: list[float]) -> list[str]:
     """writes a series of Nastran formatted 10.3 floats"""
     vals2 = []
     for v in vals:
@@ -37,7 +52,7 @@ def write_floats_10e(vals: List[float]) -> List[str]:
     return vals2
 
 
-def write_floats_12e(vals: List[float]) -> List[str]:
+def write_floats_12e(vals: list[float]) -> list[str]:
     """writes a series of Nastran formatted 12.5 floats"""
     vals2 = []
     for v in vals:
@@ -48,7 +63,16 @@ def write_floats_12e(vals: List[float]) -> List[str]:
     return vals2
 
 
-def write_floats_13e(vals: List[float]) -> List[str]:
+def write_floats_12e_long(vals: list[float]) -> list[str]:
+    """writes a series of Nastran formatted 12.5 floats"""
+    vals2 = []
+    for v in vals:
+        v2 = '%12.5E' % v
+        vals2.append(v2)
+    return vals2
+
+
+def write_floats_13e(vals: list[float]) -> list[str]:
     """writes a series of Nastran formatted 13.6 floats"""
     vals2 = []
     for v in vals:
@@ -59,40 +83,83 @@ def write_floats_13e(vals: List[float]) -> List[str]:
     return vals2
 
 
-def write_imag_floats_13e(vals: List[float], is_mag_phase: bool) -> str:
+def write_floats_13e_long(vals: list[float]) -> list[str]:
+    """writes a series of Nastran formatted 13.6 floats"""
+    vals2 = []
+    for v in vals:
+        v2 = '%13.6E' % v
+        vals2.append(v2)
+    return vals2
+
+
+def write_imag_floats_12e(vals: list[float],
+                          is_mag_phase: bool) -> list[str]:
     vals2 = []
 
     if is_mag_phase:
         for v in vals:
-            v2 = '%13.6E' % abs(v)
-            if v2 in (' 0.000000E+00', '-0.000000E+00'):
-                v2 = ' 0.0'
-            vals2.append(v2)
+            v_str = '%12.5E' % abs(v)
+            if v_str in (' 0.00000E+00', '-0.00000E+00'):
+                v_str = ' 0.0'
+            vals2.append(v_str)
+
+        # phase
+        for v in vals:
+            v2 = np.angle(v, deg=True)
+            v_str = '%-12.4f' % v2 if v2 >= 0.0 else '%-13.4f' % (v2 + 360.)
+            if v_str == '0.0000      ':
+                v_str = '   0.0'
+            vals2.append(v_str)
+    else:
+        for v in vals:
+            v_str = '%12.5E' % v.real
+            if v_str in (' 0.00000E+00', '-0.00000E+00'):
+                v_str = ' 0.0'
+            vals2.append(v_str)
+
+        for v in vals:
+            v_str = '%12.5E' % v.imag
+            if v_str in (' 0.00000E+00', '-0.00000E+00'):
+                v_str = ' 0.0'
+            vals2.append(v_str)
+    return vals2
+
+
+def write_imag_floats_13e(vals: list[float],
+                          is_mag_phase: bool) -> list[str]:
+    vals2 = []
+
+    if is_mag_phase:
+        for v in vals:
+            v_str = '%13.6E' % abs(v)
+            if v_str in (' 0.000000E+00', '-0.000000E+00'):
+                v_str = ' 0.0'
+            vals2.append(v_str)
 
         # phase
         for v in vals:
             v2 = np.angle(v, deg=True)
 
-            v3 = '%-13.4f' % v2 if v2 >= 0.0 else '%-13.4f' % (v2 + 360.)
-            if v3 == '0.0000       ':
-                v3 = '   0.0'
-            vals2.append(v3)
+            v_str = '%-13.4f' % v2 if v2 >= 0.0 else '%-13.4f' % (v2 + 360.)
+            if v_str == '0.0000       ':
+                v_str = '   0.0'
+            vals2.append(v_str)
     else:
         for v in vals:
-            v2 = '%13.6E' % v.real
-            if v2 in (' 0.000000E+00', '-0.000000E+00'):
-                v2 = ' 0.0'
-            vals2.append(v2)
+            v_str = '%13.6E' % v.real
+            if v_str in (' 0.000000E+00', '-0.000000E+00'):
+                v_str = ' 0.0'
+            vals2.append(v_str)
 
         for v in vals:
-            v3 = '%13.6E' % v.imag
-            if v3 in (' 0.000000E+00', '-0.000000E+00'):
-                v3 = ' 0.0'
-            vals2.append(v3)
+            v_str = '%13.6E' % v.imag
+            if v_str in (' 0.000000E+00', '-0.000000E+00'):
+                v_str = ' 0.0'
+            vals2.append(v_str)
     return vals2
 
 
-def write_floats_8p4f(vals: List[float]) -> List[str]:
+def write_floats_8p4f(vals: list[float]) -> list[str]:
     """writes an 8.4F formatted number"""
     vals2 = []
     for val in vals:
@@ -104,7 +171,8 @@ def write_floats_8p4f(vals: List[float]) -> List[str]:
         vals2.append(val2)
     return vals2
 
-def write_floats_8p1e(vals: List[float]) -> List[str]:
+
+def write_floats_8p1e(vals: list[float]) -> list[str]:
     """writes an 8.1E formatted number"""
     vals2 = []
     for val in vals:
@@ -114,30 +182,35 @@ def write_floats_8p1e(vals: List[float]) -> List[str]:
             vals2.append('%8.1E' % val)
     return vals2
 
+
 def _eigenvalue_header(obj, header, itime: int, ntimes: int, dt):
     if obj.nonlinear_factor not in (None, np.nan):
         name = obj.data_code['name']
-        if isinstance(dt, int):
+        if isinstance(dt, (int, np.int32, np.int64)):
             dt_line = ' %14s = %i\n' % (name.upper(), dt)
-        elif isinstance(dt, (float, np.float32)):
+        elif isinstance(dt, (float, np.float32, np.float64)):
             dt_line = ' %14s = %12.5E\n' % (name, dt)
-        else:
-            dt_line = ' %14s = %12.5E %12.5Ej\n' % (name, dt.real, dt.imag)
+        #elif isinstance(dt, np.complex):
+            #dt_line = ' %14s = %12.5E %12.5Ej\n' % (name, dt.real, dt.imag)
+        else:  # praga: no cover
+            raise NotImplementedError(type(dt))
+            #dt_line = ' %14s = %12.5E %12.5Ej\n' % (name, dt.real, dt.imag)
         header[1] = dt_line
         codes = getattr(obj, name + 's')
         if not len(codes) == ntimes:
-            msg = '%ss in %s the wrong size; ntimes=%s; %ss=%s\n' % (
-                name, obj.__class__.__name__, ntimes, name, codes)
+            class_name = obj.__class__.__name__
+            msg = (f'{name}s in {class_name} the wrong size; '
+                   f'ntimes={ntimes}; {name}s={codes}\n')
             atts = object_attributes(obj)
-            msg += 'names=%s\n' % atts
-            msg += 'data_names=%s\n' % obj.data_names
+            msg += f'names={atts}\n'
+            msg += f'data_names={obj.data_names}\n'
             raise IndexError(msg)
 
-        if hasattr(obj, 'eigr'):
+        if hasattr(obj, 'eign'):
             try:
-                eigenvalue_real = obj.eigrs[itime]
+                eigenvalue_real = obj.eigns[itime]
             except IndexError:
-                msg = 'eigrs[%s] not found; ntimes=%s; eigrs=%s' % (itime, ntimes, obj.eigrs)
+                msg = f'eigns[{itime}] not found; ntimes={ntimes}; eigns={obj.eigns}'
                 msg += 'names=%s' % object_attributes(obj)
                 raise IndexError(msg)
             eigr_line = ' %14s = %12.6E\n' % ('EIGENVALUE', eigenvalue_real)
@@ -145,7 +218,7 @@ def _eigenvalue_header(obj, header, itime: int, ntimes: int, dt):
     return header
 
 
-def get_key0_compare(adict):
+def get_key0_compare(adict: dict):
     """Gets the "first" key in a dictionary
 
     The entry is kind of irrelevant.
@@ -154,7 +227,7 @@ def get_key0_compare(adict):
     return keys[0]
 
 
-def get_key0(adict):
+def get_key0(adict: dict):
     """Gets the "first" key in a dictionary
 
     The entry is kind of irrelevant.

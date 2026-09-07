@@ -5,6 +5,7 @@ import sys
 import time
 import itertools
 import traceback
+from pyNastran.utils import PathLike
 
 from docopt import docopt
 
@@ -24,36 +25,10 @@ from pyNastran.utils import print_bad_path, check_path
 from pyNastran.utils.dev import get_files_of_type
 from pyNastran.op2.test.op2_test import get_failed_files
 
-FORMAT_TO_EXTENSION = {
-    #'abaqus' : ['.inp'],
-    'nastran' : ['.bdf', '.ecd', '.nas', '.op2', '.pch', '.dat'],
-    'stl' : ['.stl'],
-    'cart3d' : ['.tri', '.triq'],
-    'tecplot' : ['.plt', '.dat'],
-    'ugrid' : ['.ugrid'],
-    #'plot3d' : ['.p3d', '.p3da'],
-    'surf' : ['.surf'],
-    'lawgs' : ['.wgs'],
-    'shabp' : ['.mk5'],
-    'fast' : ['.cogsg'],
-    'usm3d' : ['.cogsg', '.front'],
-    'bedge' : ['.bedge'],
-    'su2' : ['.su2'],
-    'tetgen' : ['.smesh', '.ele'],
-    'avus' : ['.grd'],
-    'avl' : ['.avl'],
-    'vrml' : ['.wrl'],
-
-    # no duplicates are allowed
-    #'panair' : ['.inp'],
-    #'abaqus' : ['.inp'],
-}
-
-EXTENSION_TO_OUPUT_FORMATS = {
-    'nastran' : ['.op2'],
-    'shabp' : ['.out'],
-    #'usm3d' : ['.out'],
-}
+from pyNastran.gui.arg_handling import (
+    INPUT_FORMAT_TO_EXTENSION, OUTPUT_FORMAT_TO_EXTENSION)
+INPUT_FORMAT_TO_EXTENSION['nastran'].append('.dat')
+#INPUT_FORMAT_TO_EXTENSION['tecplot'].append('.dat')
 
 
 #pkg_path = pyNastran.__path__[0]
@@ -70,33 +45,38 @@ class FakeGUI(FakeGUIMethods, NastranIO):
             the file format (e.g., 'nastran', 'cart3d')
         inputs : None
             pass for the fake gui
+
         """
         self._formati = formati
         FakeGUIMethods.__init__(self, inputs=inputs)
         NastranIO.__init__(self)
         self.format_class_map = CLASS_MAP
 
-    def load_geometry(self, input_filename):
+    def load_geometry(self, input_filename: PathLike):
         """loads a model"""
-        load_geometry_name = 'load_%s_geometry' % self._formati
+        load_geometry_name = f'load_{self._formati}_geometry'
         if self._formati in self.format_class_map:
             cls = self.format_class_map[self._formati](self)
             getattr(cls, load_geometry_name)(input_filename)
         elif hasattr(self, load_geometry_name):
             # self.load_nastran_geometry(bdf_filename, None)
             getattr(self, load_geometry_name)(input_filename)
+            cls = self
         else:
-            msg = "load_geometry_name=%s doesn't exist" % load_geometry_name
+            msg = f"load_geometry_name={load_geometry_name} doesn't exist"
             raise NotImplementedError(msg)
+        self._cls = cls
+        return cls
 
-    def load_results(self, output_filename):
+    def load_results(self, output_filename: PathLike):
         """loads a model"""
         load_results_name = 'load_%s_results' % self._formati
         if self._formati in self.format_class_map:
-            cls = self.format_class_map[self._formati](self)
+            cls = (self._cls if self._cls is not None else
+                self.format_class_map[self._formati](self) )
             getattr(cls, load_results_name)(output_filename)
         elif hasattr(self, load_results_name):
-            # self.load_nastran_ressults(op2_filename, None)
+            # self.load_nastran_results(op2_filename, None)
             getattr(self, load_results_name)(output_filename)
         else:
             msg = "load_results_name=%s doesn't exist" % load_results_name
@@ -107,40 +87,43 @@ def run_docopt(argv=None):
     """
     The main function for the command line ``test_pynastran_gui`` script.
     """
-    msg = "Usage:\n"
-    # INPUT format may be explicitly or implicitly defined with or
-    # without an output file
-    msg += "  test_pynastrangui [-f FORMAT]           INPUT_FILENAME  OUTPUT_FILENAME [--log LOG] [--test]\n"
-    msg += "  test_pynastrangui [-f FORMAT]           INPUT_FILENAME  [--log LOG] [--test]\n"
-    msg += "  test_pynastrangui  -f FORMAT  [-r] [-d] INPUT_DIRECTORY [--log LOG] [--test]\n"
-    msg += "  test_pynastrangui  -f FORMAT  [-r] [-d]                 [--log LOG] [--test]\n"
+    options = '[--log LOG] [--test] [--noquality]'
+    msg = (
+        "Usage:\n"
+        # INPUT format may be explicitly or implicitly defined with or
+        # without an output file
+        f'  test_pynastrangui [-f FORMAT]           INPUT_FILENAME  OUTPUT_FILENAME {options}\n'
+        f'  test_pynastrangui [-f FORMAT]           INPUT_FILENAME  {options}\n'
+        f'  test_pynastrangui  -f FORMAT  [-r] [-d] INPUT_DIRECTORY {options}\n'
+        f'  test_pynastrangui  -f FORMAT  [-r] [-d]                 {options}\n'
 
-    msg += '  test_pynastrangui -h | --help\n'
-    msg += '  test_pynastrangui -v | --version\n'
-    msg += '\n'
+        '  test_pynastrangui -h | --help\n'
+        '  test_pynastrangui -v | --version\n'
+        '\n'
 
-    msg += 'Positional Arguments:\n'
-    msg += '  INPUT_FILENAME   path to input file\n'
-    msg += '  OUTPUT_FILENAME  path to output file\n'
-    msg += '  INPUT_DIRECTORY  path to input directory\n'
-    msg += '\n'
+        'Positional Arguments:\n'
+        '  INPUT_FILENAME   path to input file\n'
+        '  OUTPUT_FILENAME  path to output file\n'
+        '  INPUT_DIRECTORY  path to input directory\n'
+        '\n'
 
-    msg += "Options:\n"
-    msg += '  -f FORMAT, --format  format type (avus, cart3d, lawgs, nastran, panair,\n'
-    msg += '                                    su2, stl, surf, tetgen, usm3d, ugrid)\n'
-    msg += '  -d, --dir            directory to run tests on\n'
-    msg += "  -r, --regenerate     Resets the tests\n"
-    msg += '  --log LOG            debug, info, warning, error; default=debug\n'
-    msg += '\n'
+        'Options:\n'
+        '  -f FORMAT, --format  format type (avus, cart3d, lawgs, nastran, panair,\n'
+        '                                    su2, stl, surf, tetgen, usm3d, ugrid)\n'
+        '  -d, --dir            directory to run tests on\n'
+        "  -r, --regenerate     Resets the tests\n"
+        '  --log LOG            debug, info, warning, error; default=debug\n'
+        '  --noquality          nastran specific thing to skip quality\n'
+        '\n'
 
-    msg += "Debug:\n"
-    msg += "  --test    temporary dev mode (default=False)\n"
+        'Debug:\n'
+        '  --test    temporary dev mode (default=False)\n'
 
-    msg += 'Info:\n'
-    #msg += "  -q, --quiet    prints debug messages (default=True)\n"
-    msg += '  -h, --help     show this help message and exit\n'
-    msg += "  -v, --version  show program's version number and exit\n"
-
+        'Info:\n'
+         '  -q, --quiet    prints debug messages (default=True)\n'
+        '  -h, --help     show this help message and exit\n'
+        "  -v, --version  show program's version number and exit\n"
+    )
     if len(sys.argv) == 1:
         sys.exit(msg)
     ver = str(pyNastran.__version__)
@@ -157,17 +140,15 @@ def run_docopt(argv=None):
         if data['--regenerate'] or not os.path.exists(failed_cases_filename):
             dirname = data['INPUT_DIRECTORY']
             if not os.path.exists(dirname):
-                msg = 'dirname=%r does not exist\n%s' % (
-                    dirname, print_bad_path(dirname))
+                msg = f'dirname={dirname!r} does not exist\n{print_bad_path(dirname)}'
                 raise RuntimeError(msg)
             if not os.path.isdir(dirname):
-                msg = 'dirname=%r is not a directory' % dirname
-                raise RuntimeError(msg)
-            extensions = FORMAT_TO_EXTENSION[formati]
+                raise RuntimeError(f'dirname={dirname!r} is not a directory')
+            extensions = INPUT_FORMAT_TO_EXTENSION[formati]
             input_filenames = [
                 get_files_of_type(
                     dirname, extension=extension,
-                    max_size=100., limit_file='no_dig.txt')
+                    max_size_mb=100., limit_file='no_dig.txt')
                 for extension in extensions
             ]
             input_filenames = list(itertools.chain.from_iterable(input_filenames))
@@ -180,30 +161,36 @@ def run_docopt(argv=None):
         output_filename = data['OUTPUT_FILENAME']
         check_path(input_filename, 'input_filename')
         if not os.path.isfile(input_filename):
-            msg = 'input_filename=%r is not a file' % input_filename
-            raise RuntimeError(msg)
+            raise RuntimeError(f'input_filename={input_filename!r} is not a file')
         input_filenames = [input_filename]
-        output_filenames = [output_filename]
+        output_filenames = ['']
+        if output_filename is not None:
+            output_filenames.append(output_filename)
 
+        assert None not in output_filenames, output_filenames
         if data['--format']:
             formati = data['--format'].lower()
         else:
-            formati = determine_format(input_filename)
+            print('output_filenames = ', output_filenames)
+            formati = determine_format(
+                input_filename, output_filenames=output_filenames)
             print('formati', formati)
     #assert formati == 'nastran', 'format=%r' % formati
 
     if data['--log']:
         log_method = data['--log'].lower()
-        assert log_method in ['debug', 'info', 'warning', 'error'], 'log_method=%r' % log_method
+        assert log_method in ['debug', 'info', 'warning', 'error'], 'log_method={log_method!r}'
     else:
         log_method = 'debug'
-    return formati, input_filenames, output_filenames, failed_cases_filename, log_method, data['--test']
+    test = data['--test']
+    quality = not data['--noquality']
+    return formati, input_filenames, output_filenames, failed_cases_filename, log_method, test, quality
 
 
 def main():
     """runs the gui"""
     (formati, input_filenames, output_filenames,
-     failed_cases_filename, log_method, test) = run_docopt()
+     failed_cases_filename, log_method, test, quality) = run_docopt()
     log = get_logger(log=None, level=log_method, encoding='utf-8')
     npass = 0
     nfailed = 0
@@ -212,13 +199,16 @@ def main():
 
     print('test =', test)
     test_gui = FakeGUI(formati)
+    nastran_settings = test_gui.settings.nastran_settings
+    assert isinstance(nastran_settings.is_element_quality, bool)
+    nastran_settings.is_element_quality = quality
     test_gui.log = log
     stop_on_failure = ntotal == 1
     time0 = time.time()
     for input_filename, output_filename in zip(input_filenames, output_filenames):
         input_filename = os.path.abspath(input_filename)
         #output_filename =
-        print("filename = %s" % input_filename)
+        print(f'filename = {input_filename}')
         is_passed = True
         try:
             test_gui.load_geometry(input_filename)
@@ -246,7 +236,7 @@ def main():
             traceback.print_exc(file=sys.stdout)
             print('failed test because OverflowError...ignoring')
 
-        except:
+        except Exception:
             is_passed = False
             traceback.print_exc(file=sys.stdout)
             if stop_on_failure:
@@ -277,7 +267,7 @@ def main():
     if ntotal > 1:
         with open(failed_cases_filename, 'w') as failed_cases_file:
             for fname in failed_files:
-                failed_cases_file.write('%s\n' % fname)
+                failed_cases_file.write(f'{fname}\n')
         print(time_msg)
         sys.exit('finished...')
 
@@ -285,5 +275,5 @@ def main():
     #test_gui.load_nastran_results(op2_filename, None)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     main()

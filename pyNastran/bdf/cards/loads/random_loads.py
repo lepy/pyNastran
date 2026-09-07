@@ -10,12 +10,15 @@ All static loads are defined in this file.  This includes:
 
 """
 from __future__ import annotations
+import warnings
 from typing import TYPE_CHECKING
 
 #from pyNastran.bdf.errors import CrossReferenceError
 from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.bdf_interface.assign_type import (
-    integer, integer_or_blank, double, double_or_blank,)
+    integer, integer_or_blank,
+    integer_double_or_blank, double, double_or_blank,
+    integer_types)
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.field_writer_double import print_card_double
@@ -46,7 +49,9 @@ class RANDPS(RandomLoad):
         k = 3
         return RANDPS(sid, j, k, x=0., y=0., tid=0, comment='')
 
-    def __init__(self, sid, j, k, x=0., y=0., tid=0, comment=''):
+    def __init__(self, sid: int,
+                 j: int, k: int, x: float=0., y: float=0.,
+                 tid: int | float=0, comment: str=''):
         """
         Creates a RANDPS card
 
@@ -95,7 +100,7 @@ class RANDPS(RandomLoad):
         assert self.k >= self.j, 'k=%s j=%s\n%s' % (self.k, self.j, self)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RANDPS card from ``BDF.add_card(...)``
 
@@ -110,10 +115,10 @@ class RANDPS(RandomLoad):
         sid = integer(card, 1, 'sid')
         j = integer(card, 2, 'j')
         k = integer(card, 3, 'k')
-        x = double_or_blank(card, 4, 'x', 0.0)
-        y = double_or_blank(card, 5, 'y', 0.0)
-        tid = integer_or_blank(card, 6, 'tid', 0)
-        assert len(card) <= 7, 'len(RANDPS card) = %i\ncard=%s' % (len(card), card)
+        x = double_or_blank(card, 4, 'x', default=0.0)
+        y = double_or_blank(card, 5, 'y', default=0.0)
+        tid = integer_double_or_blank(card, 6, 'tid', default=0)
+        assert len(card) <= 7, f'len(RANDPS card) = {len(card):d}\ncard={card}'
         return RANDPS(sid, j, k, x, y, tid, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
@@ -126,23 +131,60 @@ class RANDPS(RandomLoad):
             the BDF object
 
         """
-        if self.tid:
-            msg = ', which is required by RANDPS sid=%s' % (self.sid)
+        if self.j and isinstance(self.j, integer_types):
+            # Subcase identification number of the excited load set
+            msg = f', which is required by RANDPS sid={self.sid:d}'
+            #self.tid = model.Table(self.tid, msg=msg)
+            subcase_j = model.subcases[self.j]
+            self.j_ref = subcase_j.get_int_parameter('DLOAD')
+
+        if self.k and isinstance(self.tid, integer_types):
+            # Subcase identification number of the applied load set
+            msg = f', which is required by RANDPS sid={self.sid:d}'
+            #self.tid = model.Table(self.tid, msg=msg)
+            subcase_k = model.subcases[self.k]
+            self.k_ref = subcase_k.get_int_parameter('DLOAD')
+
+        if self.tid and isinstance(self.tid, integer_types):
+            msg = f', which is required by RANDPS sid={self.sid:d}'
             #self.tid = model.Table(self.tid, msg=msg)
             self.tid_ref = model.RandomTable(self.tid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
-        return self.cross_reference(model)
+    def safe_cross_reference(self, model: BDF, xref_errors):
+        if self.j and isinstance(self.j, integer_types):
+            # Subcase identification number of the excited load set
+            #msg = f', which is required by RANDPS sid={self.sid:d}'
+            try:
+                subcase_j = model.subcases[self.j]
+                self.j_ref = subcase_j.get_int_parameter('DLOAD')
+            except Exception as error:
+                warnings.warn(f'error safe-xref of RANDPS\n{str(error)}')
+
+        if self.k and isinstance(self.tid, integer_types):
+            # Subcase identification number of the applied load set
+            #msg = f', which is required by RANDPS sid={self.sid:d}'
+            try:
+                subcase_k = model.subcases[self.k]
+                self.k_ref = subcase_k.get_int_parameter('DLOAD')
+            except Exception as error:
+                warnings.warn(f'error safe-xref of RANDPS\n{str(error)}')
+
+        if self.tid and isinstance(self.tid, integer_types):
+            msg = f', which is required by RANDPS sid={self.sid:d}'
+            try:
+                self.tid_ref = model.RandomTable(self.tid, msg=msg)
+            except Exception as error:
+                warnings.warn(f'error safe-xref of RANDPS\n{str(error)}')
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
         self.tid = self.Tid()
         self.tid_ref = None
 
-    def get_loads(self):
+    def get_loads(self) -> list:
         return [self]
 
-    def Tid(self):
+    def Tid(self) -> int:
         if self.tid_ref is not None:
             return self.tid_ref.tid
         elif self.tid == 0:
@@ -166,6 +208,7 @@ class RANDPS(RandomLoad):
             return self.comment + print_card_double(card)
         return self.comment + print_card_16(card)
 
+
 class RANDT1(RandomLoad):
     type = 'RANDT1'
 
@@ -177,8 +220,8 @@ class RANDT1(RandomLoad):
         tmax = 1.
         return RANDT1(sid, n, t0, tmax, comment='')
 
-    def __init__(self, sid, n, t0, tmax, comment=''):
-        # type: (int, int, int, float, str) -> None
+    def __init__(self, sid: int, n: int, t0: int, tmax: float,
+                 comment: str=''):
         """
         Creates a RANDT1 card
 
@@ -213,7 +256,7 @@ class RANDT1(RandomLoad):
         #assert self.k >= self.j, 'k=%s j=%s\n%s' % (self.k, self.j, self)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RANDT1 card from ``BDF.add_card(...)``
 
@@ -229,7 +272,7 @@ class RANDT1(RandomLoad):
         n = integer(card, 2, 'n')
         t0 = double(card, 3, 't0')
         tmax = double(card, 4, 'tmax')
-        assert len(card) <= 5, 'len(RANDT1 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(RANDT1 card) = {len(card):d}\ncard={card}'
         return RANDT1(sid, n, t0, tmax, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
@@ -244,17 +287,17 @@ class RANDT1(RandomLoad):
         """
         pass
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         pass
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
         pass
 
-    def get_loads(self):
+    def get_loads(self) -> list:
         return [self]
 
-    def raw_fields(self):
+    def raw_fields(self) -> list:
         list_fields = ['RANDT1', self.sid, self.n, self.t0, self.tmax]
         return list_fields
 

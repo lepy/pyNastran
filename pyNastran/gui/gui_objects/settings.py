@@ -12,45 +12,132 @@ defines:
    - set_annotation_color(self, color, render=True)
    - set_background_color_to_white(self)
    - set_background_color(self, color)
-   - set_text_color(self, color)
+   - set_corner_text_color(self, color)
    - update_text_size(self, magnify=1.0)
 
  - repr_settings(settings)
 
 """
 from __future__ import annotations
-from typing import List, Dict, Any, TYPE_CHECKING
+import os
+import copy
+import warnings
+from typing import Optional, Any, TYPE_CHECKING
 import numpy as np
 from qtpy import QtGui
 
 from pyNastran.gui.gui_objects.alt_geometry_storage import AltGeometry
 from pyNastran.gui.gui_objects.coord_properties import CoordProperties
 from pyNastran.gui.gui_objects.utils import get_setting
-from pyNastran.utils import object_attributes
+from pyNastran.gui.utils.colormaps import colormap_keys as COLORMAPS
+from pyNastran.utils import object_attributes  # object_stats
+
+from pyNastran.gui.qt_files.colors import (
+    BLACK_FLOAT, WHITE_FLOAT, GREY_FLOAT, ORANGE_FLOAT, HOT_PINK_FLOAT,
+    RED_FLOAT,
+    YELLOW_FLOAT, LIGHT_GREEN_FLOAT,
+)
 if TYPE_CHECKING:  # pragma: no cover
-    import vtk
+    from vtkmodules.vtkFiltersGeneral import vtkAxes
+    from qtpy.QtCore import QSettings
+    from pyNastran.gui.typing import ColorFloat
+    from pyNastran.gui.main_window import MainWindow
+
+from pyNastran.gui import (
+    USE_NEW_SIDEBAR_OBJS_ as USE_NEW_SIDEBAR_OBJECTS,
+    USE_NEW_TERMS_ as USE_NEW_TERMS)
+
+USE_NEW_SIDEBAR = False
+if USE_NEW_SIDEBAR_OBJECTS:
+    USE_NEW_SIDEBAR = False
 
 
-BLACK = (0.0, 0.0, 0.0)
-WHITE = (1., 1., 1.)
-GREY = (119/255., 136/255., 153/255.)
-ORANGE = (229/255., 92/255., 0.)
+IS_WINDOWS = 'nt' in os.name
+
+BACKGROUND_COLOR = GREY_FLOAT
+BACKGROUND_COLOR2 = GREY_FLOAT
+
+HIGHLIGHT_COLOR = ORANGE_FLOAT
 HIGHLIGHT_OPACITY = 0.9
-HIGHLIGHT_POINT_SIZE = 10.
-HIGHLIGHT_LINE_THICKNESS = 5.
-ANNOTATION_SIZE = 18
-FONT_SIZE = 8
-TEXT_SIZE = 14
-COORD_SCALE = 0.05  # in percent of max dimension
-COORD_TEXT_SCALE = 0.5 # percent of nominal
+HIGHLIGHT_POINT_SIZE = 12.0
+HIGHLIGHT_LINE_WIDTH = 5.0
 
+SHEAR_MOMENT_TORQUE_COLOR = HOT_PINK_FLOAT
+SHEAR_MOMENT_TORQUE_OPACITY = 0.9
+SHEAR_MOMENT_TORQUE_POINT_SIZE = 12.0
+SHEAR_MOMENT_TORQUE_LINE_WIDTH = 5.0
+
+LINE_WIDTH_MIN = 0.1
+LINE_WIDTH_MAX = 2000.
+
+IS_TRACKBALL_CAMERA = True
+USE_PARALLEL_PROJECTION = True
+DEFAULT_COLORMAP = 'jet'
+NFILES_TO_SAVE = 9
+OPACITY_MIN = 0.1
+OPACITY_MAX = 1.0
+
+FONT_SIZE = 8
+FONT_SIZE_MIN = 7
+FONT_SIZE_MAX = 20
+
+ANNOTATION_SIZE = 18
+ANNOTATION_SIZE_MIN = 1
+ANNOTATION_SIZE_MAX = 500
+ANNOTATION_COLOR = BLACK_FLOAT
+
+POINT_SIZE_MIN = 5.0
+POINT_SIZE_MAX = 30.0
+
+COORD_TEXT_SCALE = 0.5  # percent of nominal
+COORD_TEXT_SCALE_MIN = 0.1
+COORD_TEXT_SCALE_MAX = 2000.
+
+CORNER_TEXT_SIZE = 14
+CORNER_TEXT_SIZE_MIN = 7
+CORNER_TEXT_SIZE_MAX = 30
+CORNER_TEXT_COLOR = BLACK_FLOAT
+
+COORD_SCALE = 0.05  # in percent of max dimension
+COORD_SCALE_MIN = 0.1
+COORD_SCALE_MAX = 1000.
+
+MAGNIFY = 5
+MAGNIFY_MIN = 1
+MAGNIFY_MAX = 10
+
+ANIMATION_FRAME_RATE = 30
+ANIMATION_TIME = 2.0
+
+PLOTEL_COLOR = RED_FLOAT
+CAERO_COLOR = YELLOW_FLOAT
+RBE_LINE_COLOR = LIGHT_GREEN_FLOAT
+DISPLACEMENT_MODEL_SCALE = 0.1
+
+NASTRAN_VERSIONS = ['Guess', 'MSC', 'NX', 'Optistruct']
+NASTRAN_COLOR_KEYS = [
+    'nastran_caero_color', 'nastran_rbe_line_color',
+    'nastran_plotel_color',
+]
+NASTRAN_STR_KEYS = ['nastran_version']
 NASTRAN_BOOL_KEYS = [
     'nastran_create_coords',
     'nastran_is_properties',
     'nastran_is_element_quality',
     'nastran_is_bar_axes',
     'nastran_is_3d_bars', 'nastran_is_3d_bars_update',
-    'nastran_is_shell_mcids', 'nastran_is_update_conm2',
+    'nastran_is_mass_update',
+    'nastran_is_constraints',
+    'nastran_is_shell_mcids',
+    'nastran_is_rbe',
+    'nastran_is_aero',
+    'nastran_is_plotel',
+
+    'nastran_displacement', 'nastran_velocity',
+    'nastran_acceleration', 'nastran_temperature',
+    'nastran_eigenvector', 'nastran_eigenvector_complex',
+    'nastran_spc_force', 'nastran_mpc_force',
+    'nastran_applied_load', 'nastran_heat_flux',
 
     'nastran_stress', 'nastran_plate_stress', 'nastran_composite_plate_stress',
     'nastran_strain', 'nastran_plate_strain', 'nastran_composite_plate_strain',
@@ -62,11 +149,382 @@ NASTRAN_BOOL_KEYS = [
     'nastran_force',
     'nastran_bar_force', 'nastran_beam_force', 'nastran_plate_force',
     'nastran_spring_force', 'nastran_gap_force', 'nastran_cbush_force',
+
+    'nastran_grid_point_force', 'nastran_strain_energy',
+
+    # --------------------------------------------------------------
+    'nastran_show_caero_boxes',
+    'nastran_show_caero_actor',
+    #'nastran_show_control_surfaces',
+    #'nastran_show_conm',
 ]
+NASTRAN_KEYS = NASTRAN_BOOL_KEYS + NASTRAN_STR_KEYS + NASTRAN_COLOR_KEYS
+NASTRAN_OPTIONAL_ARRAY_KEYS = [
+    'nastran_real_modes_to_include',
+    'nastran_complex_modes_to_include']
+
+OTHER_STRING_KEYS = [
+    'units_length', 'units_force', 'units_moment',
+    'units_stress', 'units_pressure',
+    'units_displacement',
+    'units_velocity', 'units_acceleration',
+]
+OTHER_LIST_INT_KEYS = [
+    'cart3d_fluent_include', 'cart3d_fluent_remove',]
+OTHER_LIST_STR_KEYS = [
+    'units_model_in', ]
+
+
+class OtherSettings:
+    def __init__(self, parent):
+        """
+        Creates the OtherSettings object
+        """
+        self.parent = parent
+        self.reset_settings()
+
+    def reset_settings(self) -> None:
+        self.cart3d_fluent_include: tuple[int, ...] = ()
+        self.cart3d_fluent_remove: tuple[int, ...] = ()
+        self.sref = 1.0
+        self.cref = 1.0
+        self.bref = 1.0
+        self.xyz_ref = np.array([0., 0., 0.])
+        #('in', 'lbf', 's', 'psi')
+        self.units_model_in = ('unitless', '', '', '')
+        self.units_length = 'in'
+        #self.units_area = 'in^2'
+        self.units_force = 'lbf'
+        self.units_moment = 'in-lbf'
+        self.units_stress = 'psi'
+        self.units_pressure = 'psi'
+        self.units_displacement = 'in'
+        self.units_velocity = 'in/s'
+        self.units_acceleration = 'in/s^2'
+
+    def update(self, out_data: dict[str, Any]) -> None:
+        """from preferences"""
+        self.cart3d_fluent_include = out_data['cart3d_fluent_include']
+        self.cart3d_fluent_remove = out_data['cart3d_fluent_remove']
+
+        self.sref = out_data['sref']
+        self.cref = out_data['cref']
+        self.bref = out_data['bref']
+        self.xyz_ref = out_data['xyz_ref']
+        #self.units_model_in = out_data['units_model_in']
+        #self.units_length = out_data['units_length']
+        #self.units_area = out_data['units_area']
+        #self.units_force  = out_data['units_force']
+        #self.units_moment = out_data['units_moment']
+        #self.units_stress = out_data['units_stress']
+        #self.units_pressure = out_data['units_pressure']
+        #self.units_displacement = out_data['units_displacement']
+        #self.units_velocity = out_data['units_velocity']
+        #self.units_acceleration = out_data['units_acceleration']
+
+    def save(self, settings: QSettings) -> None:
+        """save_json -> all keys"""
+        data = self.add_settings_to_dict({})
+        for key, value in data.items():
+            # self.log.info(f'save other: key={key!r} value={value!r}')
+            settings.setValue(key, value)
+
+    def add_settings_to_dict(self, data: dict[str, Any]) -> dict[str, Any]:
+        keys = object_attributes(self, mode='public', keys_to_skip=['parent'])
+        for key in keys:
+            # base, key2 = key.split('_', 1)
+            value = getattr(self, key)
+            data[key] = value
+        return data
+
+    def load_settings(self, settings: QSettings,
+                      setting_keys: list[str]) -> None:
+        # self.cart3d_fluent_include = ()
+        # self.cart3d_fluent_remove = ()
+        for key in OTHER_STRING_KEYS:
+            default = getattr(self, key)
+            value = _set_setting(
+                self, settings, setting_keys, [key],
+                default=default, save=False, auto_type=str)
+            setattr(self, key, value)
+
+        for key in OTHER_LIST_INT_KEYS:
+            default = getattr(self, key)
+            #print(key, default)
+            value = _set_setting(
+                self, settings, setting_keys, [key],
+                default=default, save=False, auto_type=int)
+            setattr(self, key, tuple(value))
+
+        for key in OTHER_LIST_STR_KEYS:
+            default = getattr(self, key)
+            #print(key, default)
+            value = _set_setting(
+                self, settings, setting_keys, [key],
+                default=default, save=False, auto_type=str)
+            setattr(self, key, tuple(value))
+
+        for key in ['sref', 'bref', 'cref']:
+            default = getattr(self, key)
+            value = get_setting(settings, setting_keys, [key], default,
+                                auto_type=float)
+            setattr(self, key, value)
+
+        key = 'xyz_ref'
+        default = getattr(self, key)
+        value = get_setting(settings, setting_keys, [key], default,
+                            auto_type=float)
+        setattr(self, key, np.asarray(value))
+        slot_key_length_defaults = [
+            (self, 'xyz_ref', 3, np.array([0., 0., 0.]))
+        ]
+        check_length(slot_key_length_defaults)
+
+    def __repr__(self) -> str:
+        msg = '<OtherSettings>\n'
+        keys = object_attributes(
+            self, mode='public', keys_to_skip=['parent'])
+        for key in keys:
+            #if key.startswith('nastran'):
+            #    raise RuntimeError(key)
+            value = getattr(self, key)
+            if isinstance(value, tuple):
+                value = str(value)
+            msg += '  %r = %r\n' % (key, value)
+        return msg
+
+
+class NastranSettings:
+    def __init__(self, parent):
+        """
+        Creates the NastranSettings object
+        """
+        self.parent = parent
+        self.reset_settings()
+
+    def update(self, out_data: dict[str, Any]) -> None:
+        """from preferences"""
+        keys = list(out_data)
+        keys.sort()
+        if 'nastran_real_modes_to_include' not in out_data:
+            warnings.warn(f'missing nastran_real_modes_to_include; allowed={keys}')
+        elif len(out_data['nastran_real_modes_to_include']) == 0:
+            self.real_modes_to_include = None
+        else:
+            self.real_modes_to_include = out_data['nastran_real_modes_to_include']
+
+        if 'nastran_complex_modes_to_include' not in out_data:
+            warnings.warn(f'missing nastran_complex_modes_to_include; allowed={keys}')
+        elif len(out_data['nastran_complex_modes_to_include']) == 0:
+            self.complex_modes_to_include = None
+        else:
+            self.complex_modes_to_include = out_data['nastran_complex_modes_to_include']
+
+    def reset_settings(self):
+        self.version = 'Guess'
+        self.is_element_quality = True
+        self.is_properties = True
+        self.is_3d_bars = True
+        self.is_3d_bars_update = True
+        self.is_mass = True
+        self.is_mass_update = True
+        self.is_constraints = True
+        self.create_coords = True
+        self.is_bar_axes = True
+        self.is_shell_mcids = True
+        self.is_rbe = True
+        self.is_aero = True
+        self.is_plotel = True
+
+        #---------------------------
+        self.real_modes_to_include: Optional[np.ndarray] = None
+        self.complex_modes_to_include: Optional[np.ndarray] = None
+
+        self.stress = True
+        self.spring_stress = True
+        self.rod_stress = True
+        self.bar_stress = True
+        self.beam_stress = True
+        self.plate_stress = True
+        self.composite_plate_stress = True
+        self.solid_stress = True
+
+        self.strain = True
+        self.spring_strain = True
+        self.rod_strain = True
+        self.bar_strain = True
+        self.beam_strain = True
+        self.plate_strain = True
+        self.composite_plate_strain = True
+        self.solid_strain = True
+
+        self.force = True
+        self.spring_force = True
+        self.cbush_force = True
+        self.gap_force = True
+        self.bar_force = True
+        self.beam_force = True
+        self.plate_force = True
+
+        self.eigenvector = True
+        self.eigenvector_complex = True
+        self.displacement = True
+        self.velocity = True
+        self.acceleration = True
+        self.temperature = True
+
+        self.spc_force = True
+        self.mpc_force = True
+        self.applied_load = True
+        self.heat_flux = True
+
+        self.strain_energy = True
+        self.grid_point_force = True
+
+        # ------------------------------------------------------
+        # colors
+        self.caero_color = CAERO_COLOR
+        self.rbe_line_color = RBE_LINE_COLOR
+        self.plotel_color = PLOTEL_COLOR
+
+        # ------------------------------------------------------
+
+        #: flips the nastran CAERO aeroboxes
+        #:   False -> borders of CAEROs can be seen
+        #:   True  -> individual aeroboxes can be seen
+        self.show_caero_boxes = False
+
+        self.show_caero_actor = True  # show the caero mesh
+        #self.show_control_surfaces = True
+        #self.show_conm = True
+
+    def add_settings_to_dict(self, data: dict[str, Any]) -> dict[str, Any]:
+        for key in NASTRAN_KEYS:
+            base, key2 = key.split('_', 1)
+            data[key] = getattr(self, key2)
+        return data
+
+    def save(self, settings: QSettings) -> None:
+        mydict = self.add_settings_to_dict({})
+        for key, value in mydict.items():
+            settings.setValue(key, value)
+
+    def set_caero_color(self, color: ColorFloat, render: bool=True) -> None:
+        """
+        Set the CAEROx color
+
+        Parameters
+        ----------
+        color : ColorFloat
+            RGB values as floats
+        """
+        self.caero_color = color
+        parent = self.parent
+        if render:
+            parent.vtk_interactor.Render()
+        parent.log_command('self.settings.nastran_settings.set_caero_color(%s, %s, %s)' % color)
+
+    def set_rbe_line_color(self, color: ColorFloat, render: bool=True) -> None:
+        """
+        Set the RBE2/RBE3 line color
+
+        Parameters
+        ----------
+        color : ColorFloat
+            RGB values as floats
+        """
+        self.rbe_line_color = color
+        parent = self.parent
+        if render:
+            parent.vtk_interactor.Render()
+        parent.log_command('self.settings.nastran_settings.set_rbe_line_color(%s, %s, %s)' % color)
+
+    def set_plotel_color(self, color: ColorFloat, render: bool=True) -> None:
+        """
+        Set the PLOTEL line color
+
+        Parameters
+        ----------
+        color : ColorFloat
+            RGB values as floats
+        """
+        self.plotel_color = color
+        parent = self.parent
+        if render:
+            parent.vtk_interactor.Render()
+        parent.log_command('self.settings.nastran_settings.set_plotel_color(%s, %s, %s)' % color)
+
+    def load_settings(self, settings: QSettings,
+                      setting_keys: list[str]) -> None:
+        """
+        loads the settings from 'nastran_displacement' (or similar)
+        and save it to 'nastran_settings.displacement'
+        """
+        # print('-----default------')
+        # print(nastran_settings)
+        for key in NASTRAN_BOOL_KEYS:
+            # nastran_is_properties -> nastran, is_properties
+            base, key2 = key.split('_', 1)
+
+            # we get default from the nastran_settings
+            default = getattr(self, key2)
+
+            # pull it from the QSettings
+            value = _set_setting(self, settings, setting_keys, [key],
+                                 default, save=True, auto_type=bool)
+            #print(f'key={key!r} key2={key2!r} default={default!r} value={value!r}')
+            setattr(self, key2, value)
+
+        for key in NASTRAN_STR_KEYS:
+            base, key2 = key.split('_', 1)
+            default = getattr(self, key2)
+            value = _set_setting(self, settings, setting_keys, [key],
+                                 default, save=True, auto_type=str)
+            setattr(self, key2, value)
+
+        for key in NASTRAN_COLOR_KEYS:
+            # nastran_is_properties -> nastran, is_properties
+            base, key2 = key.split('_', 1)
+
+            # we get default from the nastran_settings
+            default = getattr(self, key2)
+
+            # pull it from the QSettings
+            value = _set_setting(self, settings, setting_keys, [key],
+                                 default, save=True, auto_type=float)
+            #print(f'key={key!r} key2={key2!r} default={default!r} value={value!r}')
+            setattr(self, key2, value)
+
+        for key in NASTRAN_OPTIONAL_ARRAY_KEYS:
+            # nastran_is_properties -> nastran, is_properties
+            base, key2 = key.split('_', 1)
+
+            # we get default from the nastran_settings
+            default = getattr(self, key2)
+
+            # pull it from the QSettings
+            value = _set_setting(self, settings, setting_keys, [key],
+                                 default, save=True, auto_type=int, allow_none=True)
+            #print(f'key={key!r} key2={key2!r} default={default!r} value={value!r}')
+            setattr(self, key2, value)
+
+
+    def __repr__(self) -> str:
+        msg = '<NastranSettings>\n'
+        keys = object_attributes(self, mode='public', keys_to_skip=['parent'])
+        for key in keys:
+            if key.startswith('nastran'):
+                raise RuntimeError(key)
+            value = getattr(self, key)
+            if isinstance(value, tuple):
+                value = str(value)
+            msg += f'  {key!r} = {value!r}\n'
+        return msg
+
 
 class Settings:
     """storage class for various settings"""
-    def __init__(self, parent):
+    def __init__(self, parent: MainWindow):
         """
         Creates the Settings object
 
@@ -76,157 +534,181 @@ class Settings:
             used by the class to access the MainWindow
         """
         self.parent = parent
-
-        # rgb tuple
-        self.use_gradient_background = True
-        self.background_color = GREY
-        self.background_color2 = GREY
-        self.annotation_color = BLACK
-
-        self.text_size = TEXT_SIZE
-        self.text_color = BLACK
-        self.highlight_color = ORANGE
-        self.highlight_opacity = HIGHLIGHT_OPACITY
-        self.highlight_point_size = HIGHLIGHT_POINT_SIZE
-        self.highlight_line_thickness = HIGHLIGHT_LINE_THICKNESS
-
-        self.show_info = True
-        self.show_debug = True
-        self.show_command = True
-        self.show_warning = True
-        self.show_error = True
-
-        # int
-        self.annotation_size = ANNOTATION_SIZE
-        self.font_size = FONT_SIZE
-        self.magnify = 5
-
-        # floats
-        self.coord_scale = COORD_SCALE
-        self.coord_text_scale = COORD_TEXT_SCALE
-        self.coord_linewidth = 2.0
-
-        # string
-        self.colormap = 'jet' # 'viridis'
-
-        # not stored
-        self.dim_max = 1.0
+        self.recent_files = []
         #self.annotation_scale = 1.0
 
-        self.nastran_is_element_quality = True
-        self.nastran_is_properties = True
-        self.nastran_is_3d_bars = True
-        self.nastran_is_3d_bars_update = True
-        self.nastran_create_coords = True
-        self.nastran_is_bar_axes = True
-        self.nastran_is_shell_mcids = True
-        self.nastran_is_update_conm2 = True
+        self.reset_settings(resize=True, reset_dim_max=True)
+        self.nastran_settings = NastranSettings(parent)
+        self.other_settings = OtherSettings(parent)
 
-        self.nastran_stress = True
-        self.nastran_spring_stress = True
-        self.nastran_rod_stress = True
-        self.nastran_bar_stress = True
-        self.nastran_beam_stress = True
-        self.nastran_plate_stress = True
-        self.nastran_composite_plate_stress = True
-        self.nastran_solid_stress = True
+    def update(self, out_data: dict[str, Any]) -> None:
+        self.on_set_font_size(out_data['font_size'])
+        self.nastran_settings.update(out_data)
+        self.other_settings.update(out_data)
+        # self.set_annotation_size_color(self._annotation_size)
 
-        self.nastran_strain = True
-        self.nastran_spring_strain = True
-        self.nastran_rod_strain = True
-        self.nastran_bar_strain = True
-        self.nastran_beam_strain = True
-        self.nastran_plate_strain = True
-        self.nastran_composite_plate_strain = True
-        self.nastran_solid_strain = True
-
-        self.nastran_force = True
-        self.nastran_spring_force = True
-        self.nastran_cbush_force = True
-        self.nastran_gap_force = True
-        self.nastran_bar_force = True
-        self.nastran_beam_force = True
-        self.nastran_plate_force = True
-
-
-    def reset_settings(self):
+    def reset_settings(self, resize: bool=True,
+                       reset_dim_max: bool=True) -> None:
         """helper method for ``setup_gui``"""
         # rgb tuple
         self.use_gradient_background = True
-        self.background_color = GREY
-        self.background_color2 = GREY
+        self.background_color = BACKGROUND_COLOR
+        self.background_color2 = BACKGROUND_COLOR2
 
-        self.annotation_size = ANNOTATION_SIZE
-        self.annotation_color = BLACK
+        # grab bag
+        # int
+        self.font_size = FONT_SIZE
+        self.magnify = MAGNIFY
 
-        self.text_size = TEXT_SIZE
-        self.text_color = BLACK
+        # default directory: os.getcwd()
+        # activates after the first directory selection
+        self.startup_directory = ''
+        # False  os.getcwd()
+        # True:  startup directory
+        self.use_startup_directory = True
 
-        self.highlight_color = ORANGE
-        self.highlight_opacity = HIGHLIGHT_OPACITY
-        self.highlight_point_size = HIGHLIGHT_POINT_SIZE
-        self.highlight_line_thickness = HIGHLIGHT_LINE_THICKNESS
+        self.use_new_sidebar_objects = USE_NEW_SIDEBAR_OBJECTS
+        self.use_new_sidebar = USE_NEW_SIDEBAR
+        self.use_new_terms = USE_NEW_TERMS
 
+        # probe color
+        # this includes:
+        #   - min/max actors
+        #   - probes
+        self.annotation_size = ANNOTATION_SIZE    # int
+        self.annotation_color = ANNOTATION_COLOR  # rgb floats
+
+        # text in the lower left corner
+        self.corner_text_size = CORNER_TEXT_SIZE    # int
+        self.corner_text_color = CORNER_TEXT_COLOR  # rgb floats
+
+        self.highlight_color = HIGHLIGHT_COLOR            # rgb floats
+        self.highlight_opacity = HIGHLIGHT_OPACITY        # float
+        self.highlight_point_size = HIGHLIGHT_POINT_SIZE  # int
+        self.highlight_line_width = HIGHLIGHT_LINE_WIDTH  # float
+
+        self.shear_moment_torque_color = SHEAR_MOMENT_TORQUE_COLOR            # float
+        self.shear_moment_torque_opacity = SHEAR_MOMENT_TORQUE_OPACITY        # rgb floats
+        self.shear_moment_torque_point_size = SHEAR_MOMENT_TORQUE_POINT_SIZE  # float
+        self.shear_moment_torque_line_width = SHEAR_MOMENT_TORQUE_LINE_WIDTH  # float
+
+        self.is_trackball_camera = IS_TRACKBALL_CAMERA
+        self.use_parallel_projection = USE_PARALLEL_PROJECTION
+        self.displacement_model_scale = DISPLACEMENT_MODEL_SCALE
         self.show_info = True
-        self.show_debug = True
+        self.show_debug = False
         self.show_command = True
         self.show_warning = True
         self.show_error = True
 
-        # int
-        self.font_size = FONT_SIZE
-        self.magnify = 5
+        self.is_edges_visible = True
+        self.is_edges_black = True
+
+        self.is_horizontal_scalar_bar = False
+        self.is_min_visible = True
+        self.is_max_visible = True
 
         # float
-        self.coord_scale = COORD_SCALE
-        self.coord_text_scale = COORD_TEXT_SCALE
+        self.coord_scale = COORD_SCALE            # float
+        self.coord_text_scale = COORD_TEXT_SCALE  # float
         self.coord_linewidth = 2.0
 
+        self.animation_frame_rate = ANIMATION_FRAME_RATE
+        self.animation_time = ANIMATION_TIME
+
         # string
-        self.colormap = 'jet' # 'viridis'
+        self.colormap = 'jet'  # 'viridis'
 
-        self.parent.resize(1100, 700)
+        if resize:
+            self.parent.resize(1100, 700)
 
-        # not stored
-        self.dim_max = 1.0
+        if reset_dim_max:  # not stored
+            self.dim_max = 1.0
         #self.annotation_scale = 1.0
 
-        self.nastran_is_element_quality = True
-        self.nastran_is_properties = True
-        self.nastran_is_3d_bars = True
-        self.nastran_is_3d_bars_update = True
-        self.nastran_create_coords = True
-        self.nastran_is_bar_axes = True
-        self.nastran_is_shell_mcids = True
-        self.nastran_is_update_conm2 = True
+        self.nastran_settings = NastranSettings(self.parent)
 
-        self.nastran_stress = True
-        self.nastran_spring_stress = True
-        self.nastran_rod_stress = True
-        self.nastran_bar_stress = True
-        self.nastran_beam_stress = True
-        self.nastran_plate_stress = True
-        self.nastran_composite_plate_stress = True
-        self.nastran_solid_stress = True
+    def finish_startup(self):
+        self.set_background_color(self.background_color, render=False, quiet=True)
+        self.set_background_color2(self.background_color2, render=False, quiet=True)
+        self.set_gradient_background(self.use_gradient_background, render=True, quiet=True)
 
-        self.nastran_strain = True
-        self.nastran_spring_strain = True
-        self.nastran_rod_strain = True
-        self.nastran_bar_strain = True
-        self.nastran_beam_strain = True
-        self.nastran_plate_strain = True
-        self.nastran_composite_plate_strain = True
-        self.nastran_solid_strain = True
+    def add_settings_to_dict(self, data: dict[str, Any]) -> dict[str, Any]:
+        data2 = {
+            # booleans
+            'is_trackball_camera': self.is_trackball_camera,
+            'use_parallel_projection': self.use_parallel_projection,
+            'use_new_sidebar': self.use_new_sidebar,
+            'use_gradient_background': self.use_gradient_background,
 
-        self.nastran_force = True
-        self.nastran_spring_force = True
-        self.nastran_cbush_force = True
-        self.nastran_gap_force = True
-        self.nastran_bar_force = True
-        self.nastran_beam_force = True
-        self.nastran_plate_force = True
+            # startup directory
+            'startup_directory': self.startup_directory,
+            'use_startup_directory': self.use_startup_directory,
+            'recent_files': self.recent_files,
 
-    def load(self, settings):
+            'use_new_sidebar_objects': self.use_new_sidebar_objects,
+            'use_new_terms': self.use_new_terms,
+
+            # rgb tuple
+            'background_color': self.background_color,
+            'background_color2': self.background_color2,
+
+            'highlight_color': self.highlight_color,
+            'highlight_opacity': self.highlight_opacity,
+            'highlight_point_size': self.highlight_point_size,
+            'highlight_line_width': self.highlight_line_width,
+
+            'shear_moment_torque_color': self.shear_moment_torque_color,
+            'shear_moment_torque_opacity': self.shear_moment_torque_opacity,
+            'shear_moment_torque_point_size': self.shear_moment_torque_point_size,
+            'shear_moment_torque_line_width': self.shear_moment_torque_line_width,
+
+            # float
+            'displacement_model_scale': self.displacement_model_scale,
+            'animation_time': self.animation_time,
+            'animation_frame_rate': self.animation_frame_rate,
+
+            # logging
+            'show_info': self.show_info,
+            'show_debug': self.show_debug,
+            'show_command': self.show_command,
+            'show_warning': self.show_warning,
+            'show_error': self.show_error,
+
+            # edges
+            'is_edges_visible': self.is_edges_visible,
+            'is_edges_black': self.is_edges_black,
+            'is_horizontal_scalar_bar': self.is_horizontal_scalar_bar,
+
+            # min/max
+            'is_min_visible': self.is_min_visible,
+            'is_max_visible': self.is_max_visible,
+
+            # int
+            'magnify': self.magnify,
+
+            # float
+            'coord_scale': self.coord_scale,
+            'coord_linewidth': self.coord_linewidth,
+            'coord_text_scale': self.coord_text_scale,
+            # str
+            'colormap': self.colormap,
+
+            'font_size': self.font_size,
+            'annotation_size': self.annotation_size,  # int
+            'annotation_color': self.annotation_color,
+
+            'corner_text_size': self.corner_text_size,
+            'corner_text_color': self.corner_text_color,
+
+            'dim_max': self.dim_max,
+        }
+        data.update(data2)
+        self.nastran_settings.add_settings_to_dict(data)
+        self.other_settings.add_settings_to_dict(data)
+        return data
+
+    def load(self, settings: QSettings) -> bool:
         """helper method for ``setup_gui``"""
         #red = (1.0, 0.0, 0.0)
         screen_shape_default = (1100, 700)
@@ -235,75 +717,199 @@ class Settings:
 
         # sets the window size/position
         main_window_geometry = get_setting(
-            settings, setting_keys, ['main_window_geometry', 'mainWindowGeometry'], None)
+            settings, setting_keys, ['main_window_geometry'], None)
+        main_window_state = get_setting(
+            settings, setting_keys, ['main_window_state'], None)
         if main_window_geometry is not None:
             self.parent.restoreGeometry(main_window_geometry)
+        if main_window_state is not None:
+            self.parent.restoreState(main_window_state)
+        #settings.setValue('main_window_geometry', self.parent.saveGeometry())
+        #settings.setValue('main_window_state', self.parent.saveState())
 
         # this is the gui font
-        self._set_setting(settings, setting_keys, ['font_size'], self.font_size, auto_type=int)
+        _set_setting(self, settings, setting_keys, ['font_size'],
+                     default=self.font_size,
+                     save=True, auto_type=int)
+        self.font_size = force_ranged(
+            self.font_size, min_value=FONT_SIZE_MIN, max_value=None)
+
+        # parallel/perspective
+        _set_setting(self, settings, setting_keys, ['is_trackball_camera'],
+                     default=self.is_trackball_camera,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['use_parallel_projection'],
+                     default=self.use_parallel_projection,
+                     save=True, auto_type=bool)
+
+        # launch in local or specified directory
+        _set_setting(self, settings, setting_keys, ['startup_directory'],
+                     default=self.startup_directory,
+                     save=True, auto_type=str)
+        _set_setting(self, settings, setting_keys, ['use_startup_directory'],
+                     default=self.use_startup_directory,
+                     save=True, auto_type=bool)
+        if os.path.exists(self.startup_directory):
+            self.parent.last_dir = self.startup_directory
+        else:
+            self.startup_directory = ''
+
+        _set_setting(self, settings, setting_keys, ['use_new_sidebar_objects'],
+                     default=self.use_new_sidebar_objects,
+                     save=True, auto_type=bool)
+        self.use_new_sidebar = self.use_new_sidebar_objects
+        # _set_setting(self, settings, setting_keys, ['use_new_sidebar'], self.use_new_sidebar,
+        #              USE_NEW_SIDEBAR, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['use_new_terms'],
+                     default=self.use_new_terms,
+                     save=True, auto_type=bool)
 
         # the info/debug/gui/command preferences
-        self._set_setting(settings, setting_keys, ['show_info'], self.show_info,
-                          True, auto_type=bool)
-        self._set_setting(settings, setting_keys, ['show_debug'], self.show_debug,
-                          True, auto_type=bool)
-        self._set_setting(settings, setting_keys, ['show_command'], self.show_command,
-                          True, auto_type=bool)
-        self._set_setting(settings, setting_keys, ['show_warning'], self.show_warning,
-                          True, auto_type=bool)
-        self._set_setting(settings, setting_keys, ['show_error'], self.show_error,
-                          True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['show_debug'],
+                     default=self.show_debug,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['show_info'],
+                     default=self.show_info,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['show_command'],
+                     default=self.show_command,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['show_warning'],
+                     default=self.show_warning,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['show_error'],
+                     default=self.show_error,
+                     save=True, auto_type=bool)
+
+        # edges
+        _set_setting(self, settings, setting_keys, ['is_edges_visible'],
+                     default=self.is_edges_visible,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['is_edges_black'],
+                     default=self.is_edges_black,
+                     save=True, auto_type=bool)
+
+        _set_setting(self, settings, setting_keys, ['is_horizontal_scalar_bar'],
+                     default=self.is_horizontal_scalar_bar,
+                     save=True, auto_type=bool)
+
+        # min/max
+        _set_setting(self, settings, setting_keys, ['is_min_visible'],
+                     default=self.is_min_visible,
+                     save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['is_max_visible'],
+                     default=self.is_max_visible,
+                     save=True, auto_type=bool)
 
         # the vtk panel background color
-        self._set_setting(settings, setting_keys, ['use_gradient_background'],
-                          False, auto_type=bool)
-        self._set_setting(settings, setting_keys, ['background_color', 'backgroundColor'],
-                          GREY, auto_type=float)
-        self._set_setting(settings, setting_keys, ['background_color2'], GREY, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['use_gradient_background'],
+                     default=False, save=True, auto_type=bool)
+        _set_setting(self, settings, setting_keys, ['background_color'],
+                     default=BACKGROUND_COLOR, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['background_color2'],
+                     default=BACKGROUND_COLOR2, save=True, auto_type=float)
+        self.background_color = force_color_ranged(self.background_color, BACKGROUND_COLOR)
+        self.background_color2 = force_color_ranged(self.background_color2, BACKGROUND_COLOR2)
 
         # scales the coordinate systems
-        self._set_setting(settings, setting_keys, ['coord_scale'], COORD_SCALE, auto_type=float)
-        self._set_setting(settings, setting_keys, ['coord_text_scale'], COORD_TEXT_SCALE, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['coord_scale'],
+                     default=COORD_SCALE, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['coord_text_scale'],
+                     default=COORD_TEXT_SCALE, save=True, auto_type=float)
+        self.coord_scale = force_ranged(
+            self.coord_scale,
+            min_value=COORD_SCALE_MIN, max_value=COORD_SCALE_MAX)
+        self.coord_text_scale = force_ranged(
+            self.coord_text_scale,
+            min_value=COORD_TEXT_SCALE_MIN, max_value=COORD_TEXT_SCALE_MAX)
 
         # this is for the 3d annotation
-        self._set_setting(settings, setting_keys, ['annotation_color', 'labelColor'],
-                          BLACK, auto_type=float)
-        self._set_setting(settings, setting_keys, ['annotation_size'], ANNOTATION_SIZE, auto_type=int) # int
-        if isinstance(self.annotation_size, float):
-            # throw the float in the trash as it's from an old version of vtk
-            self.annotation_size = ANNOTATION_SIZE
-        elif isinstance(self.annotation_size, int):
-            pass
-        else:
-            print('annotation_size = ', self.annotation_size)
+        _set_setting(self, settings, setting_keys, ['annotation_color'],
+                          default=ANNOTATION_COLOR, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['annotation_size'],
+                          default=ANNOTATION_SIZE, save=True, auto_type=int)  # int
+        self.annotation_color = force_color_ranged(self.annotation_color, ANNOTATION_COLOR)
+        self.annotation_size = force_ranged(
+            self.annotation_size,
+            min_value=ANNOTATION_SIZE_MIN, max_value=ANNOTATION_SIZE_MAX)
 
-        self._set_setting(settings, setting_keys, ['magnify'], self.magnify, auto_type=int)
+        #elif isinstance(self.annotation_size, int):
+            #pass
+        #else:
+            #print('annotation_size = ', self.annotation_size)
+
+        _set_setting(self, settings, setting_keys, ['magnify'],
+                     default=self.magnify, save=True, auto_type=int)
+        self.magnify = force_ranged(
+            self.magnify, min_value=MAGNIFY_MIN, max_value=MAGNIFY_MAX)
 
         # this is the text in the lower left corner
-        self._set_setting(settings, setting_keys, ['text_color', 'textColor'],
-                          BLACK, auto_type=float)
-        self._set_setting(settings, setting_keys, ['text_size'], TEXT_SIZE, auto_type=int)
+        _set_setting(self, settings, setting_keys, ['corner_text_color'],
+                     default=CORNER_TEXT_COLOR, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['corner_text_size'],
+                     default=CORNER_TEXT_SIZE, save=True, auto_type=int)
+        self.corner_text_color = force_color_ranged(self.corner_text_color, CORNER_TEXT_COLOR)
+        self.corner_text_size = force_ranged(
+            self.corner_text_size, min_value=CORNER_TEXT_SIZE_MIN, max_value=CORNER_TEXT_SIZE_MAX)
 
         # highlight
-        self._set_setting(settings, setting_keys, ['highlight_color'],
-                          ORANGE, auto_type=float)
-        self._set_setting(settings, setting_keys, ['highlight_opacity'],
-                          HIGHLIGHT_OPACITY, auto_type=float)
-        self._set_setting(settings, setting_keys, ['highlight_point_size'],
-                          HIGHLIGHT_POINT_SIZE, auto_type=float)
-        self._set_setting(settings, setting_keys, ['highlight_line_thickness'],
-                          HIGHLIGHT_LINE_THICKNESS, auto_type=float)
-        #self._set_setting(settings, setting_keys, ['highlight_style'],
-                          #HIGHLIGHT_OPACITY, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['highlight_color'],
+                     default=HIGHLIGHT_COLOR, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['highlight_opacity'],
+                     default=HIGHLIGHT_OPACITY, save=True, auto_type=float)
+        self.highlight_color = force_color_ranged(self.highlight_color, HIGHLIGHT_COLOR)
+        self.highlight_opacity = force_ranged(
+            self.highlight_opacity, min_value=OPACITY_MIN, max_value=OPACITY_MAX)
+
+        _set_setting(self, settings, setting_keys, ['highlight_point_size'],
+                     default=HIGHLIGHT_POINT_SIZE, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['highlight_line_width', 'highlight_line_thickness'],
+                     default=HIGHLIGHT_LINE_WIDTH, save=True, auto_type=float)
+        self.highlight_point_size = force_ranged(
+            self.highlight_point_size, min_value=POINT_SIZE_MIN, max_value=POINT_SIZE_MAX)
+        self.highlight_line_width = force_ranged(
+            self.highlight_line_width,
+            min_value=LINE_WIDTH_MIN, max_value=LINE_WIDTH_MAX)
+        # _set_setting(self, settings, setting_keys, ['highlight_style'],
+        #              HIGHLIGHT_OPACITY, auto_type=float)
+
+        # shear moment torque
+        _set_setting(self, settings, setting_keys, ['shear_moment_torque_color'],
+                     default=SHEAR_MOMENT_TORQUE_COLOR, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['shear_moment_torque_opacity'],
+                     default=SHEAR_MOMENT_TORQUE_OPACITY, save=True, auto_type=float)
+        self.shear_moment_torque_color = force_color_ranged(
+            self.shear_moment_torque_color, SHEAR_MOMENT_TORQUE_COLOR)
+        self.shear_moment_torque_opacity = force_ranged(
+            self.shear_moment_torque_opacity, min_value=OPACITY_MIN, max_value=OPACITY_MAX)
+
+        _set_setting(self, settings, setting_keys, ['shear_moment_torque_point_size'],
+                     default=SHEAR_MOMENT_TORQUE_POINT_SIZE, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['shear_moment_torque_line_width'],
+                     default=SHEAR_MOMENT_TORQUE_LINE_WIDTH, save=True, auto_type=float)
+        self.shear_moment_torque_point_size = force_ranged(
+            self.shear_moment_torque_point_size, min_value=POINT_SIZE_MIN, max_value=POINT_SIZE_MAX)
+        self.shear_moment_torque_line_width = force_ranged(
+            self.shear_moment_torque_line_width,
+            min_value=LINE_WIDTH_MIN, max_value=LINE_WIDTH_MAX)
+
+        # animation
+        _set_setting(self, settings, setting_keys, ['animation_time'],
+                     default=ANIMATION_TIME, save=True, auto_type=float)
+        _set_setting(self, settings, setting_keys, ['animation_frame_rate'],
+                     default=ANIMATION_FRAME_RATE, save=True, auto_type=int)
+
+        # displacement_model_scale - unused
+        _set_setting(self, settings, setting_keys, ['displacement_model_scale'],
+                     default=DISPLACEMENT_MODEL_SCALE, save=True, auto_type=float)
 
         # default colormap for legend
-        self._set_setting(settings, setting_keys, ['colormap'],
-                          'jet')
-
-
+        _set_setting(self, settings, setting_keys, ['colormap'], default=DEFAULT_COLORMAP, save=True)
+        if self.colormap not in COLORMAPS:
+            self.colormap = DEFAULT_COLORMAP
         # general gui sizing
-        screen_shape = self._set_setting(settings, setting_keys, ['screen_shape'],
-                                         screen_shape_default, save=False, auto_type=int)
+        screen_shape = _set_setting(self, settings, setting_keys, ['screen_shape'],
+                                    default=screen_shape_default, save=False, auto_type=int)
 
         #try:
             #screen_shape = settings.value("screen_shape", screen_shape_default)
@@ -311,15 +917,34 @@ class Settings:
             #screen_shape = screen_shape_default
 
         #if 'recent_files' in setting_keys:
+        recent_files_og = copy.deepcopy(self.recent_files)
         try:
-            self.parent.recent_files = settings.value("recent_files", self.recent_files)
+            recent_files = settings.value("recent_files", default=recent_files_og)
         except (TypeError, AttributeError):
-            pass
+            recent_files = recent_files_og
 
-        for key in NASTRAN_BOOL_KEYS:
-            default = getattr(self, key)
-            self._set_setting(settings, setting_keys, [key],
-                              default, save=True, auto_type=bool)
+        if recent_files is None:
+            recent_files = []
+            self.recent_files = recent_files
+
+        if not isinstance(recent_files, int):
+            # yeah seriously...it just returns 0
+            try:
+                recent_files2 = [(fname, fmt) for (fname, fmt) in recent_files
+                                 if os.path.exists(fname)]
+            except TypeError:
+                raise TypeError(f'recent_files = {recent_files}')
+
+            #  only save 10 files
+            self.recent_files = recent_files2[:NFILES_TO_SAVE]
+
+        self.recent_files = filter_recent_files(self.recent_files)
+        for key in object_attributes(self, keys_to_skip='nastran_settings'):
+            assert 'nastran' not in key, f'v1: key={key!r}'
+        self.nastran_settings.load_settings(settings, setting_keys)
+        self.other_settings.load_settings(settings, setting_keys)
+        for key in object_attributes(self, keys_to_skip='nastran_settings'):
+            assert 'nastran' not in key, f'v2: key={key!r}'
 
         #w = screen_shape.width()
         #h = screen_shape.height()
@@ -328,87 +953,92 @@ class Settings:
             self.parent.resize(screen_shape[0], screen_shape[1])
             #width, height = screen_shape
 
+        pos = _set_setting(self, settings, setting_keys, ['screen_position'],
+                           default=None, save=False)
+        #if pos is not None:
+            #x = 1
+            #qpos = parent.pos()
+            #pos = qpos.x(), qpos.y()
+
+        self.python_dock_visible = _set_setting(
+            self, settings, setting_keys, ['python_dock_visible'],
+            default=False, save=False)
+        self.log_dock_visible = _set_setting(
+            self, settings, setting_keys, ['log_dock_visible'],
+            default=True, save=False)
+
         font = QtGui.QFont()
         font.setPointSize(self.font_size)
         self.parent.setFont(font)
 
-        #if 0:
-            #pos_default = 0, 0
-            #pos = settings.value("pos", pos_default)
-            #x_pos, y_pos = pos
-            #print(pos)
-            #self.mapToGlobal(QtCore.QPoint(pos[0], pos[1]))
-            #y_pos = pos_default[0]
-            #self.parent.setGeometry(x_pos, y_pos, width, height)
-        #except TypeError:
-            #self.resize(1100, 700)
+        # if 0:
+        #     pos_default = 0, 0
+        #     pos = settings.value("pos", pos_default)
+        #     x_pos, y_pos = pos
+        #     print(pos)
+        #     self.mapToGlobal(QtCore.QPoint(pos[0], pos[1]))
+        #     y_pos = pos_default[0]
+        #     self.parent.setGeometry(x_pos, y_pos, width, height)
+        # except TypeError:
+        #     self.resize(1100, 700)
         is_loaded = True
         return is_loaded
 
-    def _set_setting(self, settings, setting_keys: List[str],
-                     setting_names: List[str], default: Any,
-                     save: bool=True, auto_type=None) -> Any:
-        """
-        helper method for ``reapply_settings``
-        """
-        set_name = setting_names[0]
-        value = get_setting(settings, setting_keys, setting_names, default,
-                            auto_type=auto_type)
-        if save:
-            setattr(self, set_name, value)
-        return value
-
-    def save(self, settings, is_testing: bool=False) -> None:
+    def save(self, settings: QSettings,
+             is_testing: bool=False) -> None:
         """saves the settings"""
-        if not is_testing:
-            settings.setValue('main_window_geometry', self.parent.saveGeometry())
-            settings.setValue('mainWindowState', self.parent.saveState())
+        #if not is_testing:
+        parent = self.parent
+        # keys_to_skip = [
+        #     'parent', 'nastran_settings', 'other_settings',
+        # ]
+        # keys_all = object_attributes(
+        #     self, mode='public', keys_to_skip=keys_to_skip)
+        # data_all = {}
+        # for key in keys:
+        #     value = getattr(self, key)
+        #     data_all[key] = value
 
-        # rgb tuple
-        settings.setValue('use_gradient_background', self.use_gradient_background)
-        settings.setValue('background_color', self.background_color)
-        settings.setValue('background_color2', self.background_color2)
-        settings.setValue('annotation_color', self.annotation_color)
-        settings.setValue('text_color', self.text_color)
+        self.recent_files = self.recent_files[:NFILES_TO_SAVE]
+        data = self.add_settings_to_dict({})
+        # for key in keys_all:
+        #     if key not in data:
+        #         print(key)
 
-        settings.setValue('highlight_color', self.highlight_color)
-        settings.setValue('highlight_opacity', self.highlight_opacity)
-
-        settings.setValue('show_info', self.show_info)
-        settings.setValue('show_debug', self.show_debug)
-        settings.setValue('show_command', self.show_command)
-        settings.setValue('show_warning', self.show_warning)
-        settings.setValue('show_error', self.show_error)
-
-        # int
-        settings.setValue('font_size', self.font_size)
-        settings.setValue('annotation_size', self.annotation_size)
-        settings.setValue('magnify', self.magnify)
-
-        # float
-        settings.setValue('text_size', self.text_size)
-        settings.setValue('coord_scale', self.coord_scale)
-        settings.setValue('coord_text_scale', self.coord_text_scale)
-
-        # str
-        settings.setValue('colormap', self.colormap)
-
-        # format-specific
-        for key in NASTRAN_BOOL_KEYS:
-            value = getattr(self, key)
+        for key, value in data.items():
             settings.setValue(key, value)
 
+        # format-specific
+        # nastran_settings = self.nastran_settings
+        # nastran_settings.save(settings)
+        #
+        # other_settings = self.other_settings
+        # other_settings.save(settings)
 
         #screen_shape = QtGui.QDesktopWidget().screenGeometry()
+
+        # checks because tests don't have these
+        if hasattr(parent, 'saveGeometry'):
+            settings.setValue('main_window_geometry', parent.saveGeometry())
+        if hasattr(parent, 'saveState'):
+            settings.setValue('main_window_state', parent.saveState())
+
+        if hasattr(self.parent, 'python_dock_widget'):
+            python_dock_visible = self.parent.python_dock_widget.isVisible()
+            settings.setValue('python_dock_visible', python_dock_visible)
+        if hasattr(self.parent, 'log_dock_widget'):
+            log_dock_widget = self.parent.log_dock_widget.isVisible()
+            settings.setValue('log_dock_visible', log_dock_widget)
+
         if not is_testing:
             main_window = self.parent.window()
             width = main_window.frameGeometry().width()
             height = main_window.frameGeometry().height()
             settings.setValue('screen_shape', (width, height))
 
-            qpos = self.parent.pos()
+            qpos = parent.pos()
             pos = qpos.x(), qpos.y()
-            settings.setValue('pos', pos)
+            settings.setValue('screen_position', pos)
 
     #---------------------------------------------------------------------------
     # FONT SIZE
@@ -416,24 +1046,26 @@ class Settings:
         """shrinks the overall GUI font size"""
         self.on_set_font_size(self.font_size + 1)
 
-    def on_decrease_font_size(self):
+    def on_decrease_font_size(self) -> None:
         """shrinks the overall GUI font size"""
         self.on_set_font_size(self.font_size - 1)
 
-    def on_set_font_size(self, font_size, show_command=True):
+    def on_set_font_size(self, font_size: int, show_command: bool=True) -> None:
         """updates the GUI font size"""
         return self.parent.on_set_font_size(font_size, show_command=show_command)
 
     #---------------------------------------------------------------------------
     # ANNOTATION SIZE/COLOR
-    def set_annotation_size_color(self, size=None, color=None):
+    def set_annotation_size_color(self, size: Optional[float]=None,
+                                  color: Optional[ColorFloat]=None) -> None:
         """
         Parameters
         ----------
         size : float
             annotation size
-        color : (float, float, float)
-            RGB values
+        color : ColorFloat
+            RGB values as floats
+
         """
         if size is not None:
             assert isinstance(size, int), 'size=%r' % size
@@ -443,7 +1075,7 @@ class Settings:
             assert isinstance(color[0], float), 'color=%r' % color
             self.set_annotation_color(color)
 
-    def set_annotation_size(self, size, render=True):
+    def set_annotation_size(self, size: int, render: bool=True) -> None:
         """Updates the size of all the annotations"""
         assert size >= 0, size
         assert isinstance(size, int), size
@@ -478,20 +1110,21 @@ class Settings:
 
         if render:
             self.parent.vtk_interactor.GetRenderWindow().Render()
-            self.parent.log_command('settings.set_annotation_size(%s)' % size)
+            self.parent.log_command(f'self.settings.set_annotation_size({size})')
 
-    def set_coord_scale(self, coord_scale, render=True):
+    def set_coord_scale(self, coord_scale: float, render: bool=True) -> None:
         """sets the coordinate system size"""
         self.coord_scale = coord_scale
         self.update_coord_scale(coord_scale, render=render)
 
-    def set_coord_text_scale(self, coord_text_scale, render=True):
+    def set_coord_text_scale(self, coord_text_scale: float,
+                             render: bool=True) -> None:
         """sets the coordinate system text size"""
         self.coord_text_scale = coord_text_scale
         self.update_coord_text_scale(coord_text_scale, render=render)
 
     def update_coord_scale(self, coord_scale=None, coord_text_scale=None,
-                           linewidth=None, render=True):
+                           linewidth=None, render: bool=True) -> None:
         """internal method for updating the coordinate system size"""
         if coord_scale is None:
             coord_scale = self.coord_scale
@@ -517,14 +1150,15 @@ class Settings:
         if render:
             self.parent.vtk_interactor.GetRenderWindow().Render()
 
-    def scale_coord(self, magnify: float, render=True):
+    def scale_coord(self, magnify: float, render: bool=True) -> None:
         """internal method for scaling the coordinate system size"""
         for unused_coord_id, axes in self.parent.axes.items():
             axes.SetScale(magnify)
         if render:
             self.parent.vtk_interactor.GetRenderWindow().Render()
 
-    def update_coord_text_scale(self, coord_text_scale=None, render=True):
+    def update_coord_text_scale(self, coord_text_scale: Optional[float]=None,
+                                render: bool=True) -> None:
         """internal method for updating the coordinate system size"""
         if coord_text_scale is None:
             coord_text_scale = self.coord_text_scale
@@ -534,13 +1168,14 @@ class Settings:
         if render:
             self.parent.vtk_interactor.GetRenderWindow().Render()
 
-    def set_annotation_color(self, color, render=True):
+    def set_annotation_color(self, color: ColorFloat,
+                             render: bool=True) -> None:
         """
         Set the annotation color
 
         Parameters
         ----------
-        color : (float, float, float)
+        color : ColorFloat
             RGB values as floats
         """
         if np.allclose(self.annotation_color, color):
@@ -550,13 +1185,13 @@ class Settings:
         # min/max
         for min_max_actor in self.parent.min_max_actors:
             #print(dir(min_max_actor))
-            prop = min_max_actor.GetProperty()
+            prop = min_max_actor.GetTextProperty()  # was GetProperty
             prop.SetColor(*color)
 
         # case attached annotations (typical)
         for follower_actors in self.parent.label_actors.values():
             for follower_actor in follower_actors:
-                prop = follower_actor.GetProperty()
+                prop = follower_actor.GetTextProperty()
                 prop.SetColor(*color)
 
         # geometry property attached annotations (e.g., flaps)
@@ -565,74 +1200,83 @@ class Settings:
                 continue
             elif isinstance(obj, AltGeometry):
                 pass
-            else:
+            else:  # pragma: no cover
                 raise NotImplementedError(obj)
 
             follower_actors = obj.label_actors
             for follower_actor in follower_actors:
-                prop = follower_actor.GetProperty()
+                prop = follower_actor.GetTextProperty()
                 prop.SetColor(*color)
 
         if render:
             self.parent.vtk_interactor.GetRenderWindow().Render()
-            self.parent.log_command('settings.set_annotation_color(%s, %s, %s)' % color)
+        self.parent.log_command('self.settings.set_annotation_color(%s, %s, %s)' % color)
 
     #---------------------------------------------------------------------------
-    def set_background_color_to_white(self, render=True):
+    def set_background_color_to_white(self, render: bool=True) -> None:
         """sets the background color to white; used by gif writing?"""
         self.set_gradient_background(use_gradient_background=False, render=False)
-        self.set_background_color(WHITE, render=render)
+        self.set_background_color(WHITE_FLOAT, render=render)
 
-    def set_gradient_background(self, use_gradient_background=False, render=True):
-        """enables/diables the gradient background"""
+    def set_gradient_background(self,
+                                use_gradient_background: bool=False,
+                                render: bool=True,
+                                quiet: bool=False) -> None:
+        """enables/disables the gradient background"""
         self.use_gradient_background = use_gradient_background
         self.parent.rend.SetGradientBackground(self.use_gradient_background)
         if render:
             self.parent.vtk_interactor.Render()
 
-    def set_background_color(self, color, render=True):
+    def set_background_color(self, color: ColorFloat,
+                             render: bool=True, quiet: bool=False) -> None:
         """
         Set the background color
 
         Parameters
         ----------
-        color : (float, float, float)
+        color : ColorFloat
             RGB values as floats
         """
         self.background_color = color
         self.parent.rend.SetBackground(*color)
         if render:
             self.parent.vtk_interactor.Render()
-        self.parent.log_command('settings.set_background_color(%s, %s, %s)' % color)
+        if not quiet:
+            self.parent.log_command('self.settings.set_background_color(%s, %s, %s)' % color)
 
-    def set_background_color2(self, color, render=True):
+    def set_background_color2(self, color: ColorFloat,
+                              render: bool=True, quiet: bool=False):
         """
         Set the background color
 
         Parameters
         ----------
-        color : (float, float, float)
+        color : ColorFloat
             RGB values as floats
         """
         self.background_color2 = color
         self.parent.rend.SetBackground2(*color)
         if render:
             self.parent.vtk_interactor.Render()
-        self.parent.log_command('settings.set_background_color2(%s, %s, %s)' % color)
+        if not quiet:
+            self.parent.log_command('self.settings.set_background_color2(%s, %s, %s)' % color)
 
-    def set_highlight_color(self, color):
+    def set_highlight_color(self, color: ColorFloat, render: bool=True) -> None:
         """
         Set the highlight color
 
         Parameters
         ----------
-        color : (float, float, float)
+        color : ColorFloat
             RGB values as floats
         """
         self.highlight_color = color
-        self.parent.log_command('settings.set_highlight_color(%s, %s, %s)' % color)
+        if render:
+            self.parent.vtk_interactor.Render()
+        self.parent.log_command('self.settings.set_highlight_color(%s, %s, %s)' % color)
 
-    def set_highlight_opacity(self, opacity):
+    def set_highlight_opacity(self, opacity: float) -> None:
         """
         Set the highlight opacity
 
@@ -643,14 +1287,27 @@ class Settings:
             1.0 : solid
         """
         self.highlight_opacity = opacity
-        self.parent.log_command('settings.set_highlight_opacity(%s)' % opacity)
+        self.parent.log_command(f'self.settings.set_highlight_opacity({opacity})')
+
+    def set_highlight_point_size(self, point_size: int) -> None:
+        """
+        Set the highlight point size
+
+        Parameters
+        ----------
+        point_size : float
+            the point size
+        """
+        self.highlight_point_size = point_size
+        self.parent.log_command(f'self.settings.set_highlight_point_size({point_size})')
 
     #---------------------------------------------------------------------------
     # TEXT ACTORS - used for lower left notes
 
-    def set_text_color(self, color, render=True):
+    def set_corner_text_color(self, color: list[float],
+                              render: bool=True) -> None:
         """
-        Set the text color
+        Set the corner_text color
 
         Parameters
         ----------
@@ -658,47 +1315,73 @@ class Settings:
             RGB values as floats
         """
         self.text_color = color
-        for text_actor in self.parent.text_actors.values():
+        text_actors = self.parent.corner_text_actors
+        for text_actor in text_actors.values():
             text_actor.GetTextProperty().SetColor(color)
         if render:
             self.parent.vtk_interactor.Render()
-        self.parent.log_command('settings.set_text_color(%s, %s, %s)' % color)
+        self.parent.log_command('self.settings.set_corner_text_color(%s, %s, %s)' % color)
 
-    def set_text_size(self, text_size, render=True):
+    def set_corner_text_size(self, corner_text_size: int, render: bool=True) -> None:
         """
-        Set the text color
+        Set the corner text size
 
         Parameters
         ----------
-        text_size : int
+        corner_text_size : int
             the lower left text size (typical 14)
+
         """
-        i = 0
-        dtext_size = text_size + 1
-        self.text_size = text_size
-        for text_actor in self.parent.text_actors.values():
+        # we built these actors in reverse order,
+        # so that's how we update their sizes
+        text_actors = self.parent.corner_text_actors
+        i = len(text_actors) - 1
+        dtext_size = corner_text_size + 1
+        self.text_size = corner_text_size
+        for text_actor in text_actors.values():
             text_prop = text_actor.GetTextProperty()
-            text_prop.SetFontSize(text_size)
+            text_prop.SetFontSize(corner_text_size)
 
             position = [5, 5 + i * dtext_size]
             text_actor.SetDisplayPosition(*position)
-            i += 1
+            i -= 1
         if render:
             self.parent.vtk_interactor.Render()
-        self.parent.log_command('settings.set_text_size(%s)' % text_size)
+        self.parent.log_command(f'self.settings.set_corner_text_size({corner_text_size})')
 
-    def update_text_size(self, magnify=1.0):
+    def update_corner_text_size(self, magnify: float=1.0) -> None:
         """Internal method for updating the bottom-left text when we go to take a picture"""
         text_size = int(14 * magnify)
-        for text_actor in self.parent.text_actors.values():
+        text_actors = self.parent.corner_text_actors
+        for text_actor in text_actors.values():
             text_prop = text_actor.GetTextProperty()
             text_prop.SetFontSize(text_size)
 
-    def set_magnify(self, magnify=5):
-        """sets the screenshot magnification factor (int)"""
+    def set_magnify(self, magnify: int=5) -> None:
+        """sets the screenshot magnification factor"""
         self.magnify = magnify
 
-    def __repr__(self):
+    def set_trackball_camera(self, is_trackball_camera: bool,
+                             render: bool=True) -> None:
+        """sets the trackball_camera flag"""
+        self.is_trackball_camera = is_trackball_camera
+        self.parent.mouse_actions.set_style()
+        if render:
+            self.parent.vtk_interactor.Render()
+
+    def set_parallel_projection(self, parallel_projection: bool,
+                                render: bool=True) -> None:
+        """sets the parallel_projection flag"""
+        self.use_parallel_projection = parallel_projection
+        camera = self.parent.rend.GetActiveCamera()
+        if parallel_projection:
+            camera.ParallelProjectionOn()
+        else:
+            camera.ParallelProjectionOff()
+        if render:
+            self.parent.vtk_interactor.Render()
+
+    def __repr__(self) -> str:
         msg = '<Settings>\n'
         for key in object_attributes(self, mode='public', keys_to_skip=['parent']):
             value = getattr(self, key)
@@ -707,7 +1390,8 @@ class Settings:
             msg += '  %r = %r\n' % (key, value)
         return msg
 
-def update_axes_text_size(axes: Dict[int, vtk.vtkAxes],
+
+def update_axes_text_size(axes: dict[int, vtkAxes],
                           coord_text_scale: float,
                           width: float=1.0, height: float=0.25):
     """updates the coordinate system text size"""
@@ -727,7 +1411,8 @@ def update_axes_text_size(axes: Dict[int, vtk.vtkAxes],
             text.SetWidth(coord_text_scale * width)
             text.SetHeight(coord_text_scale * height)
 
-def isfloat(value):
+
+def isfloat(value) -> bool:
     """is the value floatable"""
     try:
         float(value)
@@ -735,10 +1420,100 @@ def isfloat(value):
     except ValueError:
         return False
 
-def repr_settings(settings):
+
+def repr_settings(settings: QSettings) -> str:
     """works on a QSettings, not a Settings"""
     msg = 'QSettings:\n'
     for key in sorted(settings.allKeys()):
         value = settings.value(key)
         msg += '    %r : %r\n' % (key, value)
     return msg
+
+
+def filter_recent_files(recent_files: list[tuple[str, str]]):
+    if IS_WINDOWS:
+        #recent_files_lower = [fname.lower() for (fname, fmt) in recent_files]]
+        recent_files_out = []
+        stored_files_lower = set([])
+        for i, (fname, geometry_format) in enumerate(recent_files):
+            if geometry_format is None or not os.path.exists(fname):
+                continue
+
+            fname_abs = os.path.abspath(fname)
+            fname_lower = fname.lower()
+            if fname_lower in stored_files_lower:
+                continue
+            stored_files_lower.add(fname_lower)
+            recent_files_out.append((fname_lower, geometry_format))
+    else:
+        recent_files_out = [(fname, fmt) for (fname, fmt) in recent_files
+                            if os.path.exists(fname) and fmt is not None]
+    return recent_files_out
+
+
+def force_ranged(value, min_value=None, max_value=None):
+    """make sure a value is in the proper range"""
+    if min_value is not None and max_value is not None:
+        out = max(min(value, max_value), min_value)
+    elif min_value is not None:
+        out = max(value, min_value)
+    elif max_value is not None:
+        out = max(value, min_value)
+    else:  # pragma: no cover
+        raise RuntimeError(value)
+    #if out != value:
+        #print(out, value)
+    return out
+
+
+def force_color_ranged(color: ColorFloat,
+                       default_color: ColorFloat) -> ColorFloat:
+    """
+    make sure a color is in the proper range
+    default if it's out of range
+    """
+    assert isinstance(color, tuple), color
+    if min(color) < 0.0 or max(color) > 1.0:
+        return default_color
+    return color
+
+
+def check_length(slot_key_length_defaults: list[Any, str, int, Any])  -> None:
+    """sets the value to default it it's the wrong length"""
+    for slot, key, length, default in slot_key_length_defaults:
+        value = getattr(slot, key)
+        if len(value) != length:
+            setattr(slot, key, default)
+
+
+def _set_setting(self, settings: QSettings, setting_keys: list[str],
+                 setting_names: list[str], default: Any,
+                 save: bool=True, auto_type=None, allow_none: bool=False) -> Any:
+    """
+    helper method for ``reapply_settings``
+
+    Parameters
+    ----------
+    settings : QSettings()
+        location to pull the value from
+    setting_keys : list[str]
+        list of names (in order) where key can be pulled from
+        useful for deprecations
+    setting_names : list[str]
+        list of names (in order) where key can be pulled from
+        useful for deprecations
+    save : bool; default=True
+        why would you never save the setting?  testing?
+    auto_type : Callable; default=None -> no typing
+        int, float
+        for list[float], it just iterates over each one and types it
+        for arrays, it iterates over it as a list, types it, and arrays the list
+        doesn't handle multi-dimensional arrays
+    """
+    assert isinstance(save, bool), save
+    set_name = setting_names[0]
+    value = get_setting(settings, setting_keys, setting_names, default,
+                        auto_type=auto_type, allow_none=allow_none)
+    if save:
+        setattr(self, set_name, value)
+    return value

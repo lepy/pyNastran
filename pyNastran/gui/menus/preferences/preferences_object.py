@@ -1,10 +1,18 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from pyNastran.gui.menus.preferences.preferences import PreferencesWindow
-from pyNastran.gui.gui_objects.settings import Settings, NASTRAN_BOOL_KEYS
+from pyNastran.gui.gui_objects.settings import (
+    Settings, NASTRAN_BOOL_KEYS,
+    NastranSettings, OtherSettings)
+from pyNastran.gui.qt_files.base_gui import BaseGui
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.gui.main_window import MainWindow
 
 
-class PreferencesObject:
-    def __init__(self, gui):
-        self.gui = gui
+class PreferencesObject(BaseGui):
+    def __init__(self, gui: MainWindow):
+        #self.gui = gui
+        super().__init__(gui)
         self._preferences_window_shown = False
         self._preferences_window = None
 
@@ -24,40 +32,21 @@ class PreferencesObject:
         #if not hasattr(self, 'case_keys'):  # TODO: maybe include...
             #self.log_error('No model has been loaded.')
             #return
-
         camera = self.gui.GetCamera()
         min_clip, max_clip = camera.GetClippingRange()
-        settings = self.gui.settings  # type: Settings
+        settings: Settings = self.gui.settings
         data = {
-            'font_size' : settings.font_size,
-            'annotation_size' : settings.annotation_size, # int
-            'annotation_color' : settings.annotation_color,
-
-            'use_gradient_background' : settings.use_gradient_background,
-            'background_color' : settings.background_color,
-            'background_color2' : settings.background_color2,
-
-            'text_size' : settings.text_size,
-            'text_color' : settings.text_color,
-
-            'highlight_color' : settings.highlight_color,
-            'highlight_opacity' : settings.highlight_opacity,
-
             'picker_size' : self.gui.element_picker_size,
-            'dim_max' : settings.dim_max,
-            'coord_scale' : settings.coord_scale,
-            'coord_text_scale' : settings.coord_text_scale,
             'show_corner_coord' : self.gui.get_corner_axis_visiblity(),
-            'magnify' : settings.magnify,
 
             'min_clip' : min_clip,
             'max_clip' : max_clip,
 
+            #----------------------------------------
             'clicked_ok' : False,
             'close' : False,
         }
-        for name in NASTRAN_BOOL_KEYS:
-            data[name] = getattr(settings, name)
+        settings.add_settings_to_dict(data)
 
         if not self._preferences_window_shown:
             self._preferences_window = PreferencesWindow(data, win_parent=self.gui)

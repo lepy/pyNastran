@@ -1,6 +1,5 @@
 # pylint: disable=C0301,R0913,R0914,R0904,C0111,R0201,R0902
 from itertools import count
-from typing import List
 
 import numpy as np
 from numpy import zeros, where, searchsorted
@@ -8,6 +7,8 @@ from numpy import zeros, where, searchsorted
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header
 
 
 class RandomSolidArray(OES_Object):
@@ -20,17 +21,14 @@ class RandomSolidArray(OES_Object):
         self.nelements = 0  # result specific
 
     @property
-    def is_real(self):
+    def is_real(self) -> bool:
         return True
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> bool:
         return False
 
-    def get_headers(self):
-        raise NotImplementedError()
-
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -47,17 +45,24 @@ class RandomSolidArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        if self.is_sort1:
+            ntimes = self.ntimes
+            nelements = self.nelements
+            ntotal = self.ntotal
+        else:
+            nelements = self.ntimes
+            ntimes = self.nelements
+            ntotal = self.ntotal
+            dtype = self._get_analysis_code_dtype()
+
+        self._times = np.zeros(ntimes, dtype=self.analysis_fmt)
 
         # TODO: could be more efficient by using nelements for cid
-        self.element_node = zeros((self.ntotal, 2), dtype='int32')
-        self.element_cid = zeros((self.nelements, 2), dtype='int32')
+        self.element_node = np.zeros((ntotal, 2), dtype=idtype)
+        self.element_cid = np.zeros((nelements, 2), dtype=idtype)
 
         #if self.element_name == 'CTETRA':
             #nnodes = 4
@@ -65,12 +70,12 @@ class RandomSolidArray(OES_Object):
             #nnodes = 6
         #elif self.element_name == 'CHEXA':
             #nnodes = 8
-        #self.element_node = zeros((self.ntotal, nnodes, 2), 'int32')
+        #self.element_node = np.zeros((self.ntotal, nnodes, 2), 'int32')
 
         #[oxx, oyy, ozz, txy, tyz, txz]
-        self.data = zeros((self.ntimes, self.ntotal, 6), 'float32')
+        self.data = np.zeros((self.ntimes, self.ntotal, 6), 'float32')
         self.nnodes = self.element_node.shape[0] // self.nelements
-        #self.data = zeros((self.ntimes, self.nelements, nnodes+1, 10), 'float32')
+        #self.data = np.zeros((self.ntimes, self.nelements, nnodes+1, 10), 'float32')
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -79,19 +84,21 @@ class RandomSolidArray(OES_Object):
         # TODO: cid?
         element_node = [self.element_node[:, 0], self.element_node[:, 1]]
         if self.nonlinear_factor not in (None, np.nan):
-            column_names, column_values = self._build_dataframe_transient_header()
+            column_names, column_values = build_dataframe_transient_header(self)
+            raise RuntimeError('replace pd.Panel')
             self.data_frame = pd.Panel(self.data, items=column_values,
                                        major_axis=element_node, minor_axis=headers).to_frame()
             self.data_frame.columns.names = column_names
             self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
         else:
+            raise RuntimeError('replace pd.Panel')
             self.data_frame = pd.Panel(self.data, major_axis=element_node, minor_axis=headers).to_frame()
             self.data_frame.columns.names = ['Static']
             self.data_frame.index.names = ['ElementID', 'NodeID', 'Item']
 
     def add_eid_sort1(self, unused_etype, cid, dt, eid, unused_node_id,
                       oxx, oyy, ozz, txy, tyz, txz):
-        assert cid >= -1, cid
+        assert cid >= -2, cid
         assert eid >= 0, eid
 
         #print "dt=%s eid=%s eType=%s" %(dt,eid,eType)
@@ -152,7 +159,7 @@ class RandomSolidArray(OES_Object):
         self.itotal += 1
 
     @property
-    def nnodes_per_element(self):
+    def nnodes_per_element(self) -> int:
         if self.element_type == 39: # CTETRA
             nnodes = 4
         elif self.element_type == 67: # CHEXA
@@ -163,12 +170,12 @@ class RandomSolidArray(OES_Object):
             raise NotImplementedError('element_name=%s self.element_type=%s' % (self.element_name, self.element_type))
         return nnodes
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -194,9 +201,9 @@ class RandomSolidArray(OES_Object):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nnodes, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element_node.shape = %s\n' % str(self.element_node.shape).replace('L', ''))
-        msg.append('  element_cid.shape = %s\n' % str(self.element_cid.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  element_node.shape = {self.element_node.shape}\n')
+        msg.append(f'  element_cid.shape = {self.element_cid.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         msg.append('  element name: %s\n' % self.element_name)
         msg += self.get_data_code()
         #print(''.join(msg))
@@ -205,17 +212,17 @@ class RandomSolidArray(OES_Object):
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element_node[:, 0])  #[0]
+        itot = np.searchsorted(eids, self.element_node[:, 0])  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        #ind = ravel([searchsorted(self.element_node[:, 0] == eid) for eid in eids])
-        ind = searchsorted(eids, self.element_node[:, 0])
+        #ind = np.ravel([np.searchsorted(self.element_node[:, 0] == eid) for eid in eids])
+        ind = np.searchsorted(eids, self.element_node[:, 0])
         #ind = ind.reshape(ind.size)
         #ind.sort()
         return ind
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s', page_num=1, is_mag_phase=False, is_sort1=True):
+    def write_f06(self, f06_file, header=None, page_stamp: str='PAGE %s', page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         nnodes, msg_temp = _get_f06_header_nnodes(self, is_mag_phase)
@@ -274,7 +281,8 @@ class RandomSolidStressArray(RandomSolidArray, StressObject):
         RandomSolidArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['oxx', 'oyy', 'ozz', 'txy', 'tyz', 'txz']
         return headers
 
@@ -284,13 +292,14 @@ class RandomSolidStrainArray(RandomSolidArray, StrainObject):
         RandomSolidArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['exx', 'eyy', 'ezz', 'exy', 'eyz', 'exz']
         return headers
 
 def _get_solid_msgs(self):
+    assert self.table_name in ['OESATO1', 'OSTRATO1'], self.table_name
     if self.is_stress:
-
         base_msg = [
             '0                CORNER        ------CENTER AND CORNER POINT STRESSES---------       DIR.  COSINES       MEAN                   \n',
             '  ELEMENT-ID    GRID-ID        NORMAL              SHEAR             PRINCIPAL       -A-  -B-  -C-     PRESSURE       \n']

@@ -1,5 +1,5 @@
-Release 1.1.0
-=============
+Release Process
+===============
 - python setup.py register
 - python setup.py sdist bdist_wheel upload
 
@@ -12,12 +12,10 @@ Tasks
  - tag
  - upload wheel
  - upload py37 gui
-   - test eigenvector with edges
- - test autoupdate
 
 Passing
 -------
- - pass travis
+ - pass CI
 
  Remove
  ------
@@ -34,5 +32,4 @@ Tasks
    - remember the screen number
    - remember the corners
  - make op2 able to skip user specified parameters (e.g. get maxP or oVM from solidStresses)
- - add op2 writing
  - vectorize bdf

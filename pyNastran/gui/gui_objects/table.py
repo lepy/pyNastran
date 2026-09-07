@@ -1,12 +1,12 @@
 from copy import deepcopy
-from typing import List, Optional
+from typing import Optional
 import numpy as np
 from pyNastran.gui.gui_objects.gui_result import GuiResultCommon
 
 
 class Table(GuiResultCommon):
     def __init__(self, subcase_id: int, location: str,
-                 titles: List[str], headers: List[str],
+                 titles: list[str], headers: list[str],
                  scalars,
                  data_formats: Optional[str]=None,
                  nlabels: Optional[int]=None,
@@ -22,9 +22,9 @@ class Table(GuiResultCommon):
         ----------
         subcase_id : int
             the flag that points to self.subcases for a message
-        headers : List[str]
+        headers : list[str]
             the sidebar word
-        titles : List[str]
+        titles : list[str]
             the legend title
         #xyz : (nnodes, 3)
             #the nominal xyz locations
@@ -37,10 +37,10 @@ class Table(GuiResultCommon):
             is the displacement scale factor linked
             displacements/loads steps should be
             force/eigenvectors should not be
-        scales : List[float]
+        scales : list[float]
             the table (e.g., deflection, SPC Forces) scale factors
             nominally, this starts as an empty list and is filled later
-        data_formats : List[str]
+        data_formats : list[str]
             the type of data result (e.g. '%i', '%.2f', '%.3f')
         ncolors : int; default=None
             sets the default for reverting the legend ncolors
@@ -123,7 +123,7 @@ class Table(GuiResultCommon):
     def get_location(self, i, unused_name):
         return self.location
 
-    def get_header(self, i, unused_name):
+    def get_annotation(self, i, unused_name):
         #j = self.titles_default.index(name)
         #return self.titles[j]
         return self.headers[i]
@@ -146,7 +146,7 @@ class Table(GuiResultCommon):
     def get_scale(self, i, name):
         return self.scales[i]
 
-    def get_title(self, i, name):
+    def get_legend_title(self, i, name):
         return self.titles[i]
 
     def get_min_max(self, i, name):
@@ -171,7 +171,7 @@ class Table(GuiResultCommon):
         #j = self.titles_default.index(name)
         self.phases[i] = phase
 
-    def set_title(self, i, name, title):
+    def set_legend_title(self, i, name, title):
         self.titles[i] = title
 
     def set_min_max(self, i, name, min_value, max_value):
@@ -186,7 +186,7 @@ class Table(GuiResultCommon):
         j = ntimes * imethod + itime
         return self.data_formats_default[j]
 
-    def get_default_min_max(self, i, name):
+    def get_default_min_max(self, i, name) -> tuple[float, float]:
         return self.default_mins[i], self.default_maxs[i]
 
     def get_nlabels_labelsize_ncolors_colormap(self, i, name):
@@ -199,7 +199,7 @@ class Table(GuiResultCommon):
         self.ncolors = ncolors
         self.colormap = colormap
 
-    #def get_default_min_max(self, i, name):
+    #def get_default_min_max(self, i, name) -> tuple[float, float]:
         #return self.min_default[i], self.max_default[i]
 
     def get_default_scale(self, i, name):
@@ -214,7 +214,7 @@ class Table(GuiResultCommon):
         # TODO: do this right
         return self.get_nlabels_labelsize_ncolors_colormap(i, name)
 
-    def get_default_title(self, i, name):
+    def get_default_legend_title(self, i, name):
         return self.titles_default[i]
 
     #-------------------------------------
@@ -225,14 +225,14 @@ class Table(GuiResultCommon):
         return self.data_type
 
     #def get_vector_size(self, i, unused_name):
-        #"""the result size"""
+        #"""vector_size=1 is the default and this vector has 3 components"""
         #print(i)
         #j = self.titles_default.index(name)
         #return 3
 
-    def get_plot_value(self, i, unused_name):
-        asdf
-        return self
+    #def get_plot_value(self, i, unused_name):
+        #asdf
+        #return self
         #if self.is_real:
             #if self.dim == 2:
                 #dxyz = self.dxyz
@@ -259,7 +259,7 @@ class Table(GuiResultCommon):
         #dxyz = self._get_complex_displacements_by_phase(i, self.phases[i])
         #return dxyz
 
-    #def get_result(self, i, name):
+    #def get_fringe_vector_result(self, i, name):
         #if self.is_real:
             #if self.dim == 2:
                 ## single result

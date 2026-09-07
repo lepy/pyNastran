@@ -1,4 +1,4 @@
-from numpy import loadtxt, argsort, allclose, vstack, array, abs, where
+import numpy as np
 
 
 def rpt_read():
@@ -18,12 +18,12 @@ def rpt_read():
             headers2.append(header)
     headers = headers2
     #headers2 = [header if header.strip() for header in headers]
-    print(headers)
+    # print(headers)
 
     i = 2
     j = 0
     res = 0
-    results = {0:[], 1:[]}
+    results = {0: [], 1: []}
     while i < len(lines):
         data = []
 
@@ -72,10 +72,10 @@ def main():
 
 
 def csv_simplify(csv_filename, x0, ix, iname, tol=0.05):
-    A = loadtxt(csv_filename, delimiter=',')
+    A = np.loadtxt(csv_filename, delimiter=',')
 
     with open(csv_filename + '2', 'wb') as csv_file:
-        isort = argsort(A[:, ix])
+        isort = np.argsort(A[:, ix])
         X = A[isort, ix]
         a_response = A[isort, iname]
 
@@ -92,11 +92,11 @@ def csv_simplify(csv_filename, x0, ix, iname, tol=0.05):
 
             # if the points are the same in the direction of interest, find the max
             print("x=%s x_orig=%s" % (x, x_orig))
-            if allclose(x, x_orig, atol=tol):
+            if np.allclose(x, x_orig, atol=tol):
                 if response is None:
                     response = a_response[i]
                 else:
-                    response = vstack((response, a_response[i]))
+                    response = np.vstack((response, a_response[i]))
                 update_flag = False
             else:
                 print("response = %s" % response)
@@ -109,11 +109,11 @@ def csv_simplify(csv_filename, x0, ix, iname, tol=0.05):
 
                     # abs(max), abs(min) + sign
                     if 0:
-                        values2 = array([response.max(),
+                        values2 = np.array([response.max(),
                                          response.min()])
 
                         # we figure out the absolute max/min
-                        abs_vals = abs(values2)
+                        abs_vals = np.abs(values2)
                         abs_val = abs_vals.max()
 
                         # find the location of the absolute max value
@@ -121,10 +121,10 @@ def csv_simplify(csv_filename, x0, ix, iname, tol=0.05):
                         #     return value since there is no else conditional
                         # 2.  we take the first value (the where[0][0]) to only
                         #     get the max value if 2+ values are returned
-                        j = where(abs_val == abs_vals)[0][0]
+                        j = np.where(abs_val == abs_vals)[0][0]
 
                         # get the raw value from the absoluted value, so:
-                        # value = abs(raw_value)
+                        # value = np.abs(raw_value)
                         response = response[j]
 
                 #print response1, response2
@@ -134,6 +134,7 @@ def csv_simplify(csv_filename, x0, ix, iname, tol=0.05):
                 #f.write("-------------------\n")
                 x_orig = X[i]
                 response = a_response[i]
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()

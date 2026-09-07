@@ -3,13 +3,16 @@ defines:
  - ClippingObject
 
 """
+from pyNastran.gui.qt_files.base_gui import BaseGui
 from pyNastran.gui.menus.clipping.clipping import ClippingPropertiesWindow
 
-class ClippingObject:
+
+class ClippingObject(BaseGui):
     """defines ClippingObject"""
     def __init__(self, gui):
         """creates ClippingObject"""
-        self.gui = gui
+        #self.gui = gui
+        super().__init__(gui)
         self._clipping_window_shown = False
         self._clipping_window = None
 
@@ -35,11 +38,11 @@ class ClippingObject:
         min_clip, max_clip = camera.GetClippingRange()
 
         data = {
-            'font_size' : self.gui.settings.font_size,
-            'min_clip' : min_clip,
-            'max_clip' : max_clip,
-            'clicked_ok' : False,
-            'close' : False,
+            'font_size': self.gui.settings.font_size,
+            'min_clip': min_clip,
+            'max_clip': max_clip,
+            'clicked_ok': False,
+            'close': False,
         }
         if not self._clipping_window_shown:
             self._clipping_window = ClippingPropertiesWindow(data, win_parent=self.gui)
@@ -70,5 +73,4 @@ class ClippingObject:
         if max_clip is None:
             max_clip = _max_clip
         camera.SetClippingRange(min_clip, max_clip)
-        self.gui.log_command('on_update_clipping(min_clip=%s, max_clip=%s)'
-                             % (min_clip, max_clip))
+        self.gui.log_command(f'self.clipping_obj.on_update_clipping(min_clip={min_clip}, max_clip={max_clip})')

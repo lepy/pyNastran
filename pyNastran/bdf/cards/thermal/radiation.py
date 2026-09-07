@@ -8,7 +8,7 @@ All set cards are defined in this file.  This includes:
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 import warnings
 
 from pyNastran.utils.numpy_utils import integer_types, float_types
@@ -23,6 +23,7 @@ from pyNastran.bdf.bdf_interface.assign_type import (
 from pyNastran.bdf.cards.thermal.thermal import ThermalBC
 if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 class RADM(ThermalBC):
@@ -40,7 +41,8 @@ class RADM(ThermalBC):
         emissivity = 1.0
         return RADM(radmid, absorb, emissivity, comment='')
 
-    def __init__(self, radmid, absorb, emissivity, comment=''):
+    def __init__(self, radmid: int, absorb: float, emissivity: list[float],
+                 comment: str=''):
         ThermalBC.__init__(self)
         if comment:
             self.comment = comment
@@ -59,16 +61,16 @@ class RADM(ThermalBC):
         msg = ''
         if self.absorb is not None:
             if not 0. <= self.absorb <= 1.0:
-                msg += 'absorb=%s not in range 0.0 <= absorb <= 1.0\n' % (self.absorb)
+                msg += f'absorb={self.absorb} not in range 0.0 <= absorb <= 1.0\n'
         for i, emissivityi in enumerate(self.emissivity):
             if not 0. <= emissivityi <= 1.0:
-                msg += 'emissivity[%i]=%s\n' % (i, emissivityi)
+                msg += f'emissivity[{i}]={emissivityi}\n'
         if msg:
             warnings.warn(msg + str(self))
             #raise RuntimeError(msg + str(self))
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RADM card from ``BDF.add_card(...)``
 
@@ -87,13 +89,13 @@ class RADM(ThermalBC):
         return RADM(radmid, absorb, emissivity, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a RADM card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -119,7 +121,7 @@ class RADM(ThermalBC):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 
@@ -142,11 +144,12 @@ class RADBC(ThermalBC):
     def _init_from_empty(cls):
         nodamb = 1
         famb = 1.0
-        cntrlnd = 10
+        control_node = 10
         eids = [1, 2]
-        return RADBC(nodamb, famb, cntrlnd, eids, comment='')
+        return RADBC(nodamb, famb, control_node, eids, comment='')
 
-    def __init__(self, nodamb, famb, cntrlnd, eids, comment=''):
+    def __init__(self, nodamb: int, famb: float, control_node: int,
+                 eids: list[int], comment: str=''):
         ThermalBC.__init__(self)
         if comment:
             self.comment = comment
@@ -159,7 +162,7 @@ class RADBC(ThermalBC):
         self.famb = famb
 
         #: Control point for thermal flux load. (Integer > 0; Default = 0)
-        self.cntrlnd = cntrlnd
+        self.control_node = control_node
 
         #: CHBDYi element identification number
         if isinstance(eids, int):
@@ -168,7 +171,7 @@ class RADBC(ThermalBC):
 
         assert self.nodamb > 0
         assert self.famb > 0.0
-        assert self.cntrlnd >= 0
+        assert self.control_node >= 0
         self.eids_ref = None
 
     def validate(self):
@@ -178,7 +181,7 @@ class RADBC(ThermalBC):
             warnings.warn(msg)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RADBC card from ``BDF.add_card(...)``
 
@@ -192,11 +195,11 @@ class RADBC(ThermalBC):
         """
         nodamb = integer(card, 1, 'nodamb')
         famb = double(card, 2, 'famb')
-        cntrlnd = integer_or_blank(card, 3, 'cntrlnd', 0)
+        control_node = integer_or_blank(card, 3, 'control_node', default=0)
 
         nfields = card.nfields
         eids = fields(integer_or_string, card, 'eid', i=4, j=nfields)
-        return RADBC(nodamb, famb, cntrlnd, eids, comment=comment)
+        return RADBC(nodamb, famb, control_node, eids, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -224,14 +227,14 @@ class RADBC(ThermalBC):
         return eids
 
     def raw_fields(self):
-        list_fields = (['RADBC', self.nodamb, self.famb, self.cntrlnd] +
+        list_fields = (['RADBC', self.nodamb, self.famb, self.control_node] +
                        self.Eids())
         return list_fields
 
     def repr_fields(self):
-        cntrlnd = set_blank_if_default(self.cntrlnd, 0)
+        control_node = set_blank_if_default(self.control_node, 0)
         eids = collapse_thru_by(self.Eids())
-        list_fields = ['RADBC', self.nodamb, self.famb, cntrlnd] + eids
+        list_fields = ['RADBC', self.nodamb, self.famb, control_node] + eids
         return list_fields
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
@@ -239,7 +242,7 @@ class RADBC(ThermalBC):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 
@@ -313,7 +316,7 @@ class VIEW(BaseCard):
         self.dislin = dislin
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a VIEW card from ``BDF.add_card(...)``
 
@@ -352,7 +355,7 @@ class VIEW(BaseCard):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 
@@ -438,7 +441,7 @@ class VIEW3D(BaseCard):
         self.rad_check = rad_check
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a VIEW3D card from ``BDF.add_card(...)``
 
@@ -451,13 +454,13 @@ class VIEW3D(BaseCard):
 
         """
         icavity = integer(card, 1, 'icavity')
-        gitb = integer_or_blank(card, 2, 'gitb', 4)
-        gips = integer_or_blank(card, 3, 'gips', 4)
-        cier = integer_or_blank(card, 4, 'cier', 4)
-        error_tol = double_or_blank(card, 5, 'error_tol', 0.1)
-        zero_tol = double_or_blank(card, 6, 'zero_tol', 1e-10)
-        warp_tol = double_or_blank(card, 7, 'warp_tol', 0.01)
-        rad_check = integer_or_blank(card, 8, 'rad_check', 3)
+        gitb = integer_or_blank(card, 2, 'gitb', default=4)
+        gips = integer_or_blank(card, 3, 'gips', default=4)
+        cier = integer_or_blank(card, 4, 'cier', default=4)
+        error_tol = double_or_blank(card, 5, 'error_tol', default=0.1)
+        zero_tol = double_or_blank(card, 6, 'zero_tol', default=1e-10)
+        warp_tol = double_or_blank(card, 7, 'warp_tol', default=0.01)
+        rad_check = integer_or_blank(card, 8, 'rad_check', default=3)
         return VIEW3D(icavity, gitb=gitb, gips=gips, cier=cier,
                       error_tol=error_tol, zero_tol=zero_tol, warp_tol=warp_tol,
                       rad_check=rad_check, comment=comment)
@@ -480,7 +483,7 @@ class VIEW3D(BaseCard):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 
@@ -517,9 +520,13 @@ class RADCAV(ThermalBC):
         return RADCAV(icavity, sets, ele_amb=None, shadow='YES', scale=0.0,
                       prtpch=None, nefci=None, rmax=0.1, ncomp=32, comment='')
 
-    def __init__(self, icavity, sets, ele_amb=None,
-                 shadow='YES', scale=0.0, prtpch=None,
-                 nefci=None, rmax=0.1, ncomp=32, comment=''):
+    def __init__(self, icavity: int, sets: list[int],
+                 ele_amb: Optional[int]=None,
+                 shadow: str='YES',
+                 scale: float=0.0,
+                 prtpch: Optional[int]=None,  # ???
+                 nefci: Optional[int]=None,  # ???
+                 rmax: float=0.1, ncomp: int=32, comment: str=''):
         ThermalBC.__init__(self)
         if comment:
             self.comment = comment
@@ -538,7 +545,7 @@ class RADCAV(ThermalBC):
         self.sets = sets
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a RADCAV card from ``BDF.add_card(...)``
 
@@ -552,35 +559,35 @@ class RADCAV(ThermalBC):
         """
         icavity = integer(card, 1, 'icavity')
         ele_amb = integer_or_blank(card, 2, 'ele_amb')
-        shadow = string_or_blank(card, 3, 'shadow', 'YES')
-        scale = double_or_blank(card, 4, 'scale', 0.0)
+        shadow = string_or_blank(card, 3, 'shadow', default='YES')
+        scale = double_or_blank(card, 4, 'scale', default=0.0)
         prtpch = integer_or_blank(card, 5, 'prtpch')
         nefci = string_or_blank(card, 6, 'nefci')
-        rmax = double_or_blank(card, 7, 'rmax', 1.0)
-        ncomp = integer_or_blank(card, 8, 'ncomp', 32)
+        rmax = double_or_blank(card, 7, 'rmax', default=1.0)
+        ncomp = integer_or_blank(card, 8, 'ncomp', default=32)
 
         sets = fields(integer, card, 'set', i=9, j=card.nfields)
         return RADCAV(icavity, sets, ele_amb=ele_amb,
                       shadow=shadow, scale=scale, prtpch=prtpch,
                       nefci=nefci, rmax=rmax, ncomp=ncomp, comment=comment)
 
-    #@classmethod
-    #def add_op2_data(cls, data, comment=''):
-        #"""
-        #Adds a RADM card from the OP2
+    # @classmethod
+    # def add_op2_data(cls, data, comment: str=''):
+    #     """
+    #     Adds a RADM card from the OP2
+    #
+    #     Parameters
+    #     ----------
+    #     data : list[varies]
+    #         a list of fields defined in OP2 format
+    #     comment : str; default=''
+    #         a comment for the card
+    #     """
+    #     radmid, absorb = data[:2]
+    #     emissivity = data[2:]
 
-        #Parameters
-        #----------
-        #data : List[varies]
-            #a list of fields defined in OP2 format
-        #comment : str; default=''
-            #a comment for the card
-        #"""
-        #radmid, absorb = data[:2]
-        #emissivity = data[2:]
-
-    #def cross_reference(self, model: BDF) -> None:
-        #pass
+    # def cross_reference(self, model: BDF) -> None:
+    #     pass
 
     def raw_fields(self):
         list_fields = ['RADCAV', self.icavity, self.ele_amb, self.shadow, self.scale,
@@ -597,7 +604,7 @@ class RADCAV(ThermalBC):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 
@@ -622,7 +629,7 @@ class RADLST(ThermalBC):
     +--------+---------+--------+------+-------+--------+-------+------+--------+
 
     """
-    type = 'RADCAV'
+    type = 'RADLST'
 
     @classmethod
     def _init_from_empty(cls):
@@ -630,7 +637,8 @@ class RADLST(ThermalBC):
         eids = [1, 2, 3]
         return RADLST(icavity, eids, matrix_type=1, comment='')
 
-    def __init__(self, icavity, eids, matrix_type=1, comment=''):
+    def __init__(self, icavity: int, eids: list[int],
+                 matrix_type: int=1, comment: str=''):
         ThermalBC.__init__(self)
         if comment:
             self.comment = comment
@@ -675,7 +683,7 @@ class RADLST(ThermalBC):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 
@@ -710,7 +718,8 @@ class RADMTX(ThermalBC):
         exchange_factors = [1., 2.]
         return RADMTX(icavity, index, exchange_factors, comment='')
 
-    def __init__(self, icavity, index, exchange_factors, comment=''):
+    def __init__(self, icavity: int, index: int,
+                 exchange_factors: list[float], comment: str=''):
         ThermalBC.__init__(self)
         if comment:
             self.comment = comment
@@ -756,7 +765,7 @@ class RADMTX(ThermalBC):
         The writer method used by BDF.write_card()
 
         Parameters
-        -----------
+        ----------
         size : int; default=8
             the size of the card (8/16)
 

@@ -1,4 +1,3 @@
-from typing import List
 import numpy as np
 from numpy import zeros, float32, searchsorted, empty
 from numpy import allclose, asarray, vstack
@@ -58,7 +57,7 @@ class ElementTableArray(BaseElement):  # displacement style table
                         t2 = table.data[itime, ieid, :]
                         (tx1, ty1, tz1, rx1, ry1, rz1) = t1
                         (tx2, ty2, tz2, rx2, ry2, rz2) = t2
-                        if not allclose(t1, t2):
+                        if not np.allclose(t1, t2):
                         #if not np.array_equal(t1, t2):
                             msg += '%s\n  (%s, %s, %s, %s, %s, %s)\n  (%s, %s, %s, %s, %s, %s)\n' % (
                                 eid,
@@ -85,8 +84,8 @@ class ElementTableArray(BaseElement):  # displacement style table
         self.data = append_sort1_sort2(self.data, result.data)
         #print(self._times)
         #print(result._times)
-        # self._times = hstack([self._times, result._times])
-        self.node_gridtype = vstack([self.node_gridtype, result.node_gridtype])
+        # self._times = np.hstack([self._times, result._times])
+        self.node_gridtype = np.vstack([self.node_gridtype, result.node_gridtype])
         #print('%s' % ''.join(self.get_stats()))
 
     def _get_msgs(self, is_mag_phase):
@@ -95,12 +94,12 @@ class ElementTableArray(BaseElement):  # displacement style table
     def data_type(self):
         raise NotImplementedError()
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
         #ngrids = len(self.gridTypes)
         msg = []
@@ -138,10 +137,7 @@ class ElementTableArray(BaseElement):  # displacement style table
     def headers(self):
         return ['t1', 't2', 't3', 'r1', 'r2', 'r3']
 
-    def _get_headers(self):
-        return self.headers
-
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
@@ -154,7 +150,6 @@ class ElementTableArray(BaseElement):  # displacement style table
         self.nelements //= self.ntimes
         self.itime = 0
         self.itotal = 0
-        self.is_built = True
 
         if self.is_sort1:
             ntimes = self.ntimes
@@ -170,17 +165,18 @@ class ElementTableArray(BaseElement):  # displacement style table
             ny = ntimes
             #print("ntotal=%s nelements=%s ntimes=%s" % (ntotal, nelements, ntimes))
 
-        self._times = zeros(ntimes, dtype=self._times_dtype)
-        #self.types = array(self.nelements, dtype='|S1')
+        self._times = np.zeros(ntimes, dtype=self._times_dtype)
+        #self.types = np.array(self.nelements, dtype='|S1')
 
-        self.element = zeros(nelements, dtype='int32')
-        self.element_data_type = empty(nelements, dtype='|U8')
+        self.element = np.zeros(nelements, dtype='int32')
+        self.element_data_type = np.empty(nelements, dtype='|U8')
 
         #[t1, t2, t3, r1, r2, r3]
-        self.data = zeros((nx, ny, 6), self.data_type())
+        self.data = np.zeros((nx, ny, 6), self.data_type())
 
     def add_sort1(self, dt, eid, etype, v1, v2, v3, v4, v5, v6):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         # itotal - the node number
         # itime - the time/frequency step
@@ -193,6 +189,7 @@ class ElementTableArray(BaseElement):  # displacement style table
         self.itotal += 1
 
     def add_sort2(self, dt, eid, etype, v1, v2, v3, v4, v5, v6):
+        assert self.is_sort2, self
         msg = "dt=%s eid=%s etype=%s v1=%s v2=%s v3=%s\n" % (dt, eid, etype, v1, v2, v3)
         msg += "                     v4=%s v5=%s v6=%s" % (v4, v5, v6)
         self._times[self.itotal] = dt
@@ -228,7 +225,7 @@ class RealElementTableArray(ElementTableArray):  # displacement style table
         return False
 
     @property
-    def nnodes_per_element(self) -> bool:
+    def nnodes_per_element(self) -> int:
         return 1
 
     def data_type(self) -> str:
@@ -365,11 +362,11 @@ class RealElementTableArray(ElementTableArray):  # displacement style table
         return page_num - 1
 
     def extract_xyplot(self, element_ids, index):
-        element_ids = asarray(element_ids, dtype='int32')
+        element_ids = np.asarray(element_ids, dtype='int32')
         i = index - 1
         assert index in [1, 2, 3, 4, 5, 6], index
         eids = self.element
-        ieids = searchsorted(eids, element_ids)
+        ieids = np.searchsorted(eids, element_ids)
         assert all(eids[ieids] == element_ids), 'nids=%s expected=%s; all=%s'  % (eids[ieids], element_ids, eids)
         return self.data[:, ieids, i]
 
@@ -391,12 +388,12 @@ class RealElementTableArray(ElementTableArray):  # displacement style table
         #else:
             #raise ValueError('index_str=%r' % index_str)
 
-        #node_ids = asarray(node_ids, dtype='int32')
+        #node_ids = np.asarray(node_ids, dtype='int32')
         #i = index - 1
         #assert index in [1, 2, 3, 4, 5, 6,
                          #7, 8, 9, 10, 11, 12], index
         #nids = self.node_gridtype[:, 0]
-        #inids = searchsorted(nids, node_ids)
+        #inids = np.searchsorted(nids, node_ids)
         #assert all(nids[inids] == node_ids), 'nids=%s expected=%s; all=%s'  % (nids[inids], node_ids, nids)
         #if j == 1:
             ## real
@@ -414,14 +411,14 @@ class RealElementTableArray(ElementTableArray):  # displacement style table
             #raise RuntimeError()
 
     #@property
-    #def is_real(self):
+    #def is_real(self) -> bool:
         #return False
 
     #@property
-    #def is_complex(self):
+    #def is_complex(self) -> bool:
         #return True
 
-    #def data_type(self):
+    #def data_type(self) -> str:
         #return 'complex64'
 
     ##def _write_f06_block(self, words, header, page_stamp, page_num, f06_file, is_mag_phase):
@@ -568,4 +565,3 @@ class RealElementTableArray(ElementTableArray):  # displacement style table
             #f06_file.write(page_stamp % page_num)
             #page_num += 1
         #return page_num
-

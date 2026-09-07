@@ -1,6 +1,7 @@
 from qtpy import QtCore
 from qtpy.QtWidgets import (
-    QVBoxLayout, QWidget, QDockWidget, QComboBox, QGridLayout, QSizePolicy, QLabel, QDialog,
+    QVBoxLayout, QWidget, QDockWidget, QComboBox,
+    QGridLayout, QSizePolicy, QLabel, QDialog,
     QPushButton,
 )
 #import matplotlib
@@ -241,5 +242,5 @@ def main():
     app.exec_()
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     main()

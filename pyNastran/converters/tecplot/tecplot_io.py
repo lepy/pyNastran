@@ -1,35 +1,41 @@
 """Defines the GUI IO file for Tecplot."""
-from collections import OrderedDict
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import numpy as np
-#from numpy import arange, mean, amax, amin, array
-from vtk import vtkHexahedron, vtkQuad, vtkTriangle, vtkTetra
+from pyNastran.gui.vtk_interface import vtkTriangle, vtkQuad, vtkTetra, vtkHexahedron
 
-from pyNastran.converters.tecplot.tecplot import read_tecplot
+from pyNastran.converters.tecplot.tecplot import read_tecplot, Tecplot
 #from pyNastran.converters.tecplot.utils import merge_tecplot_files
 from pyNastran.gui.gui_objects.gui_result import GuiResult
 from pyNastran.gui.utils.vtk.vtk_utils import numpy_to_vtk_points
+from vtkmodules.vtkCommonDataModel import vtkUnstructuredGrid
+from pyNastran.gui.utils.vtk.vectorized_geometry import (
+    build_vtk_geometry, create_offset_arrays)
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.gui.gui import MainWindow
 
 
 class TecplotIO:
-    def __init__(self, gui):
+    def __init__(self, gui: MainWindow):
         self.gui = gui
 
-    def _remove_old_cart3d_geometry(self, tecplot_filename):
+    def _remove_old_tecplot_geometry(self, tecplot_filename: str) -> None:
         pass
 
     def get_tecplot_wildcard_geometry_results_functions(self):
-        data = ('Tecplot Binary FEBlock',
-                'Tecplot Binary FEBlock (*.dat; *.plt; *.tec)', self.load_tecplot_geometry,
+        data = ('Tecplot',
+                'Tecplot (*.dat; *.plt; *.tec)', self.load_tecplot_geometry,
                 None, None)
         return data
 
-    def load_tecplot_geometry(self, tecplot_filename, name='main', plot=True):
+    def load_tecplot_geometry(self, tecplot_filename: str, name: str='main',
+                              plot: bool=True) -> None:
         model_name = name
         #key = self.case_keys[self.icase]
         #case = self.result_cases[key]
 
-        skip_reading = self._remove_old_cart3d_geometry(tecplot_filename)
+        skip_reading = self._remove_old_tecplot_geometry(tecplot_filename)
         #skip_reading = False
         if skip_reading:
             return
@@ -39,7 +45,13 @@ class TecplotIO:
             #fnames = [os.path.join('time20000', fname) for fname in fnames]
             #model = merge_tecplot_files(fnames, tecplot_filename_out=None, log=self.log)
         #else:
-        model = read_tecplot(tecplot_filename, log=self.gui.log, debug=False)
+        zones_to_exclude = None
+        zones_to_include = None
+        #zones_to_exclude = [0, 5, 6, 9, 10]
+        #zones_to_include = np.array([54, 55, 56, 57, 58, 59, 60, 61]) - 1
+        model = read_tecplot(tecplot_filename, log=self.gui.log, debug=False,
+                             zones_to_exclude=zones_to_exclude,
+                             zones_to_include=zones_to_include)
 
         self.gui.model_type = 'tecplot'
         self.gui.nnodes = sum([zone.nnodes for zone in model.zones])
@@ -49,7 +61,7 @@ class TecplotIO:
             break
 
         #self._make_tecplot_geometry(model, self.nnodes, quads_only=True) # cart3d
-        is_surface = self._make_tecplot_geometry(model, quads_only=False)
+        is_surface, zone_ids = self._make_tecplot_geometry(model, quads_only=False)
 
         #self._create_cart3d_free_edegs(model, nodes, elements)
 
@@ -66,10 +78,11 @@ class TecplotIO:
         else:
             note = ''
         self.gui.isubcase_name_map = {1: ['Tecplot%s' % note, '']}
-        cases = OrderedDict()
+        cases = {}
         ID = 1
 
-        form, cases, node_ids, element_ids = self._fill_tecplot_case(cases, ID, model, variables, is_surface)
+        form, cases, node_ids, element_ids = self._fill_tecplot_case(
+            cases, ID, model, variables, zone_ids, is_surface)
         self.gui.node_ids = node_ids
         self.gui.element_ids = element_ids
         self.gui._finish_results_io2(model_name, form, cases)
@@ -85,7 +98,7 @@ class TecplotIO:
             #appendFilter.AddInputData()
             #appendFilter.Update()
 
-    def _make_tecplot_geometry(self, model, quads_only=False):
+    def _make_tecplot_geometry(self, model: Tecplot, quads_only=False):
         """
         Returns
         -------
@@ -93,97 +106,11 @@ class TecplotIO:
             the model is made up of only shells (not 100%)
         """
         grid = self.gui.grid
-        nnodes = self.gui.nnodes
-        nodes = np.zeros((nnodes, 3), dtype='float32')
+        #nnodes = self.gui.nnodes
         #print('nnodes=', nnodes)
 
-        inode = 0
-
-        quads = []
-        tris = []
-        tets = []
-        hexas = []
-        for zone in model.zones:
-            nodes2d = zone.xy
-            nodes3d = zone.xyz
-            nnodes2d = nodes2d.shape[0]
-            nnodes3d = nodes3d.shape[0]
-
-            # elements
-            if 'I' in zone.headers_dict:
-                i = zone.headers_dict['I']
-                if 'J' in zone.headers_dict:
-                    j = zone.headers_dict['J']
-                    if 'K' in zone.headers_dict:
-                        k = zone.headers_dict['K']
-                        nnodes = i * j * k
-                        elements = np.arange(0, nnodes).reshape(k, j, i)
-                        #print(elements[0, :, :])
-                        #print(elements[1:, :, :])
-                        n1 = elements[:-1, :-1, :-1].ravel()
-                        n2 = elements[:-1, :-1, 1:].ravel()
-                        n3 = elements[:-1, 1:, 1:].ravel()
-                        n4 = elements[:-1, 1:, :-1].ravel()
-
-                        n5 = elements[1:, :-1, :-1].ravel()
-                        n6 = elements[1:, :-1, 1:].ravel()
-                        n7 = elements[1:, 1:, 1:].ravel()
-                        n8 = elements[1:, 1:, :-1].ravel()
-                        #nhexas = (i - 1) * (j - 1) * (k - 1)
-                        quadsi = []
-                        hexasi = np.vstack([n1, n2, n3, n4, n5, n6, n7, n8]).T
-                    else:
-                        nnodes = i * j
-                        elements = np.arange(0, nnodes).reshape(j, i)
-                        #print('elements:')
-                        #print(elements)
-                        n1 = elements[:-1, :-1].ravel()
-                        n2 = elements[:-1, 1:].ravel()
-                        n3 = elements[1:, 1:].ravel()
-                        n4 = elements[1:, :-1].ravel()
-                        #nquads = (i - 1) * (j - 1)
-                        quadsi = np.vstack([n1, n2, n3, n4]).T
-                        hexasi = []
-                    #trisi = None
-                    #tetsi = None
-                    #hexasi = None
-                    trisi = []
-                    tetsi = []
-            else:
-                quadsi = zone.quad_elements
-                hexasi = zone.hexa_elements
-                tetsi = zone.tet_elements
-                trisi = zone.tri_elements
-
-            if len(quadsi):
-                quads.append(inode + quadsi)
-            if len(trisi):
-                tris.append(inode + trisi)
-            if len(tetsi):
-                tets.append(inode + tetsi)
-            if len(hexasi):
-                hexas.append(inode + hexasi)
-
-            # nodes
-            if nnodes2d and nnodes3d:
-                raise RuntimeError('2d and 3d nodes is not supported')
-            elif nnodes2d:
-                nodes[inode:inode+nnodes2d, :2] = nodes2d
-                inode += nnodes2d
-            elif nnodes3d:
-                nodes[inode:inode+nnodes3d] = nodes3d
-                inode += nnodes3d
-            else:  # pragma: no cover
-                raise RuntimeError('failed to find 2d/3d nodes')
-            #print('inode', inode)
-            #print(nodes)
-            #print('-------------')
-        #print('stack', len(quads))
-        quads = stack(quads)
-        tris = stack(tris)
-        tets = stack(tets)
-        hexas = stack(hexas)
-
+        nodes, tris, quads, tets, hexas, zone_ids, names = model.stack_geometry()
+        model.log.info(f'names = {names}')
         nquads = len(quads)
         ntris = len(tris)
         nhexas = len(hexas)
@@ -206,17 +133,26 @@ class TecplotIO:
             #else:
             is_surface = False
             grid = self.gui.grid
-            nelements = _create_tecplot_solids(grid, zone, nsolids, ntets, tets, nhexas, hexas,
-                                               is_surface=is_surface)
+            nelements = _create_tecplot_solids(
+                grid, model,
+                ntets, tets,
+                nhexas, hexas,
+                is_surface=is_surface)
             self.gui.nelements = nelements
-        else:
-            raise NotImplementedError()
+        else:  # pragma: no cover
+            raise NotImplementedError('shells or solids only\n'
+                                      f'ntris={ntris} nquads={nquads}; ntets={ntets}; nhexas={nhexas}')
 
         #----------------------------------------------
         #print('nnodes', nnodes, inode)
-        mmax = np.amax(nodes, axis=0)
-        mmin = np.amin(nodes, axis=0)
+        mmax = nodes.max(axis=0)
+        mmin = nodes.min(axis=0)
         dim_max = (mmax - mmin).max()
+        xmax, ymax, zmax = mmax
+        xmin, ymin, zmin = mmin
+        self.gui.log_info("xmin=%s xmax=%s dx=%s" % (xmin, xmax, xmax-xmin))
+        self.gui.log_info("ymin=%s ymax=%s dy=%s" % (ymin, ymax, ymax-ymin))
+        self.gui.log_info("zmin=%s zmax=%s dz=%s" % (zmin, zmax, zmax-zmin))
         self.gui.create_global_axes(dim_max)
 
         #print('nodes', nodes)
@@ -225,7 +161,7 @@ class TecplotIO:
 
         grid.SetPoints(points)
         grid.Modified()
-        return is_surface
+        return is_surface, zone_ids
 
     def clear_tecplot(self):
         pass
@@ -234,7 +170,7 @@ class TecplotIO:
         #model = Cart3D(log=self.log, debug=False)
         #self.load_cart3d_geometry(cart3d_filename)
 
-    def _fill_tecplot_case(self, cases, ID, model, variables, is_surface):
+    def _fill_tecplot_case(self, cases, ID, model, variables, zone_ids, is_surface: bool):
         #'x', 'y', 'z',
         #result_names = ['rho', 'U', 'V', 'W', 'p']
         #result_names = zone.variables[3:]
@@ -256,6 +192,7 @@ class TecplotIO:
         geometry_form = [
             ('NodeID', 0, []),
             (element_id, 1, []),
+            ('ZoneID', 2, []),
         ]
         assert isinstance(nnodes, int), 'nnodes=%s type=%s' % (nnodes, type(nnodes))
         assert isinstance(nelements, int), 'nelements=%s type=%s' % (nelements, type(nelements))
@@ -269,25 +206,26 @@ class TecplotIO:
                             location='node', scalar=nids)
         eid_res = GuiResult(ID, header=element_id, title=element_id,
                             location='centroid', scalar=eids)
+        zone_res = GuiResult(ID, header='ZoneID', title='ZoneID',
+                            location='centroid', scalar=zone_ids)
+
 
         icase = 0
         cases[icase] = (nid_res, (0, 'NodeID'))
         cases[icase + 1] = (eid_res, (0, element_id))
-        icase += 2
+        cases[icase + 2] = (zone_res, (0, 'ZoneID'))
+        icase += 3
 
         nvars = len(variables)
         if model.nzones == 1:
             zone0 = model.zones[0]
             results = zone0.nodal_results
         else:
-            results = []
-            for zonei in model.zones:
-                results.append(zonei.nodal_results)
-            results = np.vstack(results)
-            assert results.shape == (nnodes, nvars), results.shape
+            results = model.stack_results()
+            #assert results.shape == (nnodes, nvars), results.shape
 
         if is_results and nvars:
-            for iresult, result_name in enumerate(variables):
+            for iresult, result_name in enumerate(variables[3:]):
                 #if results.shape[1] == 1:
                     #nodal_data = results
                     #assert len(variables) == 1, variables
@@ -307,29 +245,45 @@ class TecplotIO:
             form.append(('Results', None, results_form))
         return form, cases, nids, eids
 
-def _create_tecplot_shells(grid, is_quads, quads, is_tris, tris):
-    if is_quads:
+def _create_tecplot_shells(ugrid: vtkUnstructuredGrid,
+                           nquad: int, quads: np.ndarray,
+                           ntri: int, tris: np.ndarray):
+    null_grid_id = np.array([])
+    cell_offset0 = 0
+    cell_offset_list = []
+    cell_type_list = []
+    n_nodes_list = []
+    if nquad:
         #elem.GetCellType() = 9  # vtkQuad
-        for face in quads:
-            elem = vtkQuad()
-            epoints = elem.GetPointIds()
-            epoints.SetId(0, face[0])
-            epoints.SetId(1, face[1])
-            epoints.SetId(2, face[2])
-            epoints.SetId(3, face[3])
-            grid.InsertNextCell(9, epoints)
+        cell_type = 9
+        dnode = 4
+        cell_offset0, n_nodesi, cell_typei, cell_offseti = create_offset_arrays(
+            null_grid_id, quads, nquad, cell_type, cell_offset0, dnode)
+        n_nodes_list.append(n_nodesi)
+        cell_type_list.append(cell_typei)
+        cell_offset_list.append(cell_offseti)
 
-    if is_tris:
+    if ntri:
         #elem.GetCellType() = 5  # vtkTriangle
-        for face in tris:
-            elem = vtkTriangle()
-            epoints = elem.GetPointIds()
-            epoints.SetId(0, face[0])
-            epoints.SetId(1, face[1])
-            epoints.SetId(2, face[2])
-            grid.InsertNextCell(5, epoints)
+        cell_type = 5
+        dnode = 3
+        cell_offset0, n_nodesi, cell_typei, cell_offseti = create_offset_arrays(
+            null_grid_id, tris, ntri, cell_type, cell_offset0, dnode)
+        n_nodes_list.append(n_nodesi)
+        cell_type_list.append(cell_typei)
+        cell_offset_list.append(cell_offseti)
 
-def _create_tecplot_solids(grid, model, nsolids, ntets, tets, nhexas, hexas, is_surface=True):
+    n_nodes = np.hstack(n_nodes_list)
+    cell_type = np.hstack(cell_type_list)
+    cell_offset = np.hstack(cell_offset_list)
+    nelement_total = nquad + ntri
+    build_vtk_geometry(nelement_total, ugrid, n_nodes, cell_type, cell_offset)
+
+def _create_tecplot_solids(ugrid: vtkUnstructuredGrid,
+                           model: Tecplot,
+                           ntet: int, tets: np.ndarray,
+                           nhexa: int, hexas: np.ndarray,
+                           is_surface: bool=True):
     """
     add a model with solid elements
 
@@ -339,68 +293,58 @@ def _create_tecplot_solids(grid, model, nsolids, ntets, tets, nhexas, hexas, is_
         True : skin the model (good for large models, but doesn't load everything)
         False : load the model normally
     """
+    nelement_total = ntet + nhexa
+    null_grid_id = np.array([])
+    cell_offset0 = 0
+    cell_offset_list = []
+    cell_type_list = []
+    n_nodes_list = []
     if is_surface:
-        if nhexas:
+        nfaces = 0
+        if nhexa:
             free_faces = np.array(model.get_free_faces(), dtype='int32')# + 1
-            nfaces = len(free_faces)
-            nelements = nfaces
-            unused_elements = free_faces
-            grid.Allocate(nfaces, 1000)
+            nfaces += len(free_faces)
 
-            #elem.GetCellType() = 9  # vtkQuad
-            for face in free_faces:
-                elem = vtkQuad()
-                epoints = elem.GetPointIds()
-                epoints.SetId(0, face[0])
-                epoints.SetId(1, face[1])
-                epoints.SetId(2, face[2])
-                epoints.SetId(3, face[3])
-                grid.InsertNextCell(9, epoints)
+            # elem.GetCellType() = 9  # vtkQuad
+            cell_type = 9
+            dnode = 4
+            nquad = len(free_faces)
+            quads = free_faces
+            cell_offset0, n_nodesi, cell_typei, cell_offseti = create_offset_arrays(
+                null_grid_id, quads, nquad, cell_type, cell_offset0, dnode)
+            n_nodes_list.append(n_nodesi)
+            cell_type_list.append(cell_typei)
+            cell_offset_list.append(cell_offseti)
+        nelement_total = nfaces
     else:
         # is_volume
-        grid.Allocate(nsolids, 1000)
-        nelements = nsolids
-        if ntets:
-            for node_ids in tets:
-                elem = vtkTetra()
-                epoints = elem.GetPointIds()
-                epoints.SetId(0, node_ids[0])
-                epoints.SetId(1, node_ids[1])
-                epoints.SetId(2, node_ids[2])
-                epoints.SetId(3, node_ids[3])
-                #elem.GetCellType() = 5  # vtkTriangle
-                grid.InsertNextCell(elem.GetCellType(), epoints)
 
+        # vtkTetra = 10
+        nelement_total = ntet + nhexa
+        if ntet:
+            # elem.GetCellType() = 10 # vtkTetra
+            cell_type = 10
+            dnode = 4
+            cell_offset0, n_nodesi, cell_typei, cell_offseti = create_offset_arrays(
+                null_grid_id, tets, ntet, cell_type, cell_offset0, dnode)
+            n_nodes_list.append(n_nodesi)
+            cell_type_list.append(cell_typei)
+            cell_offset_list.append(cell_offseti)
 
-        if nhexas:
-            for node_ids in hexas:
-                elem = vtkHexahedron()
-                epoints = elem.GetPointIds()
-                epoints.SetId(0, node_ids[0])
-                epoints.SetId(1, node_ids[1])
-                epoints.SetId(2, node_ids[2])
-                epoints.SetId(3, node_ids[3])
-                epoints.SetId(4, node_ids[4])
-                epoints.SetId(5, node_ids[5])
-                epoints.SetId(6, node_ids[6])
-                epoints.SetId(7, node_ids[7])
-                #elem.GetCellType() = 5  # vtkTriangle
-                grid.InsertNextCell(elem.GetCellType(), epoints)
-    assert nelements > 0, nelements
-    return nelements
+        if nhexa:
+            # elem.GetCellType() = 12 # vtkHexahedron
+            cell_type = 12
+            dnode = 8
+            cell_offset0, n_nodesi, cell_typei, cell_offseti = create_offset_arrays(
+                null_grid_id, hexas, nhexa, cell_type, cell_offset0, dnode)
+            n_nodes_list.append(n_nodesi)
+            cell_type_list.append(cell_typei)
+            cell_offset_list.append(cell_offseti)
+    assert nelement_total > 0, nelement_total
 
-
-def stack(elements):
-    if len(elements) == 0:
-        pass
-    elif len(elements) == 1:
-        elements = elements[0]
-        #print(elements)
-    else:
-        #print('----stack------')
-        #for elementsi in elements:
-            #print(elementsi)
-        #print('----stack------')
-
-        elements = np.vstack(elements)
-    return elements
+    n_nodes = np.hstack(n_nodes_list)
+    cell_type = np.hstack(cell_type_list)
+    cell_offset = np.hstack(cell_offset_list)
+    build_vtk_geometry(nelement_total, ugrid,
+                       n_nodes, cell_type, cell_offset)
+    return nelement_total

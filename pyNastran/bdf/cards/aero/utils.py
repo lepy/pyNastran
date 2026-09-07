@@ -4,13 +4,25 @@ defines:
  - points, elements = points_elements_from_quad_points(p1, p2, p3, p4, x, y, dtype='int32')
 
 """
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import numpy as np
 from pyNastran.utils.numpy_utils import float_types
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.bdf.bdf import BDF
 
-def elements_from_quad(nx, ny, dtype='int32'):
+
+def elements_from_quad(nx: int, ny: int, dtype: str='int32'):
     """
     Creates an array of rectilinear mesh of nodes and then
     grabs indexs it to get the elements
+
+    Parameters
+    ----------
+    nx / ny : int
+        number of nodes in the x/y directions
+    dtype: str; default='int32'
+        the type of the integer
 
     """
     assert nx > 1
@@ -32,6 +44,8 @@ def elements_from_quad(nx, ny, dtype='int32'):
 
 def tri_cap(nelements):
     """
+    The tri_cap buils triangles that fan out from the first node
+
     ::
 
       1
@@ -54,6 +68,10 @@ def tri_cap(nelements):
     elements[:len(ipoints)-1, 1] = ipoints[1:]
     elements[:len(ipoints)-1, 2] = np.hstack([ipoints[2:], 1])
     return elements
+
+#def points_elements_from_quad_points_new(p1, p2, p3, p4, x, y, dtype='int32'):
+    #"""the function doesn't work correctly..."""
+    #return points_elements_from_quad_points(p1, p4, p3, p2, y, x, dtype='int32')
 
 def points_elements_from_quad_points(p1, p2, p3, p4, x, y, dtype='int32'):
     """
@@ -84,6 +102,7 @@ def points_elements_from_quad_points(p1, p2, p3, p4, x, y, dtype='int32'):
     elements (nquads, 4) int ndarray
         series of quad elements
         nquads = (nchord-1) * (nspan-1)
+
     """
     nx = x.shape[0]
     ny = y.shape[0]
@@ -118,7 +137,7 @@ def points_elements_from_quad_points(p1, p2, p3, p4, x, y, dtype='int32'):
     return points, elements
 
 def create_axisymmetric_body(xstation, ystation, zstation, radii, aspect_ratio,
-                             p1):
+                             p1, thetas=None):
     """creates a CAERO2-type body by defining cone properties at various stations"""
     #Rs = []
     xs = []
@@ -141,7 +160,7 @@ def create_axisymmetric_body(xstation, ystation, zstation, radii, aspect_ratio,
 
     for xi, yi, zi, radius, aspect_ratioi in zip(xstation, ystation, zstation, radii, aspect_ratio):
         #print('  station=%s xi=%.4f radius=%s' % (i, xi, radius))
-        yz = create_ellipse(aspect_ratioi, radius, thetas=None)
+        yz = create_ellipse(aspect_ratioi, radius, thetas=thetas)
         yzs.append(yz)
         try:
             y = yz[:, 0] + yi
@@ -167,7 +186,7 @@ def create_axisymmetric_body(xstation, ystation, zstation, radii, aspect_ratio,
             np.hstack(ys),
             np.hstack(zs),
         ]).T + p1
-    except:
+    except Exception:
         print('xs =', xs.shape)
         print('ys =', ys.shape)
         print('zs =', zs.shape)
@@ -229,7 +248,7 @@ def create_ellipse(aspect_ratio, radius, thetas=None):
     return xy
 
 
-def make_monpnt1s_from_cids(model, nids, cids, cid_to_inids,
+def make_monpnt1s_from_cids(model: BDF, nids, cids, cid_to_inids,
                             delete_unused_coords=True):
     """
     Creates MONPNT1s, AECOMPs, and SET1s by a series of coordinate systems
@@ -240,12 +259,12 @@ def make_monpnt1s_from_cids(model, nids, cids, cid_to_inids,
         the model object
     nids : (nnodes, ) int ndarray
         all the nodes in the model
-    cid_to_inids : Dict[cid]=inids
+    cid_to_inids : dict[cid]=inids
         cid : int
             coord id
         inids : (nnodes_in_cid, ) int ndarray
             the indicies in nids in sorted order
-    cids : List[int]
+    cids : list[int]
         cids to create
     delete_unused_coords : bool; default=True
         delete coordinate systems from the model that aren't used
@@ -281,13 +300,36 @@ def make_monpnt1s_from_cids(model, nids, cids, cid_to_inids,
 
         ids = nidsi
         model.add_set1(cid, ids, is_skin=False, comment='')
-        aecomp_name = 'ae%i' % cid
+        aecomp_name = 'ae%d' % cid
         list_type = 'SET1'
         lists = [cid]
         model.add_aecomp(aecomp_name, list_type, lists, comment='')
 
-        name = 'c%i' % cid
+        name = 'c%d' % cid
         axes = '123456'
         model.add_monpnt1(name, label, axes, aecomp_name, [0., 0., 0.], cp=cid, cd=None, comment='')
         nnodes_old = nnodes
         origin_old = origin
+
+
+def build_trim_load_cases(model: BDF, trim_load_cases: list[tuple[str, int, float, float, Any]], aeqr: float=1.):
+    """
+    trim_load_cases = [
+        # subcase, name, trim_id, mach, q, label: value
+        (10, 'alpha=1', 10, 0.8, 1., {'ANGLEA': 1.,}),
+    ]
+    """
+    from pyNastran.bdf.case_control_deck import CaseControlDeck
+    cc = CaseControlDeck([], log=model.log)
+    model.case_control_deck = cc
+
+    for subcase_id, load_case_name, trim_id, mach, q, condition_dict in trim_load_cases:
+        subcase = cc.create_new_subcase(subcase_id)
+        subcase.add('TRIM', trim_id, [], 'STRESS-type')
+        labels = []
+        uxs = []
+        for label, ux in condition_dict.items():
+            labels.append(label)
+            uxs.append(ux)
+        model.add_trim(trim_id, mach, q, labels, uxs, aeqr=aeqr, trim_type=1, comment='')
+

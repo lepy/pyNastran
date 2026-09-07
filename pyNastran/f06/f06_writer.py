@@ -3,24 +3,46 @@ defines the F06Writer class and:
  - write_f06(...)
 """
 #pylint: disable=W0201,C0301,C0111
+from __future__ import annotations
 import os
 import sys
 import copy
 import getpass
+import warnings
+from pathlib import Path
 from datetime import date
-from collections import defaultdict
+from collections import defaultdict, Counter
 from traceback import print_exc
-from typing import Optional, List, Dict, Union
+from typing import Optional, cast, TextIO, TYPE_CHECKING
+
+import numpy as np
 
 import pyNastran
-from pyNastran.op2.op2_interface.op2_f06_common import OP2_F06_Common
-from pyNastran.op2.op2_interface.result_set import ResultSet
+from pyNastran.utils import object_attributes, PathLike, PurePath
 
-def make_stamp(title, today=None, build=None):
+from pyNastran.bdf.field_writer_8 import print_card_8
+
+from pyNastran.op2.tables.oee_energy.oee_objects import RealStrainEnergyArray
+from pyNastran.op2.tables.ogf_gridPointForces.ogf_objects import RealGridPointForcesArray
+from pyNastran.op2.op2_interface.internal_utils import get_result_length
+from pyNastran.op2.op2_interface.op2_f06_common import OP2_F06_Common
+from pyNastran.op2.op2_interface.result_set import ResultSet, add_results_of_exact_type
+from pyNastran.op2.result_objects.matrix import Matrix  # MatrixDict
+if TYPE_CHECKING:  # pragma: no cover
+    from cpylog import SimpleLogger
+    from pyNastran.bdf.bdf import BDF
+    from pyNastran.op2.op2 import OP2
+    from pyNastran.op2.op2_geom import OP2Geom
+    from pyNastran.op2.tables.onmd import NormalizedMassDensity
+
+
+def make_stamp(title: Optional[str],
+               today: Optional[date]=None,
+               build: Optional[str]=None) -> str:
     if title is None:
         title = ''
 
-    #lenghts = [7, 8, 5, 5, 3, 4, 4, 6, 9, 7, 8, 8]
+    #lengths = [7, 8, 5, 5, 3, 4, 4, 6, 9, 7, 8, 8]
     months = [' January', 'February', 'March', 'April', 'May', 'June',
               'July', 'August', 'September', 'October', 'November', 'December']
     if today is None:
@@ -42,36 +64,38 @@ def make_stamp(title, today=None, build=None):
 
 
 def make_f06_header() -> str:
-    spaces = ''
-    lines1 = [
-        spaces + '/* -------------------------------------------------------------------  */\n',
-        spaces + '/*                              PYNASTRAN                               */\n',
-        spaces + '/*                      - NASTRAN FILE INTERFACE -                      */\n',
-        spaces + '/*                                                                      */\n',
-        spaces + '/*              A Python reader/editor/writer for the various           */\n',
-        spaces + '/*                        NASTRAN file formats.                         */\n',
-        spaces + '/*                       Copyright (C) 2011-2020                        */\n',
-        spaces + '/*                             Steven Doyle                             */\n',
-        spaces + '/*                                                                      */\n',
-        spaces + '/*    This program is free software; you can redistribute it and/or     */\n',
-        spaces + '/*    modify it under the terms of the GNU Lesser General Public        */\n',
-        spaces + '/*    License as published by the Free Software Foundation;             */\n',
-        spaces + '/*    version 3 of the License.                                         */\n',
-        spaces + '/*                                                                      */\n',
-        spaces + '/*    This program is distributed in the hope that it will be useful,   */\n',
-        spaces + '/*    but WITHOUT ANY WARRANTY; without even the implied warranty of    */\n',
-        spaces + '/*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the      */\n',
-        spaces + '/*    GNU Lesser General Public License for more details.               */\n',
-        spaces + '/*                                                                      */\n',
-        spaces + '/*    You should have received a copy of the GNU Lesser General Public  */\n',
-        spaces + '/*    License along with this program; if not, write to the             */\n',
-        spaces + '/*    Free Software Foundation, Inc.,                                   */\n',
-        spaces + '/*    675 Mass Ave, Cambridge, MA 02139, USA.                           */\n',
-        spaces + '/* -------------------------------------------------------------------  */\n',
-        '\n']
+    pkg_path = Path(pyNastran.__path__[0])
+    license_path = pkg_path / '..' / 'LICENSE.md'
+    assert os.path.exists(license_path), license_path
+    with open(license_path, 'r') as license_file:
+        lines = license_file.readlines()[3:]
 
-    spaces = 46 * ' '
+    spaces = ''
+    dash = spaces + '/* -----------------------------------------------------------------------------  */\n'
+    lines1 = [dash]
+    center_lines = [
+        'PYNASTRAN',
+        '- NASTRAN FILE INTERFACE -',
+        '',
+        'A Python reader/editor/writer for the various',
+        'NASTRAN file formats.',
+        'Copyright (C) 2011-2026',
+        'Steven Doyle',
+        '',
+    ]
+    for line in center_lines:
+        lines1.append(spaces + f'/*  {line.rstrip():^76}  */\n')
+    for line in lines:
+        lines1.append(spaces + f'/*  {line.rstrip():76}  */\n')
+    lines1.extend([dash, '\n'])
+
     version = 'Version %8s' % pyNastran.__version__
+    star = '* * * * * * * * * * * * * * * * * * * *'
+    assert len(star) == 39, len(star)
+    nspaces = (86 - len(star)) // 2
+    # nspaces = 46
+    spaces = nspaces * ' '
+
     lines2 = [
         spaces + '* * * * * * * * * * * * * * * * * * * *\n',
         spaces + '* * * * * * * * * * * * * * * * * * * *\n',
@@ -88,10 +112,10 @@ def make_f06_header() -> str:
         spaces + '* *                                 * *\n',
         spaces + '* *          %15s        * *\n' % pyNastran.__releaseDate2__,
         spaces + '* *                                 * *\n',
-        spaces + '* *            Questions            * *\n',
-        spaces + '* *        mesheb82@gmail.com       * *\n',
-        spaces + '* *                                 * *\n',
-        spaces + '* *                                 * *\n',
+        # spaces + '* *            Questions            * *\n',
+        # spaces + '* *        mesheb82@gmail.com       * *\n',
+        # spaces + '* *                                 * *\n',
+        # spaces + '* *                                 * *\n',
         spaces + '* *                                 * *\n',
         spaces + '* * * * * * * * * * * * * * * * * * * *\n',
         spaces + '* * * * * * * * * * * * * * * * * * * *\n\n\n']
@@ -100,14 +124,14 @@ def make_f06_header() -> str:
 
 def sorted_bulk_data_header() -> str:
     """creates the bulk data echo header"""
-    msg = '0                                                 S O R T E D   B U L K   D A T A   E C H O                                         \n'
-    msg += '                 ENTRY                                                                                                              \n'
-    msg += '                 COUNT        .   1  ..   2  ..   3  ..   4  ..   5  ..   6  ..   7  ..   8  ..   9  ..  10  .                      \n'
+    msg = '0                                                 S O R T E D   B U L K   D A T A   E C H O\n'
+    msg += '                 ENTRY\n'
+    msg += '                 COUNT        .   1  ..   2  ..   3  ..   4  ..   5  ..   6  ..   7  ..   8  ..   9  ..  10  .\n'
     return msg
 
 
 def make_end(end_flag: bool=False,
-             options: Optional[Dict[str, str]]=None) -> str:
+             options: Optional[dict[str, str]]=None) -> str:
     """creates the F06 footer"""
     lines = []
     lines2 = []
@@ -127,23 +151,24 @@ def make_end(end_flag: bool=False,
         vers = 1
         approach = "'        '"
 
-        SELG = 'T'
-        SEMG = 'T'
-        SEMR = 'F'
-        if 'SEMR' in options:
-            SEMR = 'T' # modal
-        SEKR = 'T'
-        SELR = 'T'
-        MODES = 'F'
-        DYNRED = 'F'
+        SELG = 'T'  # load generaion
+        SEMG = 'T'  # mass, stiffnessgeneration
+
+        # mass reduction
+        SEMR = 'T' if ('SEMR' in options or 'MODES' in options) else 'F'  # modal
+
+        SEKR = 'T'  # stiffness reduction
+        SELR = 'T'  # load reduction
+        MODES = 'T' if 'MODES' in options else 'F'
+        DYNRED = 'T' if 'DYNRED' in options else 'F'
 
         SOLLIN = 'F'
         if 'SEMR' in options:
-            SOLLIN = 'T' # p-elements
-        PVALID = 0
-        SOLNL = 'F'
-        LOOPID = -1
-        CYCLE = 0
+            SOLLIN = 'T'  # linear solution
+        PVALID = 0  # p-elements
+        SOLNL = 'F'  # nonlinaer
+        LOOPID = -1  # nonlinear analysis loop
+        CYCLE = 0  # optimization
         SENSITIVITY = 'F'
 
         msg = '     %s     %s    %s    %s %8s    %s    %s    %s    %s    %s     %s      %s      %s      %s     %s     %s            %s           %s' % (
@@ -190,74 +215,115 @@ class F06Writer(OP2_F06_Common):
         self.additional_matrices = {}
         self.subcase_key = defaultdict(list)
         self.end_options = {}
+        self.build = None
 
         self._results = ResultSet(
             self.get_all_results(),
-            self.op2_results.get_sum_objects_map(),
+            self.op2_results._get_sum_objects_map(),
             self.log)
 
-    def get_all_results(self) -> List[str]:
-        all_results = ['stress', 'strain', 'element_forces', 'constraint_forces', 'thermal_load'] + self.get_table_types()
+    def get_all_results(self) -> list[str]:
+        all_results = [
+            # 'bolt_results',
+            'modal_contribution', 'solution_set',
+            'strength_ratio', 'failure_indices',
+            'strain_energy', 'kinetic_energy',
+            'RADEFFM', 'ROQGM1', 'ROUGV1',
+            'RAECONS', 'RASCONS', 'RAFCONS', 'RADCONS',
+            'RARCONS', 'RANCONS', 'RAPCONS', 'RAGCONS',
+            'RAFEATC', 'RADEATC', 'RAQCONS',
+            'RAGEATC', 'RAEEATC', 'RASEATC',
+            'RAQEATC', 'RAREATC', 'RANEATC', 'RAPEATC',
+            # 'psds',
+            'psd', 'ato', 'no', 'crm', 'rms',
+            'abs', 'nrl', 'srss',
+            'trmbd', 'trmbu', 'cstm',
+            'acoustic',
+            'stress', 'strain', 'stressa',
+            'elastic_strain', 'plastic_strain',
+            'thermal_strain', 'creep_strain',
+            'force', 'constraint_forces', 'thermal_load',
+            'nonlinear',
+            # 'vg_vf_response',
+            # 'superelement_tables',
+            ] + self.get_table_types()
+
+        counts = Counter(all_results)
+        duplicates = [item for item, count in counts.items() if count > 1]
+        assert len(duplicates) == 0, duplicates
         return all_results
 
     def clear_results(self) -> None:
         self._results.clear()
 
-    def add_results(self, results: Union[str, List[str]]) -> None:
+    def _add_results(self, results: str | list[str]) -> None:
+        """supports catch all classes...don't call this..."""
+        #self.log.warning(f'_add_results = {results}')
         if isinstance(results, str):
             results = [results]
         all_results = self.get_all_results()
         for result in results:
             result = str(result)
             if result not in all_results:
-                raise RuntimeError('%r is not a valid result to remove; all_results=%s' % (result, all_results))
+                all_results_str = get_all_results_string(all_results)
+                raise RuntimeError(f'all_results={all_results_str}\n{result!r} is not a valid result to remove')
             if result == 'stress':
-                stress_results = []
-                for result in all_results:
-                    if 'stress' in result.lower():
-                        stress_results.append(result)
-                #stress_results = [result if 'stress' in result.lower() for result in all_results]
+                stress_results = add_results_of_exact_type(all_results, 'stress')
+                #assert 'displacements' not in stress_results
                 self._results.update(stress_results)
+            elif result == 'stressa':
+                stressa_results = add_results_of_exact_type(all_results, 'stressa')
+                self._results.update(stressa_results)
             elif result == 'strain':
-                strain_results = []
-                for result in all_results:
-                    if 'strain' in result.lower():
-                        strain_results.append(result)
-                #strain_results = [result if 'strain' in result.lower() for result in all_results]
+                strain_results = add_results_of_exact_type(all_results, 'strain')
                 self._results.update(strain_results)
+            elif 'elastic_strain' in result.lower():
+                self._results.add('elastic_strain')
+            elif 'plastic_strain' in result.lower():
+                self._results.add('plastic_strain')
+            elif 'thermal_strain' in result.lower():
+                self._results.add('thermal_strain')
+            elif 'stressa' in result.lower():
+                self._results.add('stressa')
             elif 'stress' in result.lower():
                 self._results.add('stress')
             elif 'strain' in result.lower():
                 self._results.add('strain')
             elif result in ('spc_forces', 'mpc_forces', 'constraint_forces'):
                 self._results.add('constraint_forces')
-            elif 'force' in result.lower(): # could use more validation...
-                self._results.add('element_forces')
+            elif 'force' in result.lower():  # could use more validation...
+                self._results.add('force')
             # thermalLoad_VU_3D, thermalLoad_1D, conv_thermal_load, thermalLoad_2D_3D
             self._results.add(result)
+            #assert 'displacements' not in self._results.saved, result
 
-    def set_results(self, results: Union[str, List[str]]) -> None:
+    def set_results(self, results: str | list[str]) -> None:
+        #self.log.warning(f'set_results = {results}')
+        #assert 'displacements' not in results, results
         self.clear_results()
-        self.add_results(results)
+        results = self._results.add(results)
+        self._add_results(results)
 
-    def remove_results(self, results: Union[str, List[str]]) -> None:
+    def remove_results(self, results: str | list[str]) -> None:
         self._results.remove(results)
 
-    def make_f06_header(self):
+    def make_f06_header(self) -> str:
         """If this class is inherited, the F06 Header may be overwritten"""
         return make_f06_header()
 
-    def make_stamp(self, title, today, build=None):
+    def make_stamp(self, title: str,
+                   today: Optional[date],
+                   build: Optional[str]=None) -> str:
         """If this class is inherited, the PAGE stamp may be overwritten"""
-        return make_stamp(title, today, build=None)
+        return make_stamp(title, today, build=build)
 
-    def make_grid_point_singularity_table(self, failed):
+    def make_grid_point_singularity_table(self, failed: list[tuple[int, int]]) -> str:
         """
         creates a grid point singularity table
 
         Parameters
         ----------
-        failed : List[(nid, component), ...]
+        failed : list[(nid, component), ...]
             defines failed degrees of freedom
         """
         msg = ''
@@ -268,14 +334,15 @@ class F06Writer(OP2_F06_Common):
             for (nid, dof) in failed:
                 msg += '                         %8s        G      %s         0.00E+00          B        F         SB       SB   *\n' % (nid, dof)
         else:
-            msg += 'No constraints have been applied...\n'
+            #msg += 'No constraints have been applied...\n'
+            return ''
 
-        page_stamp = self.make_stamp(self.title, self.date)
+        page_stamp = self.make_stamp(self.title, self.date, self.build)
         msg += page_stamp % self.page_num
         self.page_num += 1
         return msg
 
-    def _write_summary(self, f06_file, card_count=None):
+    def _write_summary(self, f06_file, card_count=None) -> None:
         """writes the F06 card summary table"""
         summary_header = '                                        M O D E L   S U M M A R Y\n\n'
         summary = ''
@@ -297,7 +364,6 @@ class F06Writer(OP2_F06_Common):
             'CHBDYE', 'CHBDYG', 'CHBDYP',
             'CONV',
         }
-
 
         blocks = [
             ['POINTS', ['GRID', 'GRDSET', ]],
@@ -359,13 +425,16 @@ class F06Writer(OP2_F06_Common):
             f06_file.write(summary_header)
             f06_file.write(summary)
 
-            page_stamp = self.make_stamp(self.title, self.date)
+            page_stamp = self.make_stamp(self.title, self.date, self.build)
             f06_file.write(page_stamp % self.page_num)
+            f06_file.write('\n')
             self.page_num += 1
 
-    def write_f06(self, f06_outname: str, matrix_filename: Optional[str]=None,
+    def write_f06(self, f06_filename: PathLike,
+                  matrix_filename: Optional[str]=None,
                   is_mag_phase: bool=False, is_sort1: bool=True,
-                  delete_objects: bool=True, end_flag: bool=False,
+                  delete_objects: bool=False, end_flag: bool=False,
+                  write_cards: bool = False,
                   quiet: bool=True, repr_check: bool=False,
                   close: bool=True) -> None:
         """
@@ -373,11 +442,11 @@ class F06Writer(OP2_F06_Common):
 
         Parameters
         ----------
-        f06_outname : str
+        f06_filename : str
             the name of the F06 file to write
         matrix_filename : str; default=None
             str : the name of the .mat file to write
-            None : based on f06_outname
+            None : based on f06_filename
         is_mag_phase : bool; default=False
             should complex data be written using Magnitude/Phase
             instead of Real/Imaginary
@@ -389,37 +458,28 @@ class F06Writer(OP2_F06_Common):
             should objects be deleted after they're written to reduce memory
         end_flag : bool; default=False
             should a dummy Nastran "END" table be made
+        write_cards : bool; default=False
+            write a nastran header
         quiet : bool; default=False
             suppress print messages
-        repr_check: bool; defualt=False
+        repr_check: bool; default=False
             calls the object repr as a validation test (prints nothing)
         close : bool; default=True
             close the f06 file
+
         """
         if not quiet:
             print("F06:")
 
-        if isinstance(f06_outname, str):
-            if matrix_filename is None:
-                matrix_filename = os.path.splitext(f06_outname)[0] + '.mat'
-            #print("matrix_filename =", matrix_filename)
-            #mat = open(matrix_filename, 'wb')
+        f06, f06_filename, matrix_filename = _get_file_obj(
+            self, f06_filename, matrix_filename, quiet=quiet)
 
-            f06 = open(f06_outname, 'w')
+        page_stamp = self.make_stamp(self.title, self.date, self.build)
+
+        if write_cards:
+            self.page_num = write_bdf(self, f06, page_stamp, self.page_num)
             self._write_summary(f06)
-        elif hasattr(f06_outname, 'read') and hasattr(f06_outname, 'write'):
-            #f06 = f06_outname
-        #else:
-            #print('type(f06_outname) =', type(f06_outname))
-            #assert isinstance(f06_outname, file), 'type(f06_outname)= %s' % f06_outname
-            f06 = f06_outname
-            f06_outname = f06.name
-            if matrix_filename is None:
-                matrix_filename = os.path.splitext(f06_outname)[0] + '.mat'
-            if not quiet:
-                print('f06_outname =', f06_outname)
 
-        page_stamp = self.make_stamp(self.title, self.date)
         if self.grid_point_weight:
             if not quiet:
                 print(" grid_point_weight")
@@ -436,12 +496,17 @@ class F06Writer(OP2_F06_Common):
                 str(self.oload_resultant)
             assert isinstance(self.page_num, int), self.oload_resultant.__class__.__name__
 
+        self.page_num = _write_responses1(self, f06, page_stamp, self.page_num)
+        self.page_num = _write_responses2(self, f06, page_stamp, self.page_num)
+
         # writes all results for
-        self._write_f06_subcase_based(f06, page_stamp, delete_objects=delete_objects,
-                                      is_mag_phase=is_mag_phase, is_sort1=is_sort1,
-                                      quiet=quiet, repr_check=repr_check)
+        self._write_f06_subcase_based(
+            f06, page_stamp, delete_objects=delete_objects,
+            is_mag_phase=is_mag_phase, is_sort1=is_sort1,
+            quiet=quiet, repr_check=repr_check)
 
         self.op2_results.psds.write_f06(f06)
+        self._write_normalized_mass_density(f06)
 
         #self._write_f06_time_based(f06, page_stamp)
         self.write_matrices(f06, matrix_filename, page_stamp, self.page_num, quiet=quiet)
@@ -449,28 +514,84 @@ class F06Writer(OP2_F06_Common):
         if close:
             f06.close()
 
-    def write_matrices(self, f06, matrix_filename, page_stamp, page_num, quiet=True):
+    def write_matrices(self, f06, matrix_filename: str, page_stamp: str,
+                       page_num: int, quiet: bool=True):
         """writes the f06 matrices"""
-        if len(self.matrices):
-            if hasattr(self, 'monitor1'):
-                page_num = self.monitor1.write(f06, page_stamp=page_stamp, page_num=page_num)
-                self.log.debug('MONPNT1 from [PMRF, PERF, PFRF, AGRF]')
+        results = self.op2_results
+        #print(object_attributes(results))
+        #names = ['mklist']
+        #for key in names: # object_attributes(results):
+            #if not hasattr(results, key):
+                #continue
+        for key in object_attributes(results):
+            resi = getattr(results, key)
+            if resi is None or isinstance(resi, dict) and len(resi) == 0:
+                continue
 
-            with open(matrix_filename, 'wb') as mat:
-                for name, matrix in self.matrices.items():
-                    if name == 'MP3F':
-                        page_num = self.monitor3.write(f06, page_stamp=page_stamp, page_num=page_num)
-                        self.log.debug('MONPNT3 from MP3F')
-                    elif name in ['PMRF', 'PERF', 'PFRF', 'AGRF']:
-                        pass
+            if key == 'cddata':
+                f06.write(f'{key}:\n')
+                for subcase, obj in resi.items():
+                    obj.write_f06(f06)
+                continue
+
+            if isinstance(resi, list):
+                f06.write(f'{key}:\n')
+                for resii in resi:
+                    if isinstance(resii, np.ndarray):
+                        np.savetxt(f06, resii)
                     else:
-                        if not quiet:
-                            print(matrix)
-                        matrix.write(mat)
+                        raise RuntimeError(resii)
+                    #print('----')
+                #print('--------')
+                    #f06.write(str(resii) + '\n')
+            #print(key, type(resi))
 
-    def _write_f06_subcase_based(self, f06, page_stamp, delete_objects=True,
-                                 is_mag_phase=False, is_sort1=True, quiet=False,
-                                 repr_check=False):
+        if len(self.matrices) == 0:
+            return
+        log = self.log
+        if results.monitor1 is not None:
+            page_num = results.monitor1.write(
+                f06, page_stamp=page_stamp, page_num=page_num)
+            log.debug('MONPNT1 from [PMRF, PERF, PFRF, AGRF]')
+
+        with open(matrix_filename, 'w') as mat_file:
+            for name, matrix in self.matrices.items():  # type: Matrix
+                matrix = cast(Matrix, matrix)
+                if name == 'MP3F':
+                    page_num = results.monitor3.write(
+                        f06, page_stamp=page_stamp, page_num=page_num)
+                    log.debug('MONPNT3 from MP3F')
+                elif name in ['PMRF', 'PERF', 'PFRF', 'AGRF']:
+                    pass
+                else:
+                    if not quiet:
+                        print(matrix)
+                    matrix.write(mat_file)
+
+            responses = results.responses
+            desvars = responses.desvars
+            dscmcol = responses.dscmcol
+            print(responses)
+            if 'DSCM2' in self.matrices and desvars is not None and dscmcol is not None:
+                data = matrix.data.todense()
+                #print('dscmcol =', responses.dscmcol)
+                row_data1 = ', '.join(str(val) for val in dscmcol.external_ids)
+                row_data2 = ', '.join(str(val) for val in dscmcol.names)
+                col_data = ', '.join(desvars.label)
+                header = (
+                    f'rows (external DRESPx ID): {row_data1}\n'
+                    f'rows (external names): {row_data2}\n'
+                    f'columns: {col_data}\n'
+                )
+                np.savetxt(mat_file, data, header=header, delimiter=',')
+
+    def _write_f06_subcase_based(self, f06: TextIO,
+                                 page_stamp: str,
+                                 delete_objects=True,
+                                 is_mag_phase: bool=False,
+                                 is_sort1: bool=True,
+                                 quiet: bool=False,
+                                 repr_check: bool=False):
         """
         Helper function for ``write_f06`` that does the real work
 
@@ -493,24 +614,27 @@ class F06Writer(OP2_F06_Common):
             should objects be deleted after they're written to reduce memory
         quiet : bool; default=False
             suppress print messages
-        repr_check: bool; defualt=False
+        repr_check: bool; default=False
             calls the object repr as a validation test (prints nothing)
+
         """
-        is_failed = False
+        model = self
+        log = model.log
+        #is_failed = False
         header = ['     DEFAULT                                                                                                                        \n',
                   '\n', '']
 
         # eigenvalues are written first
-        f06.write(page_stamp % self.page_num)
         self.page_num += 1
-        for ikey, result in sorted(self.eigenvalues.items()):
+        for ikey, result in sorted(model.eigenvalues.items()):
+            # self.log.info(f'working on {result.__class__.__name__}')
             if not quiet:
                 print('%-18s case=%r' % (result.__class__.__name__, ikey))
             self.page_num = result.write_f06(f06, header, page_stamp,
                                              page_num=self.page_num)
             if repr_check:
                 str(result)
-            assert isinstance(self.page_num, int), 'pageNum=%r' % str(self.page_num)
+            assert isinstance(self.page_num, int), f'page_num={self.page_num!r}'
             if delete_objects:
                 del result
             self.page_num += 1
@@ -520,10 +644,11 @@ class F06Writer(OP2_F06_Common):
         # isubcases = sorted(self.isubcase_name_map.keys())
 
         # TODO: superelement version...need the nominal...
-        res_keys_subcase = self.subcase_key
+        res_keys_subcase = model.subcase_key
         if len(res_keys_subcase) == 0:
-            self.log.warning('no cases to write...self.subcase_key=%r' % self.subcase_key)
+            log.warning('no cases to write...subcase_key=%r' % model.subcase_key)
             return
+
         for isubcase, res_keys in sorted(res_keys_subcase.items()):
             for res_key in res_keys:
                 if isinstance(res_key, tuple):
@@ -534,9 +659,9 @@ class F06Writer(OP2_F06_Common):
                     #is_compressed = True
                     isubcase = res_key
 
-                if res_key not in self.eigenvectors:
+                if res_key not in model.eigenvectors:
                     continue
-                result = self.eigenvectors[res_key]
+                result = model.eigenvectors[res_key]
                 if repr_check:
                     str(result)
                 subtitle = result.subtitle
@@ -545,8 +670,8 @@ class F06Writer(OP2_F06_Common):
                 #header[2] = complex/nonlinear
 
                 res_length = 18
-                res_format = '*%%-%is SUBCASE=%%i' % res_length
-                res_format_vectorized = ' %%-%is SUBCASE=%%i SUBTITLE=%%s' % res_length
+                res_format = '*%%-%is SUBCASE=%%d' % res_length
+                res_format_vectorized = ' %%-%is SUBCASE=%%d SUBTITLE=%%s' % res_length
                 class_name = result.__class__.__name__
                 if hasattr(result, 'data'):
                     if not quiet:
@@ -554,9 +679,13 @@ class F06Writer(OP2_F06_Common):
                 else:
                     print(res_format % (class_name, isubcase))
 
-                self.page_num = result.write_f06(f06, header, page_stamp,
-                                                 self.page_num, is_mag_phase=is_mag_phase, is_sort1=True)
-                assert isinstance(self.page_num, int), 'pageNum=%r' % str(self.page_num)
+                _check_combination(result, log)
+                self.page_num = result.write_f06(
+                    f06, header, page_stamp,
+                    self.page_num, is_mag_phase=is_mag_phase,
+                    is_sort1=True)
+                #check_element_node(result)
+                assert isinstance(self.page_num, int), f'page_num={self.page_num!r}'
                 if delete_objects:
                     del result
                 self.page_num += 1
@@ -569,10 +698,15 @@ class F06Writer(OP2_F06_Common):
         header_old = ['     DEFAULT                                                                                                                        \n',
                       '\n', ' \n']
         header = copy.deepcopy(header_old)
-        unallowed_results = ['eigenvectors', 'eigenvalues', 'params', 'gpdt', 'bgpdt', 'eqexin',
-                             'grid_point_weight', 'psds']
-        res_types = list(self.get_result(table_type) for table_type in sorted(self.get_table_types())
-                         if table_type not in unallowed_results and not table_type.startswith('responses.'))
+        unallowed_results = [
+            'eigenvectors', 'eigenvalues', 'params', 'gpdt', 'bgpdt', 'eqexin',
+            'grid_point_weight', 'psds', 'monitor1', 'monitor3',
+            'cstm',
+        ]
+        res_types = [model.get_result(table_type)
+                     for table_type in sorted(model.get_table_types())
+                     if table_type not in unallowed_results and
+                     not table_type.startswith('responses.')]
 
         for isubcase, res_keys in sorted(res_keys_subcase.items()):
             for res_key in res_keys:
@@ -581,7 +715,7 @@ class F06Writer(OP2_F06_Common):
                 #else:
                     #is_compressed = True
 
-                res_length = self._get_result_length(res_types, res_key)
+                res_length = get_result_length(self, res_types, res_key)
                 if res_length == 0:
                     # skipped subcase; no saved results
                     continue
@@ -594,6 +728,7 @@ class F06Writer(OP2_F06_Common):
                         continue
 
                     result = res_type[res_key]
+                    # print(f'res_key = {res_key}')
                     if repr_check:
                         str(result)
                     subtitle = result.subtitle
@@ -614,7 +749,7 @@ class F06Writer(OP2_F06_Common):
                             is_ignored = 'StrainEnergy' not in class_name and 'GridPointForces' not in class_name
                             has_nnodes = not hasattr(result, 'nnodes_per_element')
                             if has_nnodes and is_ignored and getpass.getuser() == 'sdoyle':
-                                self.log.error(f'{class_name} is missing nnodes_per_element')
+                                log.error(f'{class_name} is missing nnodes_per_element')
 
                         if hasattr(result, 'data'):
                             if not quiet:
@@ -623,9 +758,10 @@ class F06Writer(OP2_F06_Common):
                         else:
                             print(res_format % (class_name, isubcase, element_name))
 
+                        #log.error(f'result = {result}')
                         result.is_complex
                         result.is_real
-
+                        #check_element_node(result)
                         try:
                             self.page_num = result.write_f06(
                                 f06, header, page_stamp, page_num=self.page_num,
@@ -636,10 +772,330 @@ class F06Writer(OP2_F06_Common):
                             raise
 
                         #assert 'table_name=' in ''.join(result.get_stats())
-                        assert isinstance(self.page_num, int), 'result=%s pageNum=%r' % (result, str(self.page_num))
-                    except:
+                        assert isinstance(self.page_num, int), f'result={result} page_num={self.page_num!r}'
+                    except Exception:
                         #print("result name = %r" % result.name())
                         raise
                     if delete_objects:
                         del result
                     self.page_num += 1
+
+    def _write_normalized_mass_density(self, f06: TextIO) -> None:
+        normalized_mass_density = self.op2_results.responses.normalized_mass_density
+        if normalized_mass_density is None:
+            return
+        normalized_mass_density0: NormalizedMassDensity = normalized_mass_density[0]
+
+        f06.write('NORMALIZED MASS DENSITY HISTORY\n')
+        for mass in normalized_mass_density0:
+            f06.write(f'0    DESIGN_CYCLE={mass.dcycle:d} OBJ={mass.robj:g} RCON={mass.rcon:g}\n')
+
+        for mass in normalized_mass_density0:
+            f06.write('\nNORMALIZED MASS DENSITY\n')
+            f06.write(f'0    DESIGN_CYCLE={mass.dcycle:d} OBJ={mass.robj:g} RCON={mass.rcon:g}\n')
+            f06.write(' EID DENSITY\n')
+            for eid, density in zip(mass.eids, mass.data):
+                f06.write(f' {eid:-8d} {density:.8f}\n')
+
+
+def _check_combination(result, log: SimpleLogger) -> None:
+    try:
+        name = result.class_name
+        headers = result.get_headers()
+        if not hasattr(result, 'update_data_components'):
+            log.warning(f'{name} doesnt have update_data_components')
+            return
+
+        og_data = copy.deepcopy(result.data)
+        result.update_data_components()
+        if result.data.ndim == 3:
+            nres = result.data.shape[2]
+            assert nres == len(headers), (headers, len(headers), nres)
+            for ires in range(nres):
+                header = headers[ires]
+                if not np.allclose(og_data[:,:,ires], result.data[:,:,ires]):
+                    print(f'res_og:  {og_data[:,:,ires].ravel()}')
+                    print(f'res_new: {result.data[:,:,ires].ravel()}')
+                    raise RuntimeError(f'{name}, {header} ires={ires} is different')
+        else:
+            raise RuntimeError(result)
+    except Exception as error:
+        warnings.warn(str(error))
+
+def check_element_node(obj) -> None:
+    if obj is None:
+        raise RuntimeError('obj is None...')
+
+    if hasattr(obj, 'node_gridtype'):
+        nids = obj.node_gridtype[:, 0]
+        if nids.min() <= 0:
+            print(''.join(obj.get_stats()))
+            raise RuntimeError(f'nids = {nids}')
+        return
+    elif isinstance(obj, (RealStrainEnergyArray, RealGridPointForcesArray)):
+        return
+    elif hasattr(obj, 'node_element'):
+        nids = obj.node_element[:, 0]
+        if nids.min() <= 0:
+            print(''.join(obj.get_stats()))
+            raise RuntimeError(f'nids = {nids}')
+        return
+        #eids = obj.node_element[:, 1]
+        #if eids.min() <= 0:
+            #print(''.join(obj.get_stats()))
+            #raise RuntimeError(f'eids = {eids}')
+        #return
+
+    elif hasattr(obj, 'element_node'):
+        eids = obj.element_node[:, 0]
+    elif hasattr(obj, 'element_layer'):
+        eids = obj.element_layer[:, 0]
+    elif hasattr(obj, 'element'):
+        eids = obj.element
+    else:
+        raise RuntimeError(''.join(obj.get_stats()))
+    if eids.min() <= 0:
+        print(''.join(obj.get_stats()))
+        raise RuntimeError(f'{obj.element_name}-{obj.element_type}: {eids}')
+
+
+def get_all_results_string(all_results: list[str]) -> str:
+    dict_results = defaultdict(list)
+    for res in all_results:
+        if '.' in res:
+            sres = res.split('.')
+            assert len(sres) == 2, res
+            key, value = sres
+            #print(key, value)
+            dict_results[key].append(value)
+        else:
+            #print(res)
+            dict_results[res] = [res]  # .append(res)
+
+    msg = ':\n'
+    for key, value in sorted(dict_results.items()):
+        if len(value) == 1:
+            if key == value[0]:
+                msg += f' - {key}\n'
+            else:
+                msg += f' - {key}.{value[0]}\n'
+        else:
+            msg += f' - {key}:\n'
+            print(f'key={key} value={value}')
+            for valuei in value:
+                msg += f'   - {valuei}\n'
+    return msg
+
+
+def _get_file_obj(self: F06Writer,
+                  f06_filename: PathLike,
+                  matrix_filename: Optional[str],
+                  quiet: bool=True) -> tuple[TextIO, str, str]:
+    if isinstance(f06_filename, (str, PurePath)):
+        if matrix_filename is None:
+            matrix_filename = os.path.splitext(f06_filename)[0] + '.mat'
+        #print("matrix_filename =", matrix_filename)
+        #mat = open(matrix_filename, 'wb')
+
+        f06 = open(f06_filename, 'w')
+    elif hasattr(f06_filename, 'read') and hasattr(f06_filename, 'write'):
+        #print('type(f06_filename) =', type(f06_filename))
+        #assert isinstance(f06_outname, file), 'type(f06_filename)= %s' % f06_filename
+        f06 = f06_filename
+        f06_filename = f06.name
+        if matrix_filename is None:
+            matrix_filename = os.path.splitext(f06_filename)[0] + '.mat'
+        if not quiet:
+            print('f06_filename =', f06_filename)
+    else:  # pragma: no cover
+        raise TypeError(type(f06_filename))
+    return f06, f06_filename, matrix_filename
+
+
+def _write_responses1(op2: OP2, f06: TextIO,
+                      page_stamp: str, page_num: int) -> int:
+    op2_results = op2.op2_results
+    for subcase, res in op2_results.vg_vf_response.items():
+        page_num = res.export_to_f06_file(
+            f06,
+            #modes: Optional[list[int]]=None,
+            page_stamp=page_stamp,
+            page_num=page_num)
+    return page_num
+
+
+def _write_responses2(op2: OP2, f06: TextIO,
+                      page_stamp: str, page_num: int) -> int:
+    op2_results = op2.op2_results
+
+    desvars = op2_results.responses.desvars
+    convergence_data = op2_results.responses.convergence_data
+    dscmcol = op2_results.responses.dscmcol
+
+    if desvars is not None:
+        desvars.write_f06(f06)
+
+    if convergence_data is not None:
+        convergence_data.write_f06(f06)
+
+    if dscmcol is not None:
+        msg = dscmcol.get_responses_by_group()
+        f06.write(msg)
+    return page_num
+
+def write_bdf(model: BDF | OP2Geom, f06_file: TextIO,
+              page_stamp: str,
+              page_num: int) -> int:
+    """writes the geometry table"""
+    if len(model.nodes) == 0:
+        return page_num
+
+    page_stamp2 = page_stamp + '\n'
+    if len(model.system_command_lines):
+        sys_lines = [
+            '0        N A S T R A N    F I L E    A N D    S Y S T E M    P A R A M E T E R    E C H O\n'
+            '0\n\n\n'
+        ]
+        sys_lines += model.system_command_lines
+        f06_file.writelines(sys_lines)
+        f06_file.write(page_stamp2 % page_num)
+        page_num += 1
+
+    if len(model.executive_control_lines):
+        exec_lines = [
+            '0        N A S T R A N    E X E C U T I V E    C O N T R O L    E C H O\n'
+            '0\n'
+            '\n'
+        ]
+        exec_lines += model.executive_control_lines
+        f06_file.writelines(exec_lines)
+        f06_file.write(page_stamp2 % page_num)
+        page_num += 1
+
+    cc = model.case_control_deck
+    cc_str = str(cc).split('\n')
+    is_echo = False
+    if len(cc_str) > 0:
+        cc_lines = [
+            '0                                        C A S E    C O N T R O L    E C H O\n'
+            '                 COMMAND\n'
+            '                 COUNT\n']
+        j = 1
+        cc_lines.append(f'           {j:8d}      ECHO = SORT\n')
+        j += 1
+        for line in cc_str:
+            if len(line.strip()) == 0:
+                continue
+            if line.strip().startswith('ECHO'):
+                continue
+            cc_lines.append(f'           {j:8d}      {line}\n')
+            j += 1
+        f06_file.writelines(cc_lines)
+        f06_file.write(page_stamp2 % page_num)
+        page_num += 1
+
+    if len(model.nodes):
+        bdf_lines = [
+            '0\n'
+            '0                                                 S O R T E D   B U L K   D A T A   E C H O\n'
+            '                 ENTRY\n'
+            '                 COUNT        .   1  ..   2  ..   3  ..   4  ..   5  ..   6  ..   7  ..   8  ..   9  ..  10  .\n'
+        ]
+        j = 1
+        icoord = 1
+        for cid, coord in sorted(model.coords.items()):
+            if cid == 0:
+                continue
+            msg_sline = str(coord).strip().split('\n')
+            msg_sline = [line for line in msg_sline if not line.startswith('$')]
+            word = f'+C{icoord}'
+            linei1 = f'           {j  :10d}-        {msg_sline[0]}{word:<8}'
+            linei2 = f'           {j+1:10d}-        {word:<8}{msg_sline[1][8:]}'
+            bdf_lines.append(f'{linei1:100}\n')
+            bdf_lines.append(f'{linei2:110}\n')
+            icoord += 1
+            j += 2
+
+        names = [
+            'elements', 'methods', 'nodes', 'materials', 'thermal_materials',
+            'params', 'properties']
+        # names2 = copy.deepcopy(names)
+        # names2.sort()
+        # assert names == names2, "names isn't sorted"
+        icol = 1
+        icontinue = 1
+        for name in names:
+            mydict = getattr(model, name)
+            j, icol, icontinue = _write_bdf_dict(mydict, bdf_lines, j, icol, icontinue)
+        bdf_lines.append('                              ENDDATA\n')
+        bdf_lines.append(f'0                       TOTAL COUNT= {j:9d}\n')
+        f06_file.writelines(bdf_lines)
+        f06_file.write(page_stamp2 % page_num)
+        page_num += 1
+
+    return page_num
+
+
+def _write_bdf_dict(mydict: dict,
+                    bdf_lines: list[str], j: int,
+                    icol: int, icontinue: int) -> tuple[int, int, int]:
+    assert isinstance(j, int), j
+    assert isinstance(icontinue, int), icontinue
+    for key, obj in sorted(mydict.items()):
+        # fields = obj.raw_fields()
+        # msgi = print_card_8(fields)
+        msgi = str(obj)
+        if msgi.count('\n') == 1:
+            linei = f'           {j:10d}-        {msgi.rstrip()}'
+            bdf_lines.append(f'{linei:<110}\n')
+            j += 1
+        else:
+            msg_sline = msgi.strip().split('\n')
+            continue_word = ''
+            msg_sline = [line for line in msg_sline if not line.startswith('$')]
+            if len(msg_sline) == 1:
+                linei = f'           {j:10d}-        {msg_sline[0]}'
+                bdf_lines.append(f'{linei:<110}\n')
+                j += 1
+                continue
+
+            # print(msg_sline)
+            # print(f'msgi={msgi!r}')
+            char = _excel_style_col(icol)
+            for iline, line in enumerate(msg_sline):
+                next_word = f'+{char}{icontinue}'
+                if len(next_word) > 8:
+                    icol += 1
+                    char = _excel_style_col(icol)
+                    icontinue = 1
+                    next_word = f'+{char}{icontinue}'
+                next_word = f'{next_word:8}'
+                assert len(next_word) <= 8, f'next_word={next_word!r}; n={len(next_word)}'
+
+                if iline == 0:
+                    # first word
+                    linei = f'           {j:10d}-        {line}{next_word:<8}'
+                elif iline == len(msg_sline) - 1:
+                    # last
+                    linei = f'           {j:10d}-        {continue_word:<8}{line[8:]}'
+                else:
+                    linei = f'           {j:10d}-        {continue_word:<8}{line[8:]}{next_word:<8}'
+
+                bdf_lines.append(f'{linei:<110}\n')
+                continue_word = next_word
+                j += 1
+    return j, icol, icontinue
+
+# def _get_char(col: str):
+#     col, rem = divmod(col - 1, 26)
+
+
+def _excel_style_col(icol: int) -> str:
+    """Convert given row and column number to an Excel-style cell name."""
+    result = []
+    letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    col = icol
+    while col:
+        col, rem = divmod(col-1, 26)
+        result[:0] = letters[rem]
+    return ''.join(result)

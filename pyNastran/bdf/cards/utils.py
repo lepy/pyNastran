@@ -4,10 +4,8 @@ defines:
  - fields_out = wipe_empty_fields(card)
 
 """
-from typing import List, Union
 
-
-def build_table_lines(fields, nstart=1, nend=0):
+def build_table_lines(fields, nstart: int=1, nend: int=0):
     """
     Builds a table of the form:
 
@@ -24,7 +22,7 @@ def build_table_lines(fields, nstart=1, nend=0):
 
     Parameters
     ----------
-    fields: List[int/float/str]
+    fields: list[int/float/str]
         the fields to enter, including DESVAR
     nstart: int; default=1
         the number of blank fields at the start of the line
@@ -33,7 +31,7 @@ def build_table_lines(fields, nstart=1, nend=0):
 
     Returns
     -------
-    fields_out : List[str/None]
+    fields_out : list[str/None]
         the values ready for card printing
 
     .. note:: will be used for DVCREL2, DVMREL2, DVPREL2, RBE1, RBE3, DRESP2, DRESP3
@@ -60,7 +58,7 @@ def build_table_lines(fields, nstart=1, nend=0):
     return fields_out
 
 
-def wipe_empty_fields(card: List[Union[str, int, float, None]]) -> List[Union[str, int, float, None]]:
+def wipe_empty_fields(card: list[str | int | float | None]) -> list[str | int | float | None]:
     """
     Removes any trailing Nones from the card.
     Also converts empty strings to None.
@@ -69,29 +67,36 @@ def wipe_empty_fields(card: List[Union[str, int, float, None]]) -> List[Union[st
 
     Parameters
     ----------
-    card : List[str]
+    card : list[str]
         the fields on the card as a list
 
     Returns
     -------
-    short_card : List[str]
+    short_card : list[str]
         the card with no trailing blank fields
 
     """
-    short_card = []  # type: List[Union[str, int, float, None]]
-    for field in card:
-        if isinstance(field, str):
-            field = field.strip()
-            if field == '':
-                short_card.append(None)
-            else:
-                short_card.append(field)
-        else:
-            short_card.append(field)
-
+    short_card = [
+        (field.strip() or None) if isinstance(field, str) else field
+        for field in card
+    ]
+    # find last non-None index
     imax = 0
-    for i, field in enumerate(card):
+    for i in range(len(short_card) - 1, -1, -1):
         if short_card[i] is not None:
             imax = i
-    out = short_card[:imax + 1]
-    return out
+            break
+    return short_card[:imax + 1]
+
+
+def wipe_empty_fields_str(card: list[str]) -> list[str | None]:
+    """Fast path for wipe_empty_fields when all fields are known to be strings
+    (e.g., from _to_fields_standard during BDF reading)."""
+    short_card = [(field.strip() or None) for field in card]
+    # find last non-None index
+    imax = 0
+    for i in range(len(short_card) - 1, -1, -1):
+        if short_card[i] is not None:
+            imax = i
+            break
+    return short_card[:imax + 1]

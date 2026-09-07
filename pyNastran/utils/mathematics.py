@@ -7,6 +7,7 @@ Various mathematical functions are defined in this file.  This includes:
  - get_abs_max(min_values, max_values)
  - get_max_index(data, axis=1)
  - get_min_index(data, axis=1)
+ - grms(freq, psd)
  - integrate_positive_unit_line(x, y, min_value=0.)
  - integrate_unit_line(x, y)
  - is_float_ranged(a, x, b)
@@ -24,14 +25,43 @@ Multi-segment beams are IntegratedLineProperty objects.
 
 """
 from math import sqrt, ceil
+from typing import Any
 
-from numpy import (float32, float64, complex64, complex128, array, cross,
-                   allclose, argmax, argmin, arange)
+from numpy import (float32, float64, complex64, complex128,
+                   allclose)
 import numpy as np
 from numpy.linalg import norm  # type: ignore
 
-#from scipy.linalg import solve_banded  # type: ignore
-from scipy.integrate import quad  # type: ignore
+try:
+    import scipy  # prevents confusing import error
+    IS_SCIPY = True
+except (ImportError, NameError):
+    IS_SCIPY = False
+
+if IS_SCIPY:
+    try:
+        from scipy.integrate import trapezoid
+    except ImportError:  # pragma: no cover
+        from scipy.integrate import trapz as trapezoid
+
+    #from scipy.linalg import solve_banded  # type: ignore
+    from scipy.integrate import quad  # type: ignore
+else:
+    try:
+        from numpy import trapezoid
+    except ImportError:  # pragma: no cover
+        from numpy import trapz as trapezoid
+
+    # def trapezoid(y, x=None, dx: float=1.0, axis: int=-1):
+    #     return np.trapz(y, x=x, dx=dx, axis=axis)
+
+    def quad(func, a, b, args):
+        # args=(x, y, y[0], y[-1]))
+        x, y, y0, y1 = args
+        xp = np.linspace(a, b, num=10)
+        yp = func(xp, *args)
+        abserr = 0.0
+        return trapezoid(yp, xp, dx=1.0, axis=-1), abserr
 
 # should future proof this as it handles 1.9.0.dev-d1dbf8e, 1.10.2, and 1.6.2
 #_numpy_version = [int(i) for i in numpy.__version__.split('.') if i.isdigit()]
@@ -48,14 +78,17 @@ from scipy.integrate import quad  # type: ignore
         # i.append(where(eids_all == eid)[0])
     # return hstack(i)
 
-def get_abs_max(min_values, max_values, dtype='float32'):
+def get_abs_max(min_values: np.ndarray,
+                max_values: np.ndarray,
+                dtype: str='float32') -> np.ndarray:
     """Get return the value with the greatest magnitude, preserving sign."""
-    min_values = np.asarray(min_values)
-    max_values = np.asarray(max_values)
+    min_values = np.asarray(min_values, dtype=dtype)
+    max_values = np.asarray(max_values, dtype=dtype)
     imin = np.abs(min_values) > np.abs(max_values)
-    out = np.zeros(min_values.shape, dtype=dtype)
+    #out = np.zeros(min_values.shape, dtype=dtype)
+    out = max_values.copy()
     out[imin] = min_values[imin]
-    out[~imin] = max_values[~imin]
+    #out[~imin] = max_values[~imin]
     return out
 
     #nvalues = len(min_values)
@@ -66,7 +99,8 @@ def get_abs_max(min_values, max_values, dtype='float32'):
     #return data[i[:], k]
 
 
-def get_abs_index(data, axis=1):
+def get_abs_index(data: np.ndarray,
+                  axis: int=1) -> tuple[np.ndarray, np.ndarray]:
     """
     Gets the maximum absolute value of a 2D matrix along an axis
 
@@ -86,12 +120,12 @@ def get_abs_index(data, axis=1):
     nvalues = data.shape[axis]
     # isubcase, nelements
     axis2 = abs(axis - 1)
-    i = argmax(abs(data), axis=axis2)
+    i = np.argmax(abs(data), axis=axis2)
     assert len(i) == nvalues, 'data.shape=%s len(i)=%s nvalues=%s' % (str(data.shape), len(i), nvalues)
-    k = arange(nvalues, dtype='int32')
+    k = np.arange(nvalues, dtype='int32')
     return data[i[:], k], i
 
-def get_max_index(data, axis=1):
+def get_max_index(data: np.ndarray, axis: int=1) -> tuple[np.ndarray, np.ndarray]:
     """
     Gets the maximum values of a 2D matrix along an axis
 
@@ -111,12 +145,12 @@ def get_max_index(data, axis=1):
     nvalues = data.shape[axis]
     # isubcase, nelements
     axis2 = abs(axis - 1)
-    i = argmax(data, axis=axis2)
+    i = np.argmax(data, axis=axis2)
     assert len(i) == nvalues, 'data.shape=%s len(i)=%s nvalues=%s' % (str(data.shape), len(i), nvalues)
-    k = arange(nvalues, dtype='int32')
+    k = np.arange(nvalues, dtype='int32')
     return data[i[:], k], i
 
-def get_min_index(data, axis=1):
+def get_min_index(data: np.ndarray, axis: int=1) -> tuple[np.ndarray, np.ndarray]:
     """
     Gets the minimum values of a 2D matrix along an axis
 
@@ -135,21 +169,21 @@ def get_min_index(data, axis=1):
     """
     nvalues = data.shape[axis]
     axis2 = abs(axis - 1)
-    i = argmin(data, axis=axis2)
+    i = np.argmin(data, axis=axis2)
     assert len(i) == nvalues, 'data.shape=%s len(i)=%s nvalues=%s' % (str(data.shape), len(i), nvalues)
-    k = arange(nvalues, dtype='int32')
+    k = np.arange(nvalues, dtype='int32')
     return data[i[:], k], i
 
 
-def integrate_unit_line(x, y):
+def integrate_unit_line(x: list[float], y: list[float]) -> float:
     """
     Integrates a line of length 1.0 by linear interpolation
 
     Parameters
     ----------
-    x : List[float]
+    x : list[float]
         the independent variable
-    y : List[float]
+    y : list[float]
         the dependent variable
 
     Returns
@@ -165,23 +199,21 @@ def integrate_unit_line(x, y):
 
         #f = np.interp(_xi, x, y, left=y[0], right=y[-1])
         out = quad(np.interp, 0., 1., args=(x, y, y[0], y[-1]))
-    except:
+    except Exception:  # pragma: no cover
         # print('spline Error x=%s y=%s' % (x, y))
         raise
     return out[0]
 
 
-
-
-def integrate_positive_unit_line(x, y, min_value=0.):
+def integrate_positive_unit_line(x, y, min_value: float=0.) -> float:
     """
     Integrates a line of length 1.0 by linear interpolation
 
     Parameters
     ----------
-    x : List[float]
+    x : list[float]
         the independent variable
-    y : List[float]
+    y : list[float]
         the dependent variable
     min_value : float; default=0.0
         ???
@@ -198,7 +230,8 @@ def integrate_positive_unit_line(x, y, min_value=0.):
     return integrate_unit_line(x, y)
 
 
-def reduce_matrix(matrix_a, nids):
+def reduce_matrix(matrix_a: np.ndarray,
+                  nids: list[int]) -> np.ndarray:
     """
     takes a list of ids and removes those rows and cols
     """
@@ -210,7 +243,9 @@ def reduce_matrix(matrix_a, nids):
     return matrix_b
 
 
-def is_list_ranged(a, List, b):
+def is_list_ranged(a: float,
+                   alist: list[float],
+                   b: float) -> bool:
     """
     Returns true if a<= x <= b or a-x < 0 < b-x
 
@@ -218,7 +253,7 @@ def is_list_ranged(a, List, b):
     ----------
     a : float
         the lower bound value (inclusive)
-    x : List[float, ...]
+    x : list[float, ...]
         the search values
     b: float
         the upper bound value (inclusive)
@@ -228,13 +263,15 @@ def is_list_ranged(a, List, b):
     is_ranged : bool
         True/False
     """
-    for x in List:
+    for x in alist:
         if not is_float_ranged(a, x, b):
             return False
     return True
 
 
-def is_float_ranged(a, x, b):
+def is_float_ranged(a: float,
+                    x: list[float],
+                    b: float) -> bool:
     """
     Returns true if a<= x <= b or a-x < 0 < b-x.
 
@@ -242,7 +279,7 @@ def is_float_ranged(a, x, b):
     ----------
     a : float
         the lower bound value (inclusive)
-    x : List[float, ...]
+    x : list[float, ...]
         the search values
     b: float
         the upper bound value (inclusive)
@@ -252,20 +289,22 @@ def is_float_ranged(a, x, b):
     is_ranged : bool
         True/False
     """
-    if (not a < x) and (not allclose(x, a)):
+    if (not a < x) and (not np.allclose(x, a)):
         return False
 
-    if (not x < b) and (not allclose(x, b)):
+    if (not x < b) and (not np.allclose(x, b)):
         return False
     return True
 
 
-def print_annotated_matrix(A, row_names=None, col_names=None, tol=1e-8):
+def print_annotated_matrix(A: np.ndarray,
+                           row_names=None, col_names=None,
+                           tol: np.ndarray=1e-8):
     """
     Takes a list/dictionary and annotates the row number with that value
     indicies go from 0 to N
     """
-    B = array(A)
+    B = np.array(A)
     if row_names is None:
         row_names = [i for i in range(B.shape[0])]
 
@@ -273,6 +312,7 @@ def print_annotated_matrix(A, row_names=None, col_names=None, tol=1e-8):
     row_fmt = '%%-%ss' % rwidth
 
     header = ''
+    float_fmt = '%8.6f'
     if col_names is not None:
         col_name_list = [str(col_names[i]) for i in col_names]
         cwidth = max([len(name) for name in col_name_list])
@@ -289,18 +329,25 @@ def print_annotated_matrix(A, row_names=None, col_names=None, tol=1e-8):
     return c
 
 
-def print_matrix(A, tol=1e-8):
+def print_matrix(A: np.ndarray, tol: float=1e-8):
     """prints a 2d matrix in a readable format"""
     B = array(A)
     return ''.join([list_print(B[i, :], tol) + '\n' for i in range(B.shape[0])])
 
 
-def list_print(list_a, tol=1e-8, float_fmt='%-3.2g', zero_fmt='    0'):
+def list_print(list_a,
+               tol: float=1e-8,
+               float_fmt: str='%-3.2g',
+               zero_fmt: str='    0') -> str:
     """prints a list / numpy array in a readable format"""
+    if list_a is None:
+        return 'None'
     if len(list_a) == 0:
         return '[]'
 
-    def _print(a):
+    def _print(a) -> str:
+        if a is None:
+            return 'None'
         if isinstance(a, str):
             return a
         for i, j in ((float, float_fmt), (float32, float_fmt),
@@ -311,8 +358,8 @@ def list_print(list_a, tol=1e-8, float_fmt='%-3.2g', zero_fmt='    0'):
                 return j % (0. if abs(a) < tol else a)
 
         if isinstance(a, (complex, complex64, complex128)):
-            return '%4s%4s' % ('0' if abs(a.real) < 1e-8 else '%.4g' % (a.real),
-                               '' if abs(a.imag) < 1e-8 else '%+.4gj' % (a.imag))
+            return '%4s%4s' % ('0' if abs(a.real) < 1e-8 else '%.4g' % a.real,
+                               '' if abs(a.imag) < 1e-8 else '%+.4gj' % a.imag)
         try:
             print("list_print: type(a) is not supported... %s" % (type(a)))
             return ' %g' % a
@@ -348,9 +395,9 @@ def list_print(list_a, tol=1e-8, float_fmt='%-3.2g', zero_fmt='    0'):
     #return solve_banded((1, 1), ab, D, overwrite_ab=True, overwrite_b=True)
 
 
-Area = lambda a, b: 0.5 * norm(cross(a, b))
+Area = lambda a, b: 0.5 * norm(np.cross(a, b))
 
-def gauss(n):  # pragma: no cover
+def gauss(n: int) -> tuple[Any, Any]:  # pragma: no cover
     r"""
     A quadrature rule: an approximation of the definite integral of a function.
     Currently implementation supports up to 5 quadrature points.
@@ -416,7 +463,7 @@ def gauss(n):  # pragma: no cover
                                   '5 quadrature points')
     return points, weights
 
-def roundup(value, round_increment=100):
+def roundup(value: int, round_increment: int=100) -> int:
     """
     Rounds up to the next N.
 
@@ -440,3 +487,78 @@ def roundup(value, round_increment=100):
                obvious when testing
     """
     return int(ceil(value / float(round_increment))) * round_increment
+
+
+def grms(freq: np.ndarray, psd: np.ndarray) -> float | np.ndarray:
+    """Compute GRMS from a PSD using piecewise power-law (log-log) integration.
+
+    Between each pair of frequency points, assumes the PSD follows a power
+    law: Φ(f) = Φ_i · (f/f_i)^m, where m is the local log-log slope.
+    Each segment has an analytical integral:
+
+        ∫[f_i, f_{i+1}] Φ_i·(f/f_i)^m df
+            = Φ_i·f_i / (m+1) · [(f_{i+1}/f_i)^(m+1) - 1]    (m ≠ -1)
+            = Φ_i·f_i · ln(f_{i+1}/f_i)                        (m = -1)
+
+    Parameters
+    ----------
+    freq : (N,) ndarray
+        Frequency array [Hz or rad/s — consistent with PSD units].
+        Must be positive and monotonically increasing.
+    psd : (N,) or (M, N) ndarray
+        Power spectral density values. If 2D, each row is integrated
+        independently (e.g., one row per mode or DOF).
+
+    Returns
+    -------
+    float or (M,) ndarray
+        GRMS value = sqrt(integral of PSD over frequency).
+        Returns scalar if psd is 1D, array if psd is 2D.
+    """
+    freq = np.asarray(freq, dtype=float)
+    psd = np.asarray(psd, dtype=float)
+
+    if psd.ndim == 1:
+        return float(np.sqrt(_integrate_psd_loglog(freq, psd)))
+    else:
+        result = np.zeros(psd.shape[0])
+        for i in range(psd.shape[0]):
+            result[i] = np.sqrt(_integrate_psd_loglog(freq, psd[i, :]))
+        return result
+
+
+def _integrate_psd_loglog(freq: np.ndarray, psd: np.ndarray) -> float:
+    """Integrate a PSD using piecewise power-law assumption (log-log linear).
+
+    Parameters
+    ----------
+    freq : (N,) ndarray
+        Positive, monotonically increasing frequency values.
+    psd : (N,) ndarray
+        PSD values at each frequency.
+
+    Returns
+    -------
+    float
+        Mean-square value (integral of PSD over frequency).
+    """
+    total = 0.0
+    for i in range(len(freq) - 1):
+        f1, f2 = freq[i], freq[i + 1]
+        p1, p2 = psd[i], psd[i + 1]
+
+        if f1 <= 0 or f2 <= 0 or p1 <= 0 or p2 <= 0:
+            # Fall back to trapezoid for segments with zero/negative values
+            total += 0.5 * (p1 + p2) * (f2 - f1)
+            continue
+
+        r = f2 / f1
+        m = np.log(p2 / p1) / np.log(r)
+
+        if abs(m + 1.0) < 1e-10:
+            # m ≈ -1: integral is Φ_i·f_i·ln(f_{i+1}/f_i)
+            total += p1 * f1 * np.log(r)
+        else:
+            # General case
+            total += p1 * f1 / (m + 1.0) * (r ** (m + 1.0) - 1.0)
+    return total

@@ -7,7 +7,7 @@ class RealMPCForcesArray(RealTableArray):
         RealTableArray.__init__(self, data_code, is_sort1, isubcase, dt)
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         words = ['                               F O R C E S   O F   M U L T I - P O I N T   C O N S T R A I N T\n', ]
@@ -25,6 +25,8 @@ class RealMPCForcesArray(RealTableArray):
             words += ['                                               ( CUMULATIVE ROOT MEAN SQUARE )']
         elif self.table_name in ['OQGNO1', 'OQGNO2']:
             words += ['                                                 ( NUMBER OF ZERO CROSSINGS )']
+        elif self.table_name in ['ROQGM1']:
+            words += [f'                                                          ( {self.table_name} )']
         else:
             raise NotImplementedError(self.table_name)
 
@@ -42,7 +44,7 @@ class ComplexMPCForcesArray(ComplexTableArray):
         ComplexTableArray.__init__(self, data_code, is_sort1, isubcase, dt)
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         words = ['                         C O M P L E X   F O R C E S   O F   M U L T I   P O I N T   C O N S T R A I N T\n', ]

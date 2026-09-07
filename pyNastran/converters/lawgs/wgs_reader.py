@@ -9,8 +9,13 @@ import copy
 from math import sin, cos
 
 import numpy as np
-from numpy import array, radians, dot, zeros
-from cpylog import get_logger2
+from cpylog import __version__ as CPYLOG_VERSION
+if CPYLOG_VERSION > '1.6.0':
+    from cpylog import get_logger
+else:  # pragma: no cover
+    from cpylog import get_logger2 as get_logger
+
+
 
 class Panel:
     """
@@ -35,9 +40,9 @@ class Panel:
         log.debug("Scale     = <%s,%s,%s>" % (xscale, yscale, zscale))
 
         self.name = key
-        self.rotate = array([rx, ry, rz], dtype='float64')
-        self.translate = array([tx, ty, tz], dtype='float64')
-        self.scale = array([xscale, yscale, zscale], dtype='float64')
+        self.rotate = np.array([rx, ry, rz], dtype='float64')
+        self.translate = np.array([tx, ty, tz], dtype='float64')
+        self.scale =np.array([xscale, yscale, zscale], dtype='float64')
         npnt = int(npnt)
         nline = int(nline)
 
@@ -87,7 +92,7 @@ class Panel:
         # rotation angles, degrees
         #r = radians([self.phi,self.theta,self.psi])
         #print("self.rotate = ",self.rotate)
-        r = [radians(ri) for ri in self.rotate]
+        r = [np.radians(ri) for ri in self.rotate]
         cphi = cos(r[0])
         sphi = sin(r[0])
         ctheta = cos(r[1])
@@ -95,7 +100,7 @@ class Panel:
         cpsi = cos(r[2])
         spsi = sin(r[2])
 
-        rot = zeros((3, 3), dtype='float64')
+        rot = np.zeros((3, 3), dtype='float64')
         #print(rot)
         rot[0, 0] = ctheta * cpsi
         rot[1, 0] = ctheta * spsi
@@ -121,7 +126,7 @@ class Panel:
         self.log.debug("size(points) = (%s,%s)\n" % (len(points), len(points[0])))
         for i in range(self.nrows):
             for j in range(self.ncols):
-                points2[i][j] = scale * (dot(rot, points[i][j]) + translate)
+                points2[i][j] = scale * (rot @ points[i][j] + translate)
         self.points = points2
 
     def get_points(self):
@@ -160,18 +165,18 @@ class Panel:
                 Z.append(z)
 
         msg = ''
-        for x in X:
-            msg += '%s ' % (x)
+        for xi in X:
+            msg += '%s ' % xi
         p3d_file.write(msg + '\n')
 
         msg = ''
-        for y in Y:
-            msg += '%s ' % (y)
+        for yi in Y:
+            msg += '%s ' % yi
         p3d_file.write(msg + '\n')
 
         msg = ''
-        for z in Z:
-            msg += '%s ' % (z)
+        for zi in Z:
+            msg += '%s ' % zi
         p3d_file.write(msg + '\n')
 
 def read_lawgs(wgs_filename, log=None, debug=False):
@@ -200,7 +205,7 @@ class LaWGS:
             settings the logging object has
 
         """
-        self.log = get_logger2(log=log, debug=debug)
+        self.log = get_logger(log, debug)
         self.panels = {}
 
     def read_lawgs(self, wgs_filename):

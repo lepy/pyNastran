@@ -1,38 +1,35 @@
 """defines functions found in VTK that are overwritten for various reasons"""
 import sys
 import numpy as np
-import vtk
-from vtk.util.numpy_support import (
+
+from pyNastran.gui.vtk_common_core import vtkIdTypeArray, vtkVersion, VTK_VERSION as vtk_version
+from pyNastran.gui.vtk_util import (
     create_vtk_array, get_numpy_array_type,
     get_vtk_array_type, numpy_to_vtkIdTypeArray, # numpy_to_vtk,
 )
 
 
 IS_TESTING = 'test' in sys.argv[0]
-VTK_VERSION = [int(val) for val in vtk.VTK_VERSION.split('.')]
-if VTK_VERSION[0] < 7:
-    msg = 'VTK version=%r is no longer supported (use vtk 7 or 8)' % vtk.VTK_VERSION
-    raise NotImplementedError(msg)
-elif VTK_VERSION[0] in [7, 8]:
-    # tested in 7.1.1
-    vtkConstants = vtk
-#elif VTK_VERSION[0] == vtk_9?:
-    #vtkConstants = vtk.vtkConstants
+_VTK_VERSION = vtkVersion.GetVTKVersion()
+VTK_VERSION_SPLIT = [int(val) for val in _VTK_VERSION.split('.')]
+_VTK_ERROR_MESSAGE = f'VTK version={vtk_version!r} is not supported (use vtk>=9.3)'
+if VTK_VERSION_SPLIT[0] == 9:
+    if not(3 <= VTK_VERSION_SPLIT[1] < 7):
+        raise NotImplementedError(_VTK_ERROR_MESSAGE)
 else:  # pragma: no cover
-    msg = 'VTK version=%r is not supported (use vtk 7 or 8)' % vtk.VTK_VERSION
-    raise NotImplementedError(msg)
+    raise NotImplementedError(_VTK_ERROR_MESSAGE)
 
 
-def numpy_to_vtk_idtype(ids):
-    #self.selection_node.GetProperties().Set(vtk.vtkSelectionNode.INVERSE(), 1)
+def numpy_to_vtk_idtype(ids: np.ndarray) -> vtkIdTypeArray:
+    #self.selection_node.GetProperties().Set(vtkSelectionNode.INVERSE(), 1)
     dtype = get_numpy_idtype_for_vtk()
     ids = np.asarray(ids, dtype=dtype)
     vtk_ids = numpy_to_vtkIdTypeArray(ids, deep=0)
     return vtk_ids
 
-def get_numpy_idtype_for_vtk():
+def get_numpy_idtype_for_vtk() -> str:
     """This gets the numpy dtype that we need to use to make vtk not crash"""
-    isize = vtk.vtkIdTypeArray().GetDataTypeSize()
+    isize = vtkIdTypeArray().GetDataTypeSize()
     if isize == 4:
         dtype = 'int32' # TODO: can we include endian?
     elif isize == 8:
@@ -43,7 +40,9 @@ def get_numpy_idtype_for_vtk():
     return dtype
 
 
-def numpy_to_vtk(num_array, deep=0, array_type=None):  # pragma: no cover
+def numpy_to_vtk(num_array: np.ndarray,
+                 deep: int=0,
+                 array_type=None):  # pragma: no cover
     """Converts a contiguous real numpy Array to a VTK array object.
 
     This function only works for real arrays that are contiguous.
@@ -68,8 +67,13 @@ def numpy_to_vtk(num_array, deep=0, array_type=None):  # pragma: no cover
     Notes
     -----
     This was pulled from VTK and modified to eliminate numpy 1.14 warnings.
-    VTK uses a BSD license, so it's OK to do  that.
+    VTK uses a BSD license, so it's OK to do that.
 
+    #vtk_typecode = int64 3
+    #vtk_typecode = int64 12
+    #vtk_typecode = int64 16
+    #vtk_typecode = float32 10
+    #vtk_typecode = float64 11
     """
     z = np.asarray(num_array)
     if not z.flags.contiguous:
@@ -94,7 +98,7 @@ def numpy_to_vtk(num_array, deep=0, array_type=None):  # pragma: no cover
     # Fixup shape in case its empty or scalar.
     try:
         test_var = shape[0]
-    except:
+    except Exception:
         shape = (0,)
 
     # Find the shape and set number of components.
@@ -128,4 +132,4 @@ def numpy_to_vtk(num_array, deep=0, array_type=None):  # pragma: no cover
         result_array._numpy_reference = z
     return result_array
 
-vtk.util.numpy_support.numpy_to_vtk = numpy_to_vtk
+#vtk.util.numpy_support.numpy_to_vtk = numpy_to_vtk

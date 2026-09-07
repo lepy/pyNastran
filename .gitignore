@@ -15,7 +15,6 @@ htmlcov
 *.exe
 *.whl
 *.dll
-*.log
 *.rar
 *.out
 *.log
@@ -25,7 +24,14 @@ htmlcov
 *.pdf
 *.h5
 *.gz
-*.json
+tmp*
+
+# pyInstaller building
+#*.qm
+*.pkg
+_internal/
+*.toc
+*.res
 
 # C extensions
 *.so
@@ -62,6 +68,11 @@ nosetests.xml
 *.wpr
 *.wpu
 
+# AVL
+*avl3.36/*
+*src/*
+*v1.0/*
+
 # Nastran
 *test_bdf.dat
 *test_bdf.bdf
@@ -70,10 +81,13 @@ nosetests.xml
 *test_op2.op2
 *test_f06.f06
 *test_f06.op2
+plane_face_*.bdf
+plane_face2_*.bdf
+*.solver.f06
+*.solver.op2
 *.bdf_out
 *.dat_out
 *.f04
-*.plt
 *.ses.*
 *.jou
 *.log.*
@@ -112,3 +126,4 @@ nosetests.xml
 */tcl/*
 */Include/*
 */Scripts/*
+env/*

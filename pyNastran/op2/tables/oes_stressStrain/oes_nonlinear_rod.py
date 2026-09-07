@@ -1,13 +1,14 @@
-from typing import List
 import numpy as np
 from numpy import zeros
 
 from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header
 
 
-class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
+class RealNonlinearRodArray(OES_Object):  # 89-CRODNL, 92-CONRODNL
     """
     ::
 
@@ -36,14 +37,15 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
         raise NotImplementedError()
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial_stress', 'equiv_stress', 'total_strain',
                    'effective_plastic_creep_strain', 'effective_creep_strain',
                    'linear_torsional_stress']
@@ -62,18 +64,15 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.nelements, dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(self.nelements, dtype=idtype)
 
         #[axial_stress, equiv_stress, total_strain, effective_plastic_creep_strain,
         # effective_creep_strain, linear_torsional_stress]
-        self.data = zeros((self.ntimes, self.nelements, 6), dtype='float32')
+        self.data = np.zeros((self.ntimes, self.nelements, 6), dtype=fdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
@@ -88,9 +87,9 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
             #          effective_plastic_creep_strain   0.000000   0.000000
             #          effective_creep_strain           0.000000   0.000000
             #          linear_torsional_stress          0.000000   0.000000
-            column_names, column_values = self._build_dataframe_transient_header()
-            self.data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            self.data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
         else:
             df1 = pd.DataFrame(self.element).T
@@ -136,6 +135,7 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
     def add_sort1(self, dt, eid, axial_stress, equiv_stress, total_strain,
                   effective_plastic_creep_strain, effective_creep_strain, linear_torsional_stress):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
@@ -145,12 +145,12 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
         ]
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -170,13 +170,13 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         if is_sort1:
@@ -236,17 +236,17 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
             page_num += 1
         return page_num - 1
 
-    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
                   is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
         from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -273,7 +273,7 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
         #assert self.ntimes == 1, self.ntimes
 
         device_code = self.device_code
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         eids_device = self.element * 10 + self.device_code
 
@@ -286,11 +286,11 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
         else:
             raise NotImplementedError('SORT2')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        op2_ascii.write(f'nelements={nelements:d}\n')
 
         for itime in range(self.ntimes):
             #print('3, %s' % itable)
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             #print('stress itable = %s' % itable)
@@ -301,10 +301,10 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
             axial = self.data[itime, :, 0]
             eqs = self.data[itime, :, 1]
@@ -316,11 +316,11 @@ class RealNonlinearRodArray(OES_Object): # 89-CRODNL, 92-CONRODNL
             for eid, axiali, eqsi, totali, epcsi, ecsi, ltsi in zip(eids_device, axial, eqs, total, epcs, ecs, lts):
                 data = [eid, axiali, eqsi, totali, epcsi, ecsi, ltsi]
                 op2_ascii.write('  eid=%s data=%s\n' % (eids_device, str(data)))
-                op2.write(struct1.pack(*data))
+                op2_file.write(struct1.pack(*data))
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable

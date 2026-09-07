@@ -6,6 +6,7 @@ from pyNastran.converters.cart3d.cart3d import Cart3D
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 
+
 class Cart3d_Mesher(Cart3D):
     def __init__(self, log=None, debug=False):
         Cart3D.__init__(self, log=log, debug=debug)
@@ -225,9 +226,8 @@ def main():
     nlayers = 5
     bdf_filename = 'threePlugs_volume.bdf'
     cart3d.project(bdf_filename, x0, growth_rate=1.3, nlayers=nlayers)
-
     #cart3d.write_bdf(bdf_filename)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     main()

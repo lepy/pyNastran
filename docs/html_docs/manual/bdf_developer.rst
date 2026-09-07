@@ -163,7 +163,7 @@ as many nodes as there are elements, which make up roughly 95% of the cards in
 large models.  The difference in a large model and a small model, is the
 discretization and will change nodes, elements, loads, and constraints.  Loads
 and constraints are applied to only small portions of the model and (generally)
-only the boundary of a model.  The number of propertie and materials is very
+only the boundary of a model.  The number of properties and materials is very
 likely the same.
 
 Most cards are stored in a dictionary based on their integer ID.  IDs may be
@@ -246,7 +246,7 @@ cross-referencing.
 
 Cross Referencing takes a CQUAD4 card and replaces the GRID references with actual
 GRID cards.  The GRID cards in turn reference two COORDx (CORD1R, CORD2R, CORD1C,
-COR2DC, CORD1S, CORD2S) cards, which also may reference two CORDx cards.
+COR2DC, CORD1S, CORD2S) cards, which also may reference two Coord cards.
 The CQUAD4 references a PSHELL or PCOMP card.  The PSHELL references a single
 MAT1 card, and as mentioned before the PCOMP card may reference one or more
 MAT1/MAT8 cards.  In order to calculate something simple like the mass of the

@@ -1,17 +1,18 @@
 from copy import deepcopy
-from typing import List, Optional, Any
+from typing import Optional, Any
 
 from numpy import zeros
 import numpy as np
-from numpy.linalg import norm  # type: ignore
 from pyNastran.gui.gui_objects.gui_result import GuiResultCommon
+from pyNastran.femutils.utils import safe_norm
 
 
 class VectorTable(GuiResultCommon):
     def __init__(self, subcase_id: int, location: str,
-                 titles: List[str], headers: List[str],
-                 dxyz: Any, linked_scale_factor: bool, #xyz, scalar,
-                 scales,
+                 titles: list[str], headers: list[str],
+                 dxyz: np.ndarray,
+                 linked_scale_factor: bool,  # xyz, scalar,
+                 scales: list[float],
                  data_formats: Optional[str]=None,
                  nlabels: Optional[int]=None,
                  labelsize: Optional[int]=None,
@@ -26,9 +27,9 @@ class VectorTable(GuiResultCommon):
         ----------
         subcase_id : int
             the flag that points to self.subcases for a message
-        headers : List[str]
+        headers : list[str]
             the sidebar word
-        titles : List[str]
+        titles : list[str]
             the legend title
         #scalars : (nnodes,n) float ndarray
             ##the data to make a contour plot with
@@ -39,10 +40,10 @@ class VectorTable(GuiResultCommon):
             is the displacement scale factor linked
             displacements/loads steps should be
             force/eigenvectors should not be
-        scales : List[float]
+        scales : list[float]
             the table (e.g., deflection, SPC Forces) scale factors
             nominally, this starts as an empty list and is filled later
-        data_formats : List[str]
+        data_formats : list[str]
             the type of data result (e.g. '%i', '%.2f', '%.3f')
         ncolors : int; default=None
             sets the default for reverting the legend ncolors
@@ -67,7 +68,6 @@ class VectorTable(GuiResultCommon):
         self.dxyz = dxyz
         self.dim = len(self.dxyz.shape)
 
-
         self.uname = uname
         #self.dxyz_norm = norm(dxyz, axis=1)
 
@@ -75,8 +75,9 @@ class VectorTable(GuiResultCommon):
         self.titles = titles
         self.headers = headers
         self.scales = scales
+        self.arrow_scales = scales
         self.subcase_id = subcase_id
-        self.data_type = self.dxyz.dtype.str # '<c8', '<f4'
+        self.data_type = self.dxyz.dtype.str  # '<c8', '<f4'
         self.is_real = True if self.data_type in ['<f4', '<f8'] else False
         #print('self.data_type = %r' % self.data_type)
         self.is_complex = not self.is_real
@@ -94,7 +95,7 @@ class VectorTable(GuiResultCommon):
             ntimes = 1
             self.default_mins = zeros(1, dtype=self.dxyz.dtype)
             self.default_maxs = zeros(1, dtype=self.dxyz.dtype)
-            normi = norm(self.dxyz, axis=1)
+            normi = safe_norm(self.dxyz, axis=1)
             self.default_mins[0] = normi.min().real
             self.default_maxs[0] = normi.max().real
         elif self.dim == 3:
@@ -102,14 +103,14 @@ class VectorTable(GuiResultCommon):
             self.default_mins = zeros(ntimes)
             self.default_maxs = zeros(ntimes)
             for itime in range(ntimes):
-                normi = norm(self.dxyz[itime, :, :], axis=1)
+                normi = safe_norm(self.dxyz[itime, :, :], axis=1)
                 self.default_mins[itime] = normi.min().real
                 self.default_maxs[itime] = normi.max().real
 
             if not self.is_real:
                 #: stored in degrees
                 self.phases = np.zeros(ntimes)
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError('dim=%s' % self.dim)
 
         if set_max_min:
@@ -119,8 +120,9 @@ class VectorTable(GuiResultCommon):
             self.max_values = None
             self.min_values = None
 
-    def save_defaults(self):
-        self.data_formats = ['%g'] * len(self.titles)
+    def save_defaults(self) -> None:
+        ntitles = len(self.titles)
+        self.data_formats = ['%g'] * ntitles
         self.titles_default = deepcopy(self.titles)
         self.headers_default = deepcopy(self.headers)
         self.scales_default = deepcopy(self.scales)
@@ -135,122 +137,187 @@ class VectorTable(GuiResultCommon):
         self.min_values = deepcopy(self.default_mins)
         self.max_values = deepcopy(self.default_maxs)
 
+    def validate(self) -> None:
+        ntitles = len(self.titles)
+        nheaders = len(self.headers)
+        ndata_formats = len(self.data_formats)
+        nmin_values = len(self.min_values)
+        nmax_values = len(self.max_values)
+        assert ntitles > 0, self.titles
+        assert nheaders > 0, self.headers
+        assert ndata_formats == ntitles, self.data_formats
+        for title in self.titles:
+            assert isinstance(title, str), title
+        for header in self.headers:
+            assert isinstance(header, str), header
+        for data_format in self.data_formats:
+            assert isinstance(data_format, str), data_format
+        return
+
     # getters
-    def get_location(self, i, unused_name):
+    def has_coord_transform(self, i: int,
+                            resname: str) -> tuple[bool, list[str]]:
+        return True, ['Global']
+
+    def has_derivation_transform(self, i: int, res_name: str,
+                                 ) -> tuple[bool, dict[str, Any]]:
+        """min/max/avg"""
+        return False, {}
+
+    def has_nodal_combine_transform(self, i: int,
+                                    resname: str) -> tuple[bool, list[str]]:
+        """elemental -> nodal"""
+        return False, []
+
+    def has_output_checks(self, i: int, resname: str) -> tuple[bool, bool, bool,
+                                                               bool, bool, bool]:
+        is_enabled_fringe = True
+        is_checked_fringe = True
+        is_enabled_disp = True
+        is_checked_disp = True
+        is_enabled_vector = False
+        is_checked_vector = False
+        out = (
+            is_enabled_fringe, is_checked_fringe,
+            is_enabled_disp, is_checked_disp,
+            is_enabled_vector, is_checked_vector)
+        return out
+
+    def get_location(self, i: int, unused_name: str) -> str:
         return self.location
 
-    def get_header(self, i, unused_name):
+    def get_annotation(self, i: int, unused_name: str) -> str:
         #j = self.titles_default.index(name)
         #return self.titles[j]
         return self.headers[i]
 
-    def get_phase(self, i, name):
+    def get_phase(self, i: int, name: str) -> Optional[float]:
         if self.is_real:
             return None
         return self.phases[i]
 
-    def get_data_format(self, i, name):
+    def get_data_format(self, i: int, name: str) -> str:
         return self.data_formats[i]
 
-    def get_scale(self, i, name):
+    def get_scale(self, i: int, name: str) -> float:
         return self.scales[i]
 
-    def get_title(self, i, name):
+    def get_arrow_scale(self, i: int, name: str) -> float:
+        return self.arrow_scales[i]
+
+    def get_legend_title(self, i: int, name: str) -> str:
         return self.titles[i]
 
-    def get_min_max(self, i, name):
+    def get_min_max(self, i: int, name: str) -> tuple[float, float]:
         return self.min_values[i], self.max_values[i]
+
+    def get_imin_imax(self, i: int, name: str) -> tuple[None, None]:
+        return None, None
 
     #-------------------------------------
     # setters
 
-    def set_data_format(self, i, name, data_format):
+    def set_data_format(self, i: int, name: str, data_format: str) -> None:
         self.data_formats[i] = data_format
 
-    def set_scale(self, i, name, scale):
+    def set_scale(self, i: int, name: str, scale: float) -> None:
         #j = self.titles_default.index(name)
         if self.linked_scale_factor:
             self.scales[:] = scale
         else:
             self.scales[i] = scale
 
-    def set_phase(self, i, name, phase):
+    def set_arrow_scale(self, i: int, name: str, scale: float) -> None:
+        #j = self.titles_default.index(name)
+        if self.linked_scale_factor:
+            self.arrow_scales[:] = scale
+        else:
+            self.arrow_scales[i] = scale
+
+    def set_phase(self, i: int, name: str, phase: float) -> None:
         if self.is_real:
             return
         #j = self.titles_default.index(name)
         self.phases[i] = phase
 
-    def set_title(self, i, name, title):
+    def set_legend_title(self, i: int, name: str, title: str) -> None:
         self.titles[i] = title
 
-    def set_min_max(self, i, name, min_value, max_value):
+    def set_min_max(self, i: int, name: str,
+                    min_value: float, max_value: float) -> None:
         self.min_values[i] = min_value
         self.max_values[i] = max_value
 
     #-------------------------------------
     # default getters
-    def get_default_data_format(self, i, name):
+    def get_default_data_format(self, i: int, name: str):
         return self.data_formats_default[i]
 
-    def get_default_min_max(self, i, name):
+    def get_default_min_max(self, i: int, name: str) -> tuple[float, float]:
         return self.default_mins[i], self.default_maxs[i]
 
-    def get_nlabels_labelsize_ncolors_colormap(self, i, name):
+    def get_nlabels_labelsize_ncolors_colormap(self, i: int, name: str):
         return self.nlabels, self.labelsize, self.ncolors, self.colormap
 
-    def set_nlabels_labelsize_ncolors_colormap(self, i, name, nlabels, labelsize,
+    def set_nlabels_labelsize_ncolors_colormap(self, i: int, name: str,
+                                               nlabels, labelsize,
                                                ncolors, colormap):
         self.nlabels = nlabels
         self.labelsize = labelsize
         self.ncolors = ncolors
         self.colormap = colormap
 
-    #def get_default_min_max(self, i, name):
+    #def get_default_min_max(self, i: int, name: str) -> tuple[float, float]:
         #return self.min_default[i], self.max_default[i]
 
-    def get_default_scale(self, i, name):
+    def get_default_scale(self, i: int, name: str) -> float:
         return self.scales_default[i]
 
-    def get_default_phase(self, i, name):
+    def get_default_arrow_scale(self, i: int, name: str) -> float:
+        return self.scales_default[i]
+
+    def get_default_phase(self, i: int, name: str) -> Optional[float]:
         if self.is_real:
             return None
         return 0.0
 
-    def get_default_nlabels_labelsize_ncolors_colormap(self, i, name):
+    def get_default_nlabels_labelsize_ncolors_colormap(self, i: int, name: str):
         # TODO: do this right
         return self.get_nlabels_labelsize_ncolors_colormap(i, name)
 
-    def get_default_title(self, i, name):
+    def get_default_legend_title(self, i: int, resname: str) -> str:
         return self.titles_default[i]
 
     #-------------------------------------
     # unmodifyable getters
 
-    def get_data_type(self, unused_i, unused_name):
+    def get_data_type(self, unused_i, resname: str) -> str:
         """the precision of the data"""
         return self.data_type
 
-    def get_vector_size(self, i, unused_name):
-        """the result size"""
+    def get_vector_size(self, i: int, resname: str) -> int:
+        """vector_size=1 is the default and displacement has 3 components"""
         #print(i)
         #j = self.titles_default.index(name)
         return 3
 
-    def get_plot_value(self, i, unused_name):
-        if self.is_real:
-            if self.dim == 2:
-                dxyz = self.dxyz
-            elif self.dim == 3:
-                dxyz = self.dxyz[i, :]
-            else:
-                raise NotImplementedError('dim=%s' % self.dim)
-        else:
-            dxyz = self._get_complex_displacements(i)
+    #def get_plot_value(self, i:int, resname: str) -> np.ndarray:
+        #"""plot returns the displacement..."""
+        #if self.is_real:
+            #if self.dim == 2:
+                #dxyz = self.dxyz
+            #elif self.dim == 3:
+                #dxyz = self.dxyz[i, :]
+            #else:
+                #raise NotImplementedError('dim=%s' % self.dim)
+        #else:
+            #dxyz = self._get_complex_displacements(i)
 
-        assert len(dxyz.shape) == 2, dxyz.shape
-        return dxyz
+        #assert len(dxyz.shape) == 2, dxyz.shape
+        #return dxyz
 
-    def _get_complex_displacements_by_phase(self, i, phase=0.):
+    def _get_complex_displacements_by_phase(self, i: int, name: str,
+                                            phase: float=0.) -> np.ndarray:
         """
         Get displacements for a complex eigenvector result.
         """
@@ -258,12 +325,17 @@ class VectorTable(GuiResultCommon):
         dxyz = self.dxyz[i, :].real * np.cos(theta) + self.dxyz[i, :].imag * np.sin(theta)
         return dxyz
 
-    def _get_complex_displacements(self, i):
+    def _get_complex_displacements(self, i: int, name: str) -> np.ndarray:
         """see ``_get_complex_displacements_by_phase``"""
-        dxyz = self._get_complex_displacements_by_phase(i, self.phases[i])
+        dxyz = self._get_complex_displacements_by_phase(i, name, self.phases[i])
         return dxyz
 
-    def get_result(self, i, name):
+    def get_fringe_result(self, i: int, name: str) -> np.ndarray:
+        fringe, vector = self.get_fringe_vector_result(i, name)
+        return fringe
+
+    def get_fringe_vector_result(self, i: int, name: str) -> tuple[np.ndarray, np.ndarray]:
+        """gets the 'typical' result which is a vector"""
         if self.is_real:
             if self.dim == 2:
                 # single result
@@ -277,12 +349,18 @@ class VectorTable(GuiResultCommon):
             else:
                 raise NotImplementedError('dim=%s' % self.dim)
         else:
-            dxyz = self._get_complex_displacements(i)
+            dxyz = self._get_complex_displacements(i, name)
 
         assert len(dxyz.shape) == 2, dxyz.shape
-        return dxyz
+        normi = safe_norm(dxyz, axis=1)
+        return normi, dxyz
 
-    def get_vector_result(self, i, name):
+    def get_force_vector_result(self, i: int, name: str,
+                                ) -> tuple[np.ndarray, np.ndarray]:
+        return self.get_vector_result(i, name)
+
+    def get_vector_result(self, i: int, name: str,
+                          ) -> tuple[np.ndarray, np.ndarray]:
         #assert len(self.xyz.shape) == 2, self.xyz.shape
         if self.is_real:
             xyz, deflected_xyz = self.get_vector_result_by_scale_phase(
@@ -302,8 +380,7 @@ class VectorTable(GuiResultCommon):
         #self.dxyz = dxyz
         #self.dim = len(self.dxyz.shape)
 
-
-        self.uname = uname
+        #self.uname = uname
         #self.dxyz_norm = norm(dxyz, axis=1)
 
         #self.deflects = deflects
@@ -335,7 +412,7 @@ class VectorTable(GuiResultCommon):
         msg += f'    data_type={self.data_type!r}\n'
         msg += f'    is_real={self.is_real} is_complex={self.is_complex}\n'
         msg += f'    location={self.location!r}\n'
-        msg += f'    header={self.headers!r}\n'
+        msg += f'    headers={self.headers!r}\n'
         msg += f'    data_format={self.data_formats!r}\n'
         msg += f'    uname={self.uname!r}\n'
         return msg
@@ -356,16 +433,15 @@ class ElementalTableResults(VectorTable):
             colormap=colormap, set_max_min=set_max_min,
             uname=uname)
 
-    def get_methods(self, i):
+    def get_methods(self, i: int) -> list[str]:
         if self.is_real:
             return ['magnitude', 'x', 'y', 'z']
-        else:
-            raise NotImplementedError('self.is_real=%s' % self.is_real)
+        raise NotImplementedError('self.is_real=%s' % self.is_real)
 
-    def deflects(self, unused_i, unused_res_name):
-        return False
-
-    def get_vector_result_by_scale_phase(self, i, unused_name, unused_scale, phase=0.):
+    def get_vector_result_by_scale_phase(self, i: int, name: str,
+                                         unused_scale: float,
+                                         phase: float=0.,
+                                         ) -> tuple[Optional[np.ndarray], np.ndarray]:
         xyz = None
         #assert len(self.xyz.shape) == 2, self.xyz.shape
         if self.is_real:
@@ -377,17 +453,28 @@ class ElementalTableResults(VectorTable):
             else:
                 raise NotImplementedError('dim=%s' % self.dim)
         else:
-            deflected_xyz = self._get_complex_displacements_by_phase(i, phase)
+            deflected_xyz = self._get_complex_displacements_by_phase(
+                i, name, phase)
         assert len(deflected_xyz.shape) == 2, deflected_xyz.shape
         return xyz, deflected_xyz
 
 
+forces = ['Magnitude', 'Fx', 'Fy', 'Fz']
+moments = ['Magnitude', 'Mx', 'My', 'Mz']
+
+
 class ForceTableResults(VectorTable):
-    def __init__(self, subcase_id, titles, headers, dxyz, unused_scalar,
-                 scales, data_formats=None,
-                 nlabels=None, labelsize=None, ncolors=None, colormap='jet',
-                 set_max_min=False, uname='ForceTableResults'):
-        # type: (int, List[str], List[str], Any, Any, List[float], Any, Optional[int], Optional[int], Optional[int], str, bool, str) -> None
+    def __init__(self, subcase_id: int, titles: list[str], headers: list[str],
+                 dxyz: Any,
+                 unused_scalar: Any,
+                 scales: list[float],
+                 data_formats: Optional[str]=None,
+                 nlabels: Optional[int]=None,
+                 labelsize: Optional[int]=None,
+                 ncolors: Optional[int]=None,
+                 colormap: str='jet',
+                 set_max_min: bool=False,
+                 uname: str='ForceTableResults'):
         """this is a nodal force result"""
         linked_scale_factor = False
         location = 'node'
@@ -398,20 +485,17 @@ class ForceTableResults(VectorTable):
             colormap=colormap, set_max_min=set_max_min,
             uname=uname)
 
-    def get_methods(self, i):
-        if self.is_real:
-            return ['magnitude', 'tx', 'ty', 'tz', 'rx', 'ry', 'rz']
-        else:
-            return ['node real', 'node imag', 'node magnitude', 'node phase']
+    def get_location(self, i: int, name):
+        """the result type"""
+        return 'node'
 
-    #def get_location(self, i, name):
-        #"""the result type"""
-        #return 'node'
+    def get_methods(self, i: int, name) -> list[str]:
+        return ['Magnitude']
 
-    def deflects(self, unused_i, unused_res_name):
-        return False
-
-    def get_vector_result_by_scale_phase(self, i, unused_name, unused_scale, phase=0.):
+    def get_vector_result_by_scale_phase(self, i: int, name: str,
+                                         unused_scale: float,
+                                         phase: float=0.,
+                                         ) -> tuple[Optional[np.ndarray], np.ndarray]:
         """
         Gets the real/complex deflection result
 
@@ -445,11 +529,12 @@ class ForceTableResults(VectorTable):
             else:
                 raise NotImplementedError('dim=%s' % self.dim)
         else:
-            deflected_xyz = self._get_complex_displacements_by_phase(i, phase)
+            deflected_xyz = self._get_complex_displacements_by_phase(
+                i, name, phase)
         assert len(deflected_xyz.shape) == 2, deflected_xyz.shape
         return xyz, deflected_xyz
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """defines str(self)"""
         msg = 'ForceTableResults\n'
         msg += f'    titles={self.titles!r}\n'
@@ -463,11 +548,23 @@ class ForceTableResults(VectorTable):
         return msg
 
 
+translation = ['Magnitude', 'tx', 'ty', 'tz']
+rotation = ['Magnitude', 'rx', 'ry', 'rz']
+
+
 class DisplacementResults(VectorTable):
-    def __init__(self, subcase_id, titles, headers, xyz, dxyz, unused_scalar,
-                 scales, data_formats=None,
-                 nlabels=None, labelsize=None, ncolors=None, colormap='jet',
-                 set_max_min=False, uname='DisplacementResults'):
+    def __init__(self, subcase_id: int,
+                 titles: list[str],
+                 headers: list[str],
+                 xyz: np.ndarray,
+                 dxyz: np.ndarray,
+                 unused_scalar: np.ndarray,
+                 scales: np.ndarray,
+                 data_formats=None,
+                 nlabels=None, labelsize=None, ncolors=None,
+                 colormap: str='jet',
+                 set_max_min: bool=False,
+                 uname: str='DisplacementResults'):
         """
         Defines a Displacement/Eigenvector result
 
@@ -475,9 +572,9 @@ class DisplacementResults(VectorTable):
         ----------
         subcase_id : int
             the flag that points to self.subcases for a message
-        headers : List[str]
+        headers : list[str]
             the sidebar word
-        titles : List[str]
+        titles : list[str]
             the legend title
         xyz : (nnodes, 3)
             the nominal xyz locations
@@ -486,10 +583,10 @@ class DisplacementResults(VectorTable):
         scalars : (nnodes,n) float ndarray
             #the data to make a contour plot with
             does nothing
-        scales : List[float]
+        scales : list[float]
             the deflection scale factors
             nominally, this starts as an empty list and is filled later
-        data_formats : List[str]
+        data_formats : list[str]
             the type of data result (e.g. '%i', '%.2f', '%.3f')
         ncolors : int; default=None
             sets the default for reverting the legend ncolors
@@ -518,30 +615,30 @@ class DisplacementResults(VectorTable):
     #-------------------------------------
     # unmodifyable getters
 
-    def deflects(self, unused_i, unused_res_name):
+    def deflects(self, unused_i: int, unused_res_name: str) -> bool:
+        """deflection is opt-in"""
         return True
 
-    def get_location(self, unused_i, unused_name):
+    def get_location(self, unused_i: int, unused_name: str) -> str:
         """the result type"""
         return 'node'
 
     #-------------------------------------
 
-    def get_methods(self, i):
-        if self.is_real:
-            return ['magnitude', 'tx', 'ty', 'tz', 'rx', 'ry', 'rz']
-        else:
-            return ['node real', 'node imag', 'node magnitude', 'node phase']
+    def get_methods(self, i: int, name: str) -> list[str]:
+        return ['Magnitude']
 
     #@property
     #def scalar(self):
         #return self.dxyz_norm
 
-    #def get_scalar(self, i, name):
+    #def get_scalar(self, i:int, name):
         #print(self.dxyz_norm)
         #return self.dxyz_norm
 
-    def get_vector_result_by_scale_phase(self, i, unused_name, scale, phase=0.):
+    def get_vector_result_by_scale_phase(self, i: int, name: str,
+                                         scale: float,
+                                         phase: float=0.) -> tuple[np.ndarray, np.ndarray]:
         """
         Gets the real/complex deflection result
 
@@ -573,12 +670,15 @@ class DisplacementResults(VectorTable):
             else:
                 raise NotImplementedError('dim=%s' % self.dim)
         else:
-            dxyz = self._get_complex_displacements_by_phase(i, phase)
+            assert isinstance(i, int), (i, phase)
+            assert isinstance(phase, float), (i, phase)
+            dxyz = self._get_complex_displacements_by_phase(
+                i, name, phase)
             deflected_xyz = self.xyz + scale * dxyz
         assert len(deflected_xyz.shape) == 2, deflected_xyz.shape
         return self.xyz, deflected_xyz
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """defines str(self)"""
         msg = 'DisplacementResults\n'
         msg += f'    titles={self.titles!r}\n'

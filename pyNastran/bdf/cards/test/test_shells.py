@@ -3,31 +3,36 @@ import os
 from io import StringIO
 import unittest
 import numpy as np
-from numpy import array
 
-from cpylog import get_logger
-from pyNastran.bdf.bdf import PCOMP, MAT1, BDF
+from cpylog import SimpleLogger
+from pyNastran.bdf.bdf import MAT1, BDF, CTRIA3, CQUAD4
+from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
+from pyNastran.bdf.cards.properties.shell import PCOMP, get_Qbar_matrix
 from pyNastran.bdf.cards.materials import get_mat_props_S
 from pyNastran.bdf.cards.test.utils import save_load_deck
-from pyNastran.bdf.mesh_utils.mass_properties import mass_properties_nsm
+from pyNastran.bdf.mesh_utils.mass_properties import (
+    mass_properties, mass_properties_no_xref, mass_properties_nsm)
 
 
 try:
     import matplotlib
     IS_MATPLOTLIB = True
-    from pyNastran.bdf.cards.elements.plot import plot_equivalent_lamina_vs_theta
-except ImportError:
+    from pyNastran.bdf.cards.elements.shell_laminate_plot import plot_equivalent_lamina_vs_theta
+except ModuleNotFoundError:
     IS_MATPLOTLIB = False
+
 
 class TestShells(unittest.TestCase):
     def test_pshell(self):
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         pid = 10
         pshell = model.add_pshell(pid, mid1=1, mid2=2, mid3=3, mid4=4, tst=3.14)
         assert ' 3.14' in pshell.rstrip(), pshell.rstrip()
 
-    def _make_cquad4(self, model, rho, nu, G, E, t, nsm):
+    def _make_cquad4(self, model: BDF,
+                     rho: float, nu: float, G: float, E: float,
+                     t: float, nsm: float):
         eid = 10
         pid = 20
         mid = 30
@@ -54,10 +59,10 @@ class TestShells(unittest.TestCase):
             model.add_card(fields, fields[0], is_list=True)
         model.validate()
         model._verify_bdf(xref=False)
-        model.mass_properties_no_xref()
+        mass_properties_no_xref(model)
 
         model.cross_reference()
-        model.mass_properties()
+        mass_properties(model)
         model._verify_bdf(xref=True)
         cquad4 = model.Element(eid)
         cquad4.get_edge_axes()
@@ -134,7 +139,7 @@ class TestShells(unittest.TestCase):
         self.assertEqual(ctria3.Mass(), mass)
         self.assertAlmostEqual(ctria3.MassPerArea(), mass / A)
         self.assertEqual(ctria3.Area(), A)
-        self.assertEqual(ctria3.Thickness(), t)
+        self.assertAlmostEqual(ctria3.Thickness(), t)
         self.assertEqual(ctria3.MassPerArea(), mass / A)
         self.assertEqual(ctria3.zoffset, z0_elem)
         ctria3.raw_fields()
@@ -239,7 +244,7 @@ class TestShells(unittest.TestCase):
         self._make_ctria3(model, rho, nu, G, E, t, nsm)
 
     def test_cquad4_01(self):
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         eid = 10
         pid = 20
@@ -270,6 +275,10 @@ class TestShells(unittest.TestCase):
         ]
         for fields in cards:
             model.add_card(fields, fields[0], is_list=True)
+
+        nid = 1
+        normal = [0., 0., 1.]
+        model.add_snorm(nid, normal, comment='snorm')
 
         # get node IDs without cross referencing
         eids = [10]
@@ -400,11 +409,11 @@ class TestShells(unittest.TestCase):
         G = 42.
         mat1 = [mid, E, G, nu, rho, a, tref, ge, St, Sc, Ss, mcsid]
         m = MAT1.add_op2_data(mat1)
-        for iply in range(len(p.plies)):
-            mid = p.plies[iply][0]
-            p.mids[iply] = m # MAT1
-            #p.mids = [m, m, m]
-        p.mids_ref = p.mids
+        nplies = p.nplies
+        p.mids_ref = [None] * nplies
+        for iply in range(nplies):
+            p.mids_ref[iply] = m # MAT1
+        p.mids = [mid_ref.mid for mid_ref in p.mids_ref]
 
         #Rho
         self.assertAlmostEqual(p.Rho(0), 1.0)
@@ -443,7 +452,7 @@ class TestShells(unittest.TestCase):
             p.MassPerArea(3, method='nplies')
 
         z = p.get_z_locations()
-        z_expected = array([0., T[0], T[0]+T[1], T[0]+T[1]+T[2]])
+        z_expected = np.array([0., T[0], T[0]+T[1], T[0]+T[1]+T[2]])
         for za, ze in zip(z, z_expected):
             self.assertAlmostEqual(za, ze)
 
@@ -531,10 +540,16 @@ class TestShells(unittest.TestCase):
         mat1 = [mid, E, G, nu, rho, a, tref, ge, St, Sc, Ss, mcsid]
         m = MAT1.add_op2_data(mat1)
 
-        for iply in range(len(p.plies)):
-            mid = p.plies[iply][0]
-            p.mids[iply] = m # MAT1
-        p.mids_ref = p.mids
+        nplies = p.nplies
+        assert nplies == 6
+        assert len(p.mids) == 3
+
+        # todo: old-style -> update
+        npliesi = nplies//2
+        p.mids_ref = [None] * npliesi
+        for iply in range(npliesi):
+            p.mids_ref[iply] = m # MAT1
+        p.mids = [mid_ref.mid for mid_ref in p.mids_ref]
 
         #Rho
         self.assertAlmostEqual(p.Rho(0), 1.0)
@@ -576,7 +591,7 @@ class TestShells(unittest.TestCase):
 
     def test_cshear(self):
         """tests a PSHEAR/CSHEAR"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -619,7 +634,7 @@ class TestShells(unittest.TestCase):
         model._verify_bdf(xref=False)
         model.cross_reference()
         model._verify_bdf(xref=True)
-        model.mass_properties()
+        mass_properties(model)
 
         cshear.write_card(size=8)
         pshear.write_card(size=8)
@@ -628,7 +643,7 @@ class TestShells(unittest.TestCase):
 
     def test_shells(self):
         """tests a CTRIA3/CQUAD4/PSHELL and CTRIA6/CQUAD8/CQUAD/PCOMP"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -707,8 +722,8 @@ class TestShells(unittest.TestCase):
         model._verify_bdf(xref=True)
 
         model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
         model.update_model_by_desvars(xref=True)
 
@@ -729,7 +744,7 @@ class TestShells(unittest.TestCase):
 
     def test_trax(self):
         """tests a CTRAX3/CTRAX6/???"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -784,8 +799,8 @@ class TestShells(unittest.TestCase):
 
         plsolid.raw_fields()
         plsolid.write_card(size=8)
-        #plsolid.write_card(size=16)
-        #plsolid.write_card(size=16, is_double=True)
+        # plsolid.write_card(size=16)
+        # plsolid.write_card(size=16, is_double=True)
 
         model._verify_bdf(xref=False)
 
@@ -805,9 +820,31 @@ class TestShells(unittest.TestCase):
         #pcomp.write_card(size=16, is_double=True)
         save_load_deck(model, run_convert=False)
 
+    def test_plsolid(self):
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        mid = 1
+        E = 30.e7
+        G = None
+        nu = 0.3
+        # model.add_mat1(mid, E, G, nu, rho=0.1)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 0., 1.])
+        eid = 1
+        pid = 1
+        mid = 1
+        nodes = [1, 2, 3, 4]
+        model.add_ctetra(eid, pid, nodes)
+        plsolid = model.add_plsolid(pid, mid, stress_strain='GRID', ge=0.,
+                                    comment='plsolid')
+        mathp = model.add_mathp(mid)
+        save_load_deck(model, run_mass_properties=False)
+
     def test_ctriar_cquadr(self):
         """tests a CTRIAR/PSHELL/MAT8"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -844,15 +881,140 @@ class TestShells(unittest.TestCase):
         model.safe_cross_reference()
 
         model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
         save_load_deck(model)
 
+    def test_pgplsn(self):
+        """tests a PGPLSN property card"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+
+        # create control grid point, mat1 material and pgplsn property
+        # test both integer and float-valued knr properties
+        for knr in (1, 0.):
+            model = BDF(log=log)
+
+            cgrid = model.add_grid(1, [0., 0., 0.])
+            mat1 = model.add_mat1(mid=1, E=1e7, G=None, nu=0.3)
+            pgplsn = model.add_pgplsn(pid=1, mid=mat1.mid, cgid=cgrid.nid,
+                                      t=1.0, kn=knr, kr1=knr, kr2=knr,)
+
+            model.validate()
+            model._verify_bdf(xref=False)
+            pgplsn.write_card(size=8)
+            model.cross_reference()
+            model.pop_xref_errors()
+
+            model.uncross_reference()
+            model.safe_cross_reference()
+            save_load_deck(model)
+
+    def test_cplsts3(self):
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        # cplsts3 = model.cplsts3
+        # cplsts4 = model.cplsts4
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+        expected_tri_area = 0.5
+        expected_quad_area = 1.0
+
+        eid = 10
+        pid = 11
+        mid = 12
+        nids = [1, 2, 3]
+        cplsts3 = model.add_cplsts3(eid, pid, nids, theta=0.0, comment='')
+
+        eid += 1
+        nids = [1, 2, 3, 4]
+        cplsts4 = model.add_cplsts4(eid, pid, nids, theta=0.0, comment='')
+
+        t = 0.31
+        rho = 0.13
+        model.add_pplane(pid, mid, t=t, nsm=0.0, formulation_option=0, comment='')
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu, rho=rho)
+        # model.setup()
+        # assert len(cplsts3) == 1, cplsts3
+        # assert len(cplsts4) == 1, cplsts4
+
+        expected_tri_mass = t * expected_tri_area * rho
+        expected_quad_mass = t * expected_quad_area * rho
+
+        model.cross_reference()
+        areai = cplsts3.Area()
+        massi = cplsts3.Mass()
+        assert np.allclose(areai, expected_tri_area), (areai, expected_tri_area)
+        #assert np.allclose(massi, expected_tri_mass), (massi, expected_tri_mass)
+
+        areai = cplsts4.Area()
+        massi = cplsts4.Mass()
+        assert np.allclose(areai, expected_quad_area), (areai, expected_quad_area)
+        #assert np.allclose(massi, expected_quad_mass), (massi, expected_quad_mass)
+
+        save_load_deck(
+            model, run_remove_unused=False, run_mass_properties=False,
+            run_save_load_hdf5=False,
+        )
+
+    def test_cplsts34(self):
+        """tests a CPLSTS3, CPLSTS4/PSHELL/MAT8"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+        pid = 4
+        eid = 3
+        nids = [1, 2, 3, 4]
+        cplsts4 = model.add_cplsts4(eid, pid, nids, comment='cplsts4')
+        cplsts4.flip_normal()
+
+        eid = 5
+        nids = [1, 2, 3]
+        mid = 10
+        cplsts3 = model.add_cplsts3(eid, pid, nids, comment='cplsts3')
+        cplsts3.flip_normal()
+
+        pplane = model.add_pplane(pid, mid, t=0.1, nsm=0.,
+                                  formulation_option=0, comment='pplane')
+        E = 1e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu)
+
+        cplsts3.repr_fields()
+        cplsts4.repr_fields()
+
+        cplsts3.raw_fields()
+        cplsts4.raw_fields()
+        pplane.raw_fields()
+
+        model.validate()
+        model._verify_bdf(xref=False)
+        cplsts3.write_card(size=8)
+        cplsts4.write_card(size=8)
+        pplane.write_card(size=8)
+        model.cross_reference()
+        model.pop_xref_errors()
+        #cplstn3.write_card(size=8)
+        #cplstn4.write_card(size=8)
+
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(model, run_save_load_hdf5=False)
+
     def test_cplstn34(self):
         """tests a CPLSTN3, CPLSTN4/PSHELL/MAT8"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -898,9 +1060,55 @@ class TestShells(unittest.TestCase):
         model.safe_cross_reference()
         save_load_deck(model)
 
+    def test_cplsts68(self):
+        """tests a CPLSTS6, CPLSTS8/PSHELL/MAT8"""
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(5, [.5, 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_grid(6, [1., .5, 0.])
+        model.add_grid(3, [1., 1., 0.])
+        model.add_grid(7, [.5, 1., 0.])
+        model.add_grid(4, [0., 1., 0.])
+        model.add_grid(8, [0., .5, 0.])
+        pid = 4
+        eid = 3
+        nids = [1, 2, 3, 4, 5, 6, 7, 8]
+        cplsts8 = model.add_cplsts8(eid, pid, nids, comment='cplstn8')
+
+        eid = 5
+        nids = [1, 2, 3, 4, 5, 6]
+        mid = 10
+        cplsts6 = model.add_cplsts6(eid, pid, nids, comment='cplstn6')
+        pplane = model.add_pplane(pid, mid, t=0.1, nsm=0.,
+                                  formulation_option=0, comment='pplane')
+        E = 1e7
+        G = None
+        nu = 0.3
+        mat1 = model.add_mat1(mid, E, G, nu)
+
+        cplsts6.raw_fields()
+        cplsts8.raw_fields()
+        pplane.raw_fields()
+
+        model.validate()
+        model._verify_bdf(xref=False)
+        cplsts6.write_card(size=8)
+        cplsts8.write_card(size=8)
+        pplane.write_card(size=8)
+        model.cross_reference()
+        model.pop_xref_errors()
+        #cplstn3.write_card(size=8)
+        #cplstn4.write_card(size=8)
+
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(model)
+
     def test_cplstn68(self):
         """tests a CPLSTN6, CPLSTN8/PSHELL/MAT8"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(5, [.5, 0., 0.])
@@ -946,7 +1154,7 @@ class TestShells(unittest.TestCase):
 
     def test_ctrishell68(self):
         """tests a CPLSTN6, CPLSTN8/PSHELL/MAT8"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(5, [.5, 0., 0.])
@@ -987,7 +1195,7 @@ class TestShells(unittest.TestCase):
         model.uncross_reference()
         model.safe_cross_reference()
         save_load_deck(model, run_test_bdf=False)
-        #model.mass_properties()
+        #mass_properties(model)
 
     def test_shear(self):
         """tests a CSHEAR, PSHEAR"""
@@ -995,7 +1203,7 @@ class TestShells(unittest.TestCase):
         pid_pshell = 11
 
         mid = 100
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -1027,10 +1235,10 @@ class TestShells(unittest.TestCase):
 
         area = 1.0
         mass_expected = area * (rho * t + nsm)
-        mass = model.mass_properties()[0]
+        mass = mass_properties(model, )[0]
         assert np.allclose(mass, mass_expected*2), 'mass_properties all: mass=%s mass_expected=%s' % (mass, mass_expected*2)
 
-        mass = model.mass_properties(element_ids=10)[0]
+        mass = mass_properties(model, element_ids=10)[0]
         assert np.allclose(mass, mass_expected), 'mass_properties reduced: mass=%s mass_expected=%s' % (mass, mass_expected)
 
         mass = mass_properties_nsm(model)[0]
@@ -1046,8 +1254,8 @@ class TestShells(unittest.TestCase):
         model.pop_xref_errors()
 
         model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
         assert np.allclose(cshear.Mass(), mass_expected), cshear.Mass()
@@ -1062,7 +1270,7 @@ class TestShells(unittest.TestCase):
 
     def test_cquadx4(self):
         """tests a CQUADX4"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         eid = 1
         pid = 2
@@ -1082,7 +1290,7 @@ class TestShells(unittest.TestCase):
         model.cross_reference()
         model.pop_xref_errors()
 
-        mass = model.mass_properties()[0]
+        mass = mass_properties(model)[0]
         assert np.allclose(mass, 0.0), mass  # TODO: not sure
 
         model.uncross_reference()
@@ -1094,7 +1302,7 @@ class TestShells(unittest.TestCase):
 
     def test_ctria6_cquad8_cquad9(self):
         """tests a CQUAD8 and CQUAD9"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         eid = 1
         pid = 10
@@ -1165,15 +1373,15 @@ class TestShells(unittest.TestCase):
         assert np.allclose(ctria6.Mass(), 0.05), ctria6.Mass()
 
         model.get_area_breakdown(property_ids=None, stop_if_no_area=True)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=False)
-        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True, detailed=True)
+        model.get_mass_breakdown(property_ids=None, stop_if_no_mass=True)
+        model.get_mass_breakdown_detailed(property_ids=None, stop_if_no_mass=True)
         model.get_volume_breakdown(property_ids=None, stop_if_no_volume=True)
 
         save_load_deck(model)
 
     def test_cquadx8(self):
         """tests a CQUADX, CTRIAX, CTRIAX6"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         eid = 1
         pid = 10
@@ -1216,7 +1424,7 @@ class TestShells(unittest.TestCase):
 
     def test_shell_mcid(self):
         """tests that mcids=0 are correctly identified as not 0.0 and thus not dropped"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -1267,7 +1475,7 @@ class TestShells(unittest.TestCase):
 
     def test_abd_1(self):
         """tests some ABD matrix functionality for a PCOMP"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
         model.add_grid(1, [0., 0., 0.])
         model.add_grid(2, [1., 0., 0.])
@@ -1328,13 +1536,13 @@ class TestShells(unittest.TestCase):
         if IS_MATPLOTLIB:
             plot_equivalent_lamina_vs_theta(
                 pcomp8, mat8, thetad, plot=True, show=False, close=True,
-                png_filename='lamina.png')
+                png_filename_base='lamina')
             os.remove('lamina_stiffness.png')
             os.remove('lamina_nu.png')
 
     def test_abd_2(self):
         """tests some ABD matrix functionality for a PCOMP"""
-        log = get_logger(level='warning')
+        log = SimpleLogger(level='warning')
         model = BDF(log=log)
 
         #--------------------------
@@ -1410,6 +1618,199 @@ class TestShells(unittest.TestCase):
         B = ABD2[:3, -3:]
         assert np.allclose(0., B.sum()), B
         assert np.allclose(ABD2, ABD3), ABD2
+
+    def test_abd3(self):
+        """per https://rafaelpsilva07.github.io/composipydocs/notebooks/laminate.html"""
+        mid = 1
+        e11 = 54870.
+        e22 = 18320.
+        g12 = 8900.
+        nu12 = 0.25
+
+        model = BDF(debug=False, log=None, mode='msc')
+        model.add_mat8(
+            mid, e11, e22, nu12, g12=g12, g1z=1e8, g2z=1e8, rho=0.,
+            a1=0., a2=0., tref=0., Xt=0., Xc=None, Yt=0., Yc=None,
+            S=0., ge=0., F12=0., strn=0., comment='')
+        pid = 2
+        mids = [1, 1, 1]
+        thicknesses = [3., 6., 3.]
+        thetas = [45., 0., 45.]
+        pcomp = model.add_pcomp(pid, mids, thicknesses, thetas, souts=None,
+                                nsm=0., sb=0., ft=None, tref=0., ge=0., lam=None, z0=None, comment='')
+        model.cross_reference()
+        A, B, D = pcomp.get_individual_ABD_matrices()
+        #print(A)
+        #print(B)
+        #print(D)
+        #pcomp.get_Ainv_equivalent_pshell(imat_rotation_angle, thickness, degrees=True)
+
+    def test_qbar(self):
+        mid = 1
+        e11 = 39000.
+        e22 = 8300.
+        g12 = 4000.
+        nu12 = 0.26
+        t = 1.0
+
+        model = BDF(debug=False, log=None, mode='msc')
+        mat = model.add_mat8(
+            mid, e11, e22, nu12, g12=g12, g1z=1e8, g2z=1e8, rho=0.,
+            a1=0., a2=0., tref=0., Xt=0., Xc=None, Yt=0., Yc=None,
+            S=0., ge=0., F12=0., strn=0., comment='')
+        pid = 2
+        mids = [1]
+        thicknesses = [100.]
+        thetas = [0.]
+        pcomp = model.add_pcomp(pid, mids, thicknesses, thetas, souts=None,
+                                nsm=0., sb=0., ft=None, tref=0., ge=0., lam=None, z0=None, comment='')
+        model.cross_reference()
+        Q = get_Qbar_matrix(mat, theta=0.)
+        #print(Q)
+
+    def test_lax(self):
+        """tests adding cards in a lax way"""
+        card = ['CTRIA3', '301471', '301003', '301466', '301468', '30071', '0', '0']
+        bdf_card = BDFCard(card)
+        str(bdf_card)
+        card = CTRIA3.add_card_lax(bdf_card)
+        str(card)
+
+    def test_tri_theta(self):
+        model = BDF(debug=False, log=None, mode='msc')
+        rho = 0.
+        G = None
+        E = 3.0e7
+        t = 0.1
+        nu = 0.3
+        nsm = 0.
+        self._make_ctria3(model, rho, nu, G, E, t, nsm)
+
+        eid = 10
+        elem = model.elements[eid]
+
+        #['grid', n1, 0, 0., 0., 0.],
+        #['grid', n2, 0, 4., 0., 0.],
+        #['grid', n3, 0, 4., 1., 0.],
+
+        # element coordinate system and material coordinate system are coincident
+        dxyz, centroid, imat, jmat, normal = elem.material_coordinate_system()
+        centroid_expected = [2.66666667, 0.33333333, 0.]
+        imat_expected = [1., 0., 0.]
+        jmat_expected = [0., 1., 0.]
+        normal_expected = [0., 0., 1.]
+
+        dxyz, centroid, imat, jmat, normal = elem.element_coordinate_system()
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        # ----------------------------------------------------------------
+        elem.theta_mcid = 45.
+        # theta doesn't change the element coordinate system
+        dxyz, centroid, imat, jmat, normal = elem.element_coordinate_system()
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        dxyz, centroid, imat, jmat, normal = elem.material_coordinate_system()
+
+        sqrt2_2 = 2 ** 0.5 / 2
+        imat_expected = [sqrt2_2, sqrt2_2, 0.]
+        jmat_expected = [-sqrt2_2, sqrt2_2, 0.]
+        normal_expected = [0., 0., 1.]
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        # ----------------------------------------------------------------
+        elem.theta_mcid = 90.
+        dxyz, centroid, imat, jmat, normal = elem.material_coordinate_system()
+
+        imat_expected = [0., 1., 0.]
+        jmat_expected = [-1., 0., 0.]
+        normal_expected = [0., 0., 1.]
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+    def test_quad_theta(self):
+        model = BDF(debug=False, log=None, mode='msc')
+        rho = 0.
+        G = None
+        E = 3.0e7
+        t = 0.1
+        nu = 0.3
+        nsm = 0.
+        self._make_cquad4(model, rho, nu, G, E, t, nsm)
+
+        eid = 10
+        elem: CQUAD4 = model.elements[eid]
+
+        #['grid', n1, 0, 0., 0., 0.],
+        #['grid', n2, 0, 2., 0., 0.],
+        #['grid', n3, 0, 2., 1., 0.],
+        #['grid', n4, 0, 0., 1., 0.],
+
+        # element coordinate system and material coordinate system are coincident
+        dxyz, centroid, imat, jmat, normal = elem.material_coordinate_system()
+        centroid_expected = [1., 0.5, 0.]
+        imat_expected = [1., 0., 0.]
+        jmat_expected = [0., 1., 0.]
+        normal_expected = [0., 0., 1.]
+
+        dxyz, centroid, imat, jmat, normal = elem.element_coordinate_system()
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        # ----------------------------------------------------------------
+        elem.theta_mcid = 45.
+        # theta doesn't change the element coordinate system
+        dxyz, centroid, imat, jmat, normal = elem.element_coordinate_system()
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
+        dxyz, centroid, imat, jmat, normal = elem.material_coordinate_system()
+
+        sqrt2_2 = 2 ** 0.5 / 2
+        centroid_expected = [1., 0.5, 0.]
+        imat_expected = [sqrt2_2, sqrt2_2, 0.]
+        jmat_expected = [-sqrt2_2, sqrt2_2, 0.]
+        normal_expected = [0., 0., 1.]
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+        # ----------------------------------------------------------------
+        elem.theta_mcid = 90.
+        dxyz, centroid, imat, jmat, normal = elem.material_coordinate_system()
+
+        imat_expected = [0., 1., 0.]
+        jmat_expected = [-1., 0., 0.]
+        normal_expected = [0., 0., 1.]
+        assert np.allclose(centroid, centroid_expected), centroid
+        assert np.allclose(imat, imat_expected), imat
+        assert np.allclose(jmat, jmat_expected), jmat
+        assert np.allclose(normal, normal_expected), normal
+
 
 def make_dvcrel_optimization(model, params, element_type, eid, i=1):
     """makes a series of DVCREL1 and a DESVAR"""

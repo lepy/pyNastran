@@ -10,12 +10,15 @@ from types import MethodType, FunctionType
 import os
 import io
 import sys
-import getpass
+#import getpass
 import inspect
 import warnings
-from abc import abstractmethod
-from typing import List, Optional, Any
+from pathlib import PurePath
+#from abc import abstractmethod
+from typing import Optional, Any
 import pyNastran
+
+PathLike = str | PurePath
 
 
 def ipython_info() -> Optional[str]:
@@ -25,16 +28,17 @@ def ipython_info() -> Optional[str]:
     except NameError:
         return None
 
-def is_file_obj(filename: str) -> bool:
+
+def is_file_obj(filename: PathLike) -> bool:
     """does this object behave like a file object?"""
     return (
         (hasattr(filename, 'read') and hasattr(filename, 'write'))
         or isinstance(filename, (io.IOBase, io.StringIO))
     )
 
-def b(string: str) -> bytes:
-    """reimplementation of six.b(...) to work in Python 2"""
-    return string.encode('latin-1')
+#def b(string: str) -> bytes:
+    #"""reimplementation of six.b(...) to work in Python 2"""
+    #return string.encode('latin-1')
 
 #def merge_dicts(dict_list, strict: bool=True):
     #"""merges two or more dictionaries"""
@@ -51,7 +55,8 @@ def b(string: str) -> bytes:
                 #print('key=%r is dropped?' % key)
     #return dict_out
 
-def remove_files(filenames):
+
+def remove_files(filenames: list[PathLike]) -> None:
     """remvoes a series of files; quietly continues if the file can't be removed"""
     for filename in filenames:
         try:
@@ -59,7 +64,8 @@ def remove_files(filenames):
         except OSError:
             pass
 
-def is_binary_file(filename: str) -> bool:
+
+def is_binary_file(filename: PathLike) -> bool:
     """
     Return true if the given filename is binary.
 
@@ -80,7 +86,7 @@ def is_binary_file(filename: str) -> bool:
     that file is binary if it contains null.
 
     .. warning:: this may not work for unicode."""
-    assert isinstance(filename, str), '%r is not a valid filename' % filename
+    assert isinstance(filename, (str, PurePath)), f'{filename!r} is not a valid filename'
     check_path(filename)
     with io.open(filename, mode='rb') as fil:
         for chunk in iter(lambda: fil.read(1024), bytes()):
@@ -89,18 +95,19 @@ def is_binary_file(filename: str) -> bool:
     return False
 
 
-def check_path(filename: str, name: str='file') -> None:
+def check_path(filename: PathLike, name: str='file') -> None:
     """checks that the file exists"""
     try:
         exists = os.path.exists(filename)
     except TypeError:
-        msg = 'cannot find %s=%r\n' % (name, filename)
+        msg = f'cannot find {name}={str(filename)!r}\n'
         raise TypeError(msg)
     if not exists:
-        msg = 'cannot find %s=%r\n%s' % (name, filename, print_bad_path(filename))
+        msg = f'cannot find {name}={str(filename)!r}\n{print_bad_path(filename)}'
         raise FileNotFoundError(msg)
 
-def print_bad_path(path: str) -> str:
+
+def print_bad_path(path: PathLike) -> str:
     """
     Prints information about the existence (access possibility) of the parts
     of the given path. Useful for debugging when the path to a given file
@@ -114,20 +121,23 @@ def print_bad_path(path: str) -> str:
     Returns
     -------
     msg : str
-        string with informations whether access to parts of the path
+        string with information whether access to parts of the path
         is possible
 
     """
     #raw_path = path
-    if len(path) > 255:
-        path = os.path.abspath(_filename(path))
-        npath = os.path.dirname(path)
-        res = [path]
-        while path != npath:
-            path, npath = npath, os.path.dirname(npath)
-            res.append(path)
-        msg = {True: 'passed', False: 'failed'}
-        return '\n'.join(['%s: %s' % (msg[os.path.exists(i)], i[4:]) for i in res])
+    if isinstance(path, PurePath):
+        path = str(path)
+    path0 = path
+    #if len(path) > 255:
+        #path = os.path.abspath(_filename(path))
+        #npath = os.path.dirname(path)
+        #res = [path]
+        #while path != npath:
+            #path, npath = npath, os.path.dirname(npath)
+            #res.append(path)
+        #msg = {True: 'passed', False: 'failed'}
+        #return '\n'.join(['%s: %s' % (msg[os.path.exists(i)], i[4:]) for i in res])
 
     path = os.path.abspath(path)
     npath = os.path.dirname(path)
@@ -136,32 +146,39 @@ def print_bad_path(path: str) -> str:
         path, npath = npath, os.path.dirname(npath)
         res.append(path)
     msg = {True: 'passed', False: 'failed'}
+    if not os.path.exists(path0):
+        return 'Missing File:\n' + '\n'.join(['%s: %s' % (msg[os.path.exists(i)], i) for i in res])
     return '\n'.join(['%s: %s' % (msg[os.path.exists(i)], i) for i in res])
 
-def _filename(filename: str) -> str:
-    """
-    Prepends some magic data to a filename in order to have long filenames.
+#def _filename(filename: str) -> str:
+    #"""
+    #Prepends some magic data to a filename in order to have long filenames.
 
-    .. warning:: This might be Windows specific.
-    """
-    if len(filename) > 255:
-        return '\\\\?\\' + filename
-    return filename
+    #.. warning:: This might be Windows specific.
+    #"""
+    #if len(filename) > 255:
+        #return '\\\\?\\' + filename
+    #return filename
 
-def __object_attr(obj, mode, keys_to_skip, attr_type, filter_properties: bool=False):
+
+def __object_attr(obj: Any,
+                  mode: str,
+                  keys_to_skip: list[str],
+                  attr_type: str,
+                  filter_properties: bool=False) -> list[str]:
     """list object attributes of a given type"""
     #print('keys_to_skip=%s' % keys_to_skip)
     keys_to_skip = [] if keys_to_skip is None else keys_to_skip
     test = {
-        'public':  lambda k: (not k.startswith('_') and k not in keys_to_skip),
+        'public': lambda k: (not k.startswith('_') and k not in keys_to_skip),
         'private': lambda k: (k.startswith('_') and not k.startswith('__')
                               and k not in keys_to_skip),
         'both': lambda k: (not k.startswith('__') and k not in keys_to_skip),
-        'all':  lambda k: (k not in keys_to_skip),
+        'all': lambda k: (k not in keys_to_skip),
     }
 
-    if not mode in test:
-        raise ValueError('Wrong mode! Accepted modes: public, private, both, all.')
+    if mode not in test:  # pragma: no cover
+        raise ValueError(f'Wrong mode={mode!r}! Accepted modes: public, private, both, all.')
     check = test[mode]
 
     out = []
@@ -187,7 +204,7 @@ def __object_attr(obj, mode, keys_to_skip, attr_type, filter_properties: bool=Fa
                     out.append(key)
             else:
                 out.append(key)
-        except:
+        except Exception:
             pass
     out.sort()
     return out
@@ -196,7 +213,7 @@ def __object_attr(obj, mode, keys_to_skip, attr_type, filter_properties: bool=Fa
 
 
 def object_methods(obj: Any, mode: str='public',
-                   keys_to_skip: Optional[List[str]]=None) -> List[str]:
+                   keys_to_skip: Optional[list[str]]=None) -> list[str]:
     """
     List the names of methods of a class as strings. Returns public methods
     as default.
@@ -211,21 +228,32 @@ def object_methods(obj: Any, mode: str='public',
         * "private" - names that begin with single underscore
         * "both" - private and public
         * "all" - all methods that are defined for the object
-    keys_to_skip : List[str]; default=None -> []
+    keys_to_skip : list[str]; default=None -> []
         names to not consider to avoid deprecation warnings
 
     Returns
     -------
-    method : List[str]
+    method : list[str]
         sorted list of the names of methods of a given type
         or None if the mode is wrong
+
     """
     return __object_attr(obj, mode, keys_to_skip, lambda x: isinstance(x, MethodType))
 
-def object_stats(obj: Any, mode: str='public',
-                 keys_to_skip: Optional[List[str]]=None,
+
+def simplify_object_keys(keys_to_skip: Optional[list[str]]) -> list[str]:
+    if keys_to_skip is None:
+        keys_to_skip = []
+    elif isinstance(keys_to_skip, str):
+        keys_to_skip = [keys_to_skip]
+    return keys_to_skip
+
+
+def object_stats(obj: Any,
+                 mode: str='public',
+                 keys_to_skip: Optional[list[str]]=None,
                  filter_properties: bool=False) -> str:
-    """Prints out an easy to read summary of the object"""
+    """Prints an easy to read summary of the object"""
     msg = '%s:\n' % obj.__class__.__name__
     attrs = object_attributes(
         obj, mode=mode, keys_to_skip=keys_to_skip,
@@ -238,9 +266,10 @@ def object_stats(obj: Any, mode: str='public',
         msg += '  %-6s : %r\n' % (name, value)
     return msg
 
+
 def object_attributes(obj: Any, mode: str='public',
-                      keys_to_skip: Optional[List[str]]=None,
-                      filter_properties: bool=False) -> List[str]:
+                      keys_to_skip: Optional[list[str]]=None,
+                      filter_properties: bool=False) -> list[str]:
     """
     List the names of attributes of a class as strings. Returns public
     attributes as default.
@@ -255,16 +284,17 @@ def object_attributes(obj: Any, mode: str='public',
         * 'private' - names that begin with single underscore
         * 'both' - private and public
         * 'all' - all attributes that are defined for the object
-    keys_to_skip : List[str]; default=None -> []
+    keys_to_skip : list[str]; default=None -> []
         names to not consider to avoid deprecation warnings
     filter_properties: bool: default=False
         filters the @property objects
 
     Returns
     -------
-    attribute_names : List[str]
+    attribute_names : list[str]
         sorted list of the names of attributes of a given type or None
         if the mode is wrong
+
     """
     #if hasattr(obj, '__properties__'):
         #keys_to_skip += obj.__properties__()
@@ -286,9 +316,9 @@ def object_attributes(obj: Any, mode: str='public',
     #return failed_list
 
 
-def int_version(name: str, version: str) -> List[int]:
+def int_version(name: str, version: str) -> list[int]:
     """splits the version into a tuple of integers"""
-    sversion = version.split('-')[0]
+    sversion = version.split('-')[0].split('+')[0].split('.post')[0].split('a')[0].split('b')[0].split('rc')[0]
     #numpy
     #scipy
     #matplotlib
@@ -296,10 +326,11 @@ def int_version(name: str, version: str) -> List[int]:
     #vtk
     #cpylog
     #pyNastran
-    if 'rc' not in name:
-        # it's gotta be something...
-        # matplotlib3.1rc1
-        sversion = sversion.split('rc')[0]
+    # '1.20.0rc1'
+    # '1.4.0+dev.8913610a0'
+    # matplotlib 3.1rc1
+    # matplotlib 3.5.5b1
+    # matplotlib 3.9.1.post1
 
     try:
         return [int(val) for val in sversion.split('.')]
@@ -308,7 +339,7 @@ def int_version(name: str, version: str) -> List[int]:
 
 
 def deprecated(old_name: str, new_name: str, deprecated_version: str,
-               levels: Optional[List[int]]=None) -> None:
+               levels: Optional[list[int]]=None) -> None:
     """
     Throws a deprecation message and crashes if past a specific version.
 
@@ -320,7 +351,7 @@ def deprecated(old_name: str, new_name: str, deprecated_version: str,
         the new function name
     deprecated_version : float
         the version the method was first deprecated in
-    levels : List[int]
+    levels : list[int]
         the deprecation levels to show
         [1, 2, 3] shows 3 levels up from this function (good for classes)
         None : ???
@@ -344,13 +375,13 @@ def deprecated(old_name: str, new_name: str, deprecated_version: str,
 
     for level in levels:
         # jump to get out of the inspection code
-        frame = sys._getframe(3 + level)
+        frame = sys._getframe(4 + level)
         line_no = frame.f_lineno
         code = frame.f_code
         try:
             #filename = os.path.basename(frame.f_globals['__file__'])
             filename = os.path.basename(inspect.getfile(code))
-        except:
+        except Exception:  # pragma: no cover
             print(code)
             raise
 
@@ -362,9 +393,9 @@ def deprecated(old_name: str, new_name: str, deprecated_version: str,
             break
         msg += '  %-25s:%-4s %s\n' % (filename, str(line_no) + ';', line.strip())
 
-    user_name = getpass.getuser()
-    if ver_tuple > dep_ver_tuple: # or 'id' in msg:
+    #user_name = getpass.getuser()
+    if ver_tuple > dep_ver_tuple:  # or 'id' in msg:
         # fail
         raise NotImplementedError(msg)
-    elif user_name not in ['sdoyle', 'travis']:
-        warnings.warn(msg, DeprecationWarning)
+    #elif user_name not in ['travis']:
+    warnings.warn(msg, DeprecationWarning)

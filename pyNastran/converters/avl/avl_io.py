@@ -1,8 +1,7 @@
-from collections import OrderedDict
-from numpy import arange, amax, amin
+import numpy as np
 
-import vtk
-from vtk import vtkQuad, vtkLine
+from pyNastran.gui.vtk_common_core import vtkPoints
+from pyNastran.gui.vtk_interface import vtkQuad, vtkLine
 
 from pyNastran.gui.gui_objects.gui_result import GuiResult
 from pyNastran.converters.avl.avl import read_avl
@@ -20,8 +19,8 @@ class AVL_IO:
                )
         return data
 
-    def load_avl_geometry(self, avl_filename,
-                          name='main', plot=True):
+    def load_avl_geometry(self, avl_filename: str,
+                          name: str='main', plot: bool=True) -> None:
         model_name = name
         #key = self.case_keys[self.icase]
         #case = self.result_cases[key]
@@ -33,7 +32,7 @@ class AVL_IO:
         log = self.gui.log
         model = read_avl(avl_filename, log=log, debug=False)
         self.gui.model_type = 'avl'
-        nodes, elements, line_elements, surfaces = model.get_nodes_elements()
+        nodes, elements, line_elements, surfaces, is_cs = model.get_nodes_elements()
         #self.model_type = model.model_type
 
         nxyz_nodes = nodes.shape[0]
@@ -51,7 +50,7 @@ class AVL_IO:
         grid = self.gui.grid
         grid.Allocate(self.gui.nelements, 1000)
 
-        points = vtk.vtkPoints()
+        points = vtkPoints()
         points.SetNumberOfPoints(self.gui.nnodes)
         #vectorReselt.SetNumberOfComponents(3)
         self.gui.nid_map = {}
@@ -60,8 +59,8 @@ class AVL_IO:
 
         nid = 0
         #print('nxyz_nodes=%s' % nxyz_nodes)
-        mmax = amax(nodes, axis=0)
-        mmin = amin(nodes, axis=0)
+        mmax = np.amax(nodes, axis=0)
+        mmin = np.amin(nodes, axis=0)
         dim_max = (mmax - mmin).max()
         self.gui.create_global_axes(dim_max)
         for i in range(nxyz_nodes):
@@ -98,11 +97,11 @@ class AVL_IO:
 
         note = ''
         self.gui.isubcase_name_map = {1: ['AVL%s' % note, '']}
-        cases = OrderedDict()
+        cases = {}
         ID = 1
 
         form, cases, node_ids, element_ids = self._fill_avl_case(
-            cases, ID, nnodes, nelements, surfaces)
+            cases, ID, nnodes, nelements, surfaces, is_cs)
         self.gui.node_ids = node_ids
         self.gui.element_ids = element_ids
         self.gui._finish_results_io2(model_name, form, cases)
@@ -114,27 +113,31 @@ class AVL_IO:
         #raise NotImplementedError()
 
 
-    def _fill_avl_case(self, cases, ID, nnodes, nelements, surfaces):
+    def _fill_avl_case(self, cases, ID: int, nnodes: int, nelements: int,
+                       surfaces: np.ndarray, is_cs: np.ndarray):
         #results_form = []
         geometry_form = [
             ('NodeID', 0, []),
             ('ElementID', 1, []),
             ('SurfaceID', 2, []),
+            ('isControlSurface', 3, []),
         ]
 
-        nids = arange(1, nnodes + 1)
-        eids = arange(1, nelements + 1)
+        nids = np.arange(1, nnodes + 1)
+        eids = np.arange(1, nelements + 1)
 
         assert len(eids) == nelements, len(eids)
 
         nid_res = GuiResult(ID, 'NodeID', 'NodeID', 'node', nids)
         eid_res = GuiResult(ID, 'ElementID', 'ElementID', 'centroid', eids)
         surface_res = GuiResult(ID, 'SurfaceID', 'SurfaceID', 'centroid', surfaces)
+        cs_res = GuiResult(ID, 'isControlSurface', 'isControlSurface', 'centroid', is_cs)
 
         i = 0
         cases[i] = (nid_res, (0, 'NodeID'))
         cases[i + 1] = (eid_res, (0, 'ElementID'))
         cases[i + 2] = (surface_res, (0, 'SurfaceID'))
+        cases[i + 3] = (cs_res, (0, 'isControlSurface'))
 
         form = [
             ('Geometry', None, geometry_form),

@@ -7,22 +7,36 @@ Defines:
 
 """
 from __future__ import annotations
-from typing import Tuple, Dict, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 from math import radians, sin, cos
 import numpy as np
-from numpy import array, cross, allclose, mean
-from numpy.linalg import norm  # type: ignore
 from pyNastran.utils.numpy_utils import integer_types
-from pyNastran.bdf.utils import get_xyz_cid0_dict
-from pyNastran.bdf.cards.loads.static_loads import update_pload4_vector
+from pyNastran.bdf.utils import get_xyz_cid0_dict, transform_load
+from pyNastran.bdf.cards.loads.static_loads import update_pload4_vector, PLOAD, PLOAD2, PLOAD4
 if TYPE_CHECKING:  # pragma: no cover
-    from pyNastran.bdf.bdf import BDF, Subcase
+    from pyNastran.nptyping_interface import NDArray3float
+    from pyNastran.bdf.bdf import (
+        BDF, Subcase, Coord,
+        CBAR, CQUAD4, CTRIA3,
+        PLOAD1, PLOAD2, PLOAD4,
+        FORCE, FORCE1, FORCE2,
+        MOMENT, MOMENT1, MOMENT2, SLOAD)
+    FgLoad = (PLOAD | PLOAD2 | PLOAD4 |
+              FORCE | FORCE1 | FORCE2 |
+              MOMENT | MOMENT1 | MOMENT2 | SLOAD)
 
 
-def isnan(value):
+def isnan(value: Optional[float]) -> bool:
     return value is None or np.isnan(value)
 
-def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None):
+
+def sum_forces_moments(model: BDF,
+                       p0: int | np.ndarray,
+                       loadcase_id: int,
+                       cid: int=0,
+                       include_grav: bool=False,
+                       xyz_cid0: Optional[dict[int, NDArray3float]]=None,
+                       ) -> tuple[NDArray3float, NDArray3float]:
     """
     Sums applied forces & moments about a reference point p0 for all
     load cases.
@@ -41,9 +55,11 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
         the reference point
     loadcase_id : int
         the LOAD=ID to analyze
+    cid : int; default=0
+        the coordinate system for the summation
     include_grav : bool; default=False
         includes gravity in the summation (not supported)
-    xyz_cid0 : None / Dict[int] = (3, ) ndarray
+    xyz_cid0 : None / dict[int] = (3, ) ndarray
         the nodes in the global coordinate system
 
     Returns
@@ -64,12 +80,12 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
     if not isinstance(loadcase_id, integer_types):
         raise RuntimeError('loadcase_id must be an integer; loadcase_id=%r' % loadcase_id)
 
-    p = _get_load_summation_point(model, p0, cid=0)
+    xyz_ref = _get_load_summation_point(model, p0, cid=0)
     loads, scale_factors, unused_is_grav = model.get_reduced_loads(
         loadcase_id, skip_scale_factor0=True)
 
-    F = array([0., 0., 0.])
-    M = array([0., 0., 0.])
+    F = np.array([0., 0., 0.])
+    M = np.array([0., 0., 0.])
     xyz = get_xyz_cid0_dict(model, xyz_cid0=xyz_cid0)
 
     unsupported_types = set()
@@ -86,22 +102,22 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
                 f = load.mag * load.xyz * scale
 
             node = model.Node(load.node_id)
-            r = xyz[node.nid] - p
-            m = cross(r, f)
+            r = xyz[node.nid] - xyz_ref
+            m = np.cross(r, f)
             F += f
             M += m
         elif load.type == 'FORCE1':
             f = load.mag * load.xyz * scale
             node = model.Node(load.node_id)
-            r = xyz[node.nid] - p
-            m = cross(r, f)
+            r = xyz[node.nid] - xyz_ref
+            m = np.cross(r, f)
             F += f
             M += m
         elif load.type == 'FORCE2':
             f = load.mag * load.xyz * scale
             node = model.Node(load.node_id)
-            r = xyz[node.nid] - p
-            m = cross(r, f)
+            r = xyz[node.nid] - xyz_ref
+            m = np.cross(r, f)
             F += f
             M += m
         elif load.type == 'MOMENT':
@@ -125,26 +141,26 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
             nnodes = len(nodes)
             if nnodes == 3:
                 n1, n2, n3 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]]
-                axb = cross(n1 - n2, n1 - n3)
+                axb = np.cross(n1 - n2, n1 - n3)
                 centroid = (n1 + n2 + n3) / 3.
             elif nnodes == 4:
                 n1, n2, n3, n4 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]], xyz[nodes[3]]
-                axb = cross(n1 - n3, n2 - n4)
+                axb = np.cross(n1 - n3, n2 - n4)
                 centroid = (n1 + n2 + n3 + n4) / 4.
             else:
                 msg = 'invalid number of nodes on PLOAD card; nodes=%s' % str(nodes)
                 raise RuntimeError(msg)
 
             area, normal = _get_area_normal(axb, nodes, xyz)
-            r = centroid - p
+            r = centroid - xyz_ref
             f = load.pressure * area * normal * scale
-            m = cross(r, f)
+            m = np.cross(r, f)
 
             F += f
             M += m
 
         elif load.type == 'PLOAD1':
-            _pload1_total(model, loadcase_id, load, scale, xyz, F, M, p)
+            _pload1_total(model, loadcase_id, load, scale, xyz, F, M, xyz_ref)
 
         elif load.type == 'PLOAD2':
             pressure = load.pressure * scale
@@ -154,15 +170,15 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
                     n = elem.Normal()
                     area = elem.Area()
                     f = pressure * n * area
-                    r = elem.Centroid() - p
-                    m = cross(r, f)
+                    r = elem.Centroid() - xyz_ref
+                    m = np.cross(r, f)
                     F += f
                     M += m
                 else:
                     model.log.warning('case=%s etype=%r loadtype=%r not supported' % (
                         loadcase_id, elem.type, load.type))
         elif load.type == 'PLOAD4':
-            _pload4_total(loadcase_id, load, scale, xyz, F, M, p)
+            _pload4_total(loadcase_id, load, scale, xyz, F, M, xyz_ref)
 
         elif load.type == 'GRAV':
             if include_grav:  # this will be super slow
@@ -170,9 +186,9 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
                 for eid, elem in model.elements.items():
                     centroid = elem.Centroid()
                     mass = elem.Mass()
-                    r = centroid - p
+                    r = centroid - xyz_ref
                     f = mass * gravity
-                    m = cross(r, f)
+                    m = np.cross(r, f)
                     F += f
                     M += m
         else:
@@ -181,28 +197,47 @@ def sum_forces_moments(model, p0, loadcase_id, include_grav=False, xyz_cid0=None
 
     for load_type in unsupported_types:
         model.log.warning('case=%s loadtype=%r not supported' % (loadcase_id, load_type))
-    return (F, M)
 
-def _pload1_total(model, loadcase_id, load, scale, xyz, F, M, p):
+    #forces, moments = sum_forces_moments(self, p0, loadcase_id,
+    #include_grav=include_grav, xyz_cid0=xyz_cid0)
+    if cid == 0:
+        return F, M
+    cid0 = 0
+    F2, M2 = transform_load(F, M, cid0, cid, model)
+    return F2, M2
+
+
+def _pload1_total(model: BDF, loadcase_id: int, load: PLOAD1,
+                  scale: float, xyz: np.ndarray,
+                  F: np.ndarray, M: np.ndarray,
+                  xyz_ref: np.ndarray) -> None:
     """helper method for ``sum_forces_moments``"""
     elem = load.eid_ref
     if elem.type in ['CBAR', 'CBEAM']:
-        _pload1_bar_beam(model, loadcase_id, load, elem, scale, xyz, F, M, p)
+        _pload1_bar_beam(model, loadcase_id, load, elem, scale, xyz, F, M, xyz_ref)
     elif elem.type == 'CBEND':
         model.log.warning('case=%s etype=%r loadtype=%r not supported' % (
             loadcase_id, elem.type, load.type))
     else:
         raise RuntimeError('element.type=%r is not a CBAR, CBEAM, or CBEND' % elem.type)
 
-def _pload1_elements(model, loadcase_id, load, scale, eids, xyz, F, M, p):
+
+def _pload1_elements(model: BDF, loadcase_id: int,
+                     load: PLOAD1, scale: float, eids: list[int],
+                     xyz: np.ndarray, F: np.ndarray, M: np.ndarray,
+                     xyz_ref: np.ndarray) -> None:
     """helper method for ``sum_forces_moments_elements``"""
     #elem = model.elements[load.eid]
     elem = load.eid_ref
     if elem.eid not in eids:
         return
-    _pload1_total(model, loadcase_id, load, scale, xyz, F, M, p)
+    _pload1_total(model, loadcase_id, load, scale, xyz, F, M, xyz_ref)
 
-def _pload1_bar_beam(model, unused_loadcase_id, load, elem, scale, xyz, F, M, p):
+
+def _pload1_bar_beam(model: BDF, unused_loadcase_id: int,
+                     load: PLOAD1, elem: CBAR, scale: float,
+                     xyz: dict[int, np.ndarray], F: np.ndarray, M: np.ndarray,
+                     xyz_ref: np.ndarray) -> None:
     """
     helper method for ``sum_forces_moments`` and ``sum_forces_moments_elements``
     """
@@ -215,10 +250,10 @@ def _pload1_bar_beam(model, unused_loadcase_id, load, elem, scale, xyz, F, M, p)
     n2 += elem.wb
 
     bar_vector = n2 - n1
-    L = norm(bar_vector)
+    L = np.linalg.norm(bar_vector)
     try:
         Ldir = bar_vector / L
-    except:
+    except Exception:
         msg = 'Length=0.0; nid1=%s nid2=%s\n' % (nodes[0], nodes[1])
         msg += '%s%s' % (str(elem.nodes[0]), str(elem.nodes[1]))
         raise FloatingPointError(msg)
@@ -227,7 +262,7 @@ def _pload1_bar_beam(model, unused_loadcase_id, load, elem, scale, xyz, F, M, p)
         x1 = load.x1
         x2 = load.x2
         #compute_fx = False
-    elif load.scale == 'LE': # x1, x2 are actual lengths
+    elif load.scale == 'LE':  # x1, x2 are actual lengths
         x1 = load.x1 / L
         x2 = load.x2 / L
     elif load.scale == 'LEPR':
@@ -249,11 +284,11 @@ def _pload1_bar_beam(model, unused_loadcase_id, load, elem, scale, xyz, F, M, p)
     assert x1 <= x2, 'x1=%s x2=%s' % (x1, x2)
     if x1 != x2:
         # continue
-        if not load.type in ['FX', 'FY', 'FZ']:
-            model.log.warning('PLOAD1 x1 != x2 continue; x1=%s x2=%s; scale=%r\n%s%s'% (
+        if load.type not in ['FX', 'FY', 'FZ']:
+            model.log.warning('PLOAD1 x1 != x2 continue; x1=%s x2=%s; scale=%r\n%s%s' % (
                 x1, x2, load.scale, str(elem), str(load)))
             return
-        model.log.warning('check this...PLOAD1 x1 != x2; x1=%s x2=%s; scale=%r\n%s%s'% (
+        model.log.warning('check this...PLOAD1 x1 != x2; x1=%s x2=%s; scale=%r\n%s%s' % (
             x1, x2, load.scale, str(elem), str(load)))
 
         # y = (y2-y1)/(x2-x1)*(x-x1) + y1
@@ -276,7 +311,7 @@ def _pload1_bar_beam(model, unused_loadcase_id, load, elem, scale, xyz, F, M, p)
         # y2 = p2
         # yi = y2 * ri + y1 * (x2-x1) + y1 * ri
         # F = yi
-        if allclose(p1, -p2):
+        if np.allclose(p1, -p2):
             Ftotal = p1
             x = (x1 + x2) / 2.
         else:
@@ -291,30 +326,38 @@ def _pload1_bar_beam(model, unused_loadcase_id, load, elem, scale, xyz, F, M, p)
             r = (1. - x) * n1 + x * n2
             #print('r=%s n1=%s n2=%s' % (r, n1, n2))
             if load.Type == 'FX':
-                force_dir = array([1., 0., 0.])
+                force_dir = np.array([1., 0., 0.])
             elif load.Type == 'FY':
-                force_dir = array([0., 1., 0.])
+                force_dir = np.array([0., 1., 0.])
             elif load.Type == 'FZ':
-                force_dir = array([0., 0., 1.])
+                force_dir = np.array([0., 0., 1.])
             else:
                 raise NotImplementedError('Type=%r is not supported.  '
                                           'Use "FX", "FY", "FZ".' % load.Type)
 
         Fi = Ftotal * force_dir
-        Mi = cross(r - p, force_dir * Ftotal)
+        Mi = np.cross(r - xyz_ref, force_dir * Ftotal)
         F += Fi
         M += Mi
         model.log.info('Fi=%s Mi=%s x=%s' % (Fi, Mi, x))
     else:
-        _bar_eq_pload1(load, elem, xyz, Ldir,
+        _bar_eq_pload1(model, load, elem, xyz, Ldir,
                        n1, n2,
                        x1, x2,
                        p1, p2,
-                       F, M, p)
+                       F, M, xyz_ref)
     return
 
-def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
-                                include_grav=False, xyz_cid0=None):
+
+def sum_forces_moments_elements(model: BDF,
+                                p0: int | np.ndarray,
+                                loadcase_id: int,
+                                eids: Optional[list[int]],
+                                nids: Optional[list[int]],
+                                cid: int=0,
+                                include_grav: bool=False,
+                                xyz_cid0: Optional[dict[int, NDArray3float]]=None,
+                                ) -> tuple[NDArray3float, NDArray3float]:
     """
     Sum the forces/moments based on a list of nodes and elements.
 
@@ -322,9 +365,9 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
     ----------
     model : BDF()
         a BDF object
-    eids : List[int]
+    eids : list[int]
         the list of elements to include (e.g. the loads due to a PLOAD4)
-    nids : List[int]
+    nids : list[int]
         the list of nodes to include (e.g. the loads due to a FORCE card)
     p0 : int; (3,) ndarray
        the point to sum moments about
@@ -336,7 +379,7 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
         the LOAD=ID to analyze
     include_grav : bool; default=False
         includes gravity in the summation (not supported)
-    xyz_cid0 : None / Dict[int] = (3, ) ndarray
+    xyz_cid0 : None / dict[int] = (3, ) ndarray
         the nodes in the global coordinate system
 
     Returns
@@ -352,29 +395,29 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
     Element Types: PLOAD1, PLOAD2, PLOAD4, GRAV
 
     If you have a CQUAD4 (eid=3) with a PLOAD4 (sid=3) and a FORCE
-    card (nid=5) acting on it, you can incldue the PLOAD4, but
+    card (nid=5) acting on it, you can include the PLOAD4, but
     not the FORCE card by using:
 
     For just pressure:
 
     .. code-block:: python
 
-      eids = [3]
-      nids = []
+       eids = [3]
+       nids = []
 
     For just force:
 
     .. code-block:: python
 
-      eids = []
-      nids = [5]
+       eids = []
+       nids = [5]
 
     or both:
 
     .. code-block:: python
 
-      eids = [3]
-      nids = [5]
+       eids = [3]
+       nids = [5]
 
     .. note:: If you split the model into sections and sum the loads
               on each section, you may not get the same result as
@@ -388,7 +431,7 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
     """
     if not isinstance(loadcase_id, integer_types):
         raise RuntimeError('loadcase_id must be an integer; loadcase_id=%r' % loadcase_id)
-    p = _get_load_summation_point(model, p0, cid=0)
+    xyz_ref = _get_load_summation_point(model, p0, cid=0)
 
     if eids is None:
         eids = list(model.element_ids)
@@ -402,9 +445,8 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
     loads, scale_factors, unused_is_grav = model.get_reduced_loads(
         loadcase_id, skip_scale_factor0=True)
 
-    F = array([0., 0., 0.])
-    M = array([0., 0., 0.])
-
+    F = np.array([0., 0., 0.])
+    M = np.array([0., 0., 0.])
     xyz = get_xyz_cid0_dict(model, xyz_cid0)
 
     unsupported_types = set()
@@ -429,8 +471,8 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                 f = load.mag * load.xyz * scale
 
             node = model.Node(load.node_id)
-            r = xyz[node.nid] - p
-            m = cross(r, f)
+            r = xyz[node.nid] - xyz_ref
+            m = np.cross(r, f)
             F += f
             M += m
 
@@ -445,8 +487,8 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
 
             f = load.mag * load.xyz * scale
             node = model.Node(load.node_id)
-            r = xyz[node.nid] - p
-            m = cross(r, f)
+            r = xyz[node.nid] - xyz_ref
+            m = np.cross(r, f)
             F += f
             M += m
         elif load.type == 'FORCE2':
@@ -460,8 +502,8 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
 
             f = load.mag * load.xyz * scale
             node = model.Node(load.node_id)
-            r = xyz[node.nid] - p
-            m = cross(r, f)
+            r = xyz[node.nid] - xyz_ref
+            m = np.cross(r, f)
             F += f
             M += m
         elif load.type == 'MOMENT':
@@ -506,12 +548,12 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
             nodesi = 0
             if nnodes == 3:
                 n1, n2, n3 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]]
-                axb = cross(n1 - n2, n1 - n3)
+                axb = np.cross(n1 - n2, n1 - n3)
                 centroid = (n1 + n2 + n3) / 3.
 
             elif nnodes == 4:
                 n1, n2, n3, n4 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]], xyz[nodes[3]]
-                axb = cross(n1 - n3, n2 - n4)
+                axb = np.cross(n1 - n3, n2 - n4)
                 centroid = (n1 + n2 + n3 + n4) / 4.
                 if nodes[3] in nids:
                     nodesi += 1
@@ -526,16 +568,16 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                 nodesi += 1
 
             area, normal = _get_area_normal(axb, nodes, xyz)
-            r = centroid - p
+            r = centroid - xyz_ref
             f = load.pressure * area * normal * scale
-            m = cross(r, f)
+            m = np.cross(r, f)
 
             node_scale = nodesi / float(nnodes)
             F += f * node_scale
             M += m * node_scale
 
         elif loadtype == 'PLOAD1':
-            _pload1_elements(model, loadcase_id, load, scale, eids, xyz, F, M, p)
+            _pload1_elements(model, loadcase_id, load, scale, eids, xyz, F, M, xyz_ref)
 
         elif loadtype == 'PLOAD2':
             pressure = load.pressure * scale
@@ -547,8 +589,8 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                     normal = elem.Normal()
                     area = elem.Area()
                     f = pressure * normal * area
-                    r = elem.Centroid() - p
-                    m = cross(r, f)
+                    r = elem.Centroid() - xyz_ref
+                    m = np.cross(r, f)
                     F += f
                     M += m
                 else:
@@ -557,7 +599,7 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                     raise NotImplementedError('case=%s etype=%r loadtype=%r not supported' % (
                         loadcase_id, elem.type, loadtype))
         elif loadtype == 'PLOAD4':
-            _pload4_elements(loadcase_id, load, scale, eids, xyz, F, M, p)
+            _pload4_elements(loadcase_id, load, scale, eids, xyz, F, M, xyz_ref)
 
         elif loadtype == 'GRAV':
             if include_grav:  # this will be super slow
@@ -567,9 +609,9 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
                         continue
                     centroid = elem.Centroid()
                     mass = elem.Mass()
-                    r = centroid - p
+                    r = centroid - xyz_ref
                     f = mass * g
-                    m = cross(r, f)
+                    m = np.cross(r, f)
                     F += f
                     M += m
         elif loadtype in skip_loads:
@@ -581,20 +623,30 @@ def sum_forces_moments_elements(model, p0, loadcase_id, eids, nids,
     for loadtype in unsupported_types:
         model.log.warning('case=%s loadtype=%r not supported' % (loadcase_id, loadtype))
     #model.log.info("case=%s F=%s M=%s\n" % (loadcase_id, F, M))
-    return F, M
+
+    if cid == 0:
+        return F, M
+    cid0 = 0
+    F2, M2 = transform_load(F, M, cid0, cid, model)
+    return F2, M2
 
 
-def _bar_eq_pload1(load, elem, xyz, Ldir,
-                   n1, n2,
-                   x1, x2,
-                   p1, unused_p2,
-                   F, M, p):
+def _bar_eq_pload1(model: BDF,
+                   load: PLOAD1,
+                   elem: CBAR,
+                   xyz: dict[int, np.ndarray],
+                   Ldir: np.ndarray,
+                   n1: int, n2: int,
+                   x1: float, x2: float,
+                   p1: float, unused_p2: float,
+                   F: np.ndarray, M: np.ndarray,
+                   xyz_ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """helper for ``_elements_pload1`` and ``_elementi_pload1``"""
-    v = elem.get_orientation_vector(xyz)
+    v = elem.get_orientation_vector(model)
     i = Ldir
-    ki = cross(i, v)
-    k = ki / norm(ki)
-    j = cross(k, i)
+    ki = np.cross(i, v)
+    k = ki / np.linalg.norm(ki)
+    j = np.cross(k, i)
 
     if load.Type in ['FX', 'FY', 'FZ']:
         #deltaL = n2 - n1
@@ -606,20 +658,20 @@ def _bar_eq_pload1(load, elem, xyz, Ldir,
         #print('    1-x1 =', 1-x1)
         #print('    deltaL =', deltaL)
         if load.Type == 'FX' and x1 == x2:
-            force_dir = array([1., 0., 0.])
+            force_dir = np.array([1., 0., 0.])
         elif load.Type == 'FY' and x1 == x2:
-            force_dir = array([0., 1., 0.])
+            force_dir = np.array([0., 1., 0.])
         elif load.Type == 'FZ' and x1 == x2:
-            force_dir = array([0., 0., 1.])
+            force_dir = np.array([0., 0., 1.])
         F += p1 * force_dir
-        M += cross(r - p, F)
+        M += np.cross(r - xyz_ref, F)
     elif load.Type in ['MX', 'MY', 'MZ']:
         if load.Type == 'MX' and x1 == x2:
-            moment_dir = array([1., 0., 0.])
+            moment_dir = np.array([1., 0., 0.])
         elif load.Type == 'MY' and x1 == x2:
-            moment_dir = array([0., 1., 0.])
+            moment_dir = np.array([0., 1., 0.])
         elif load.Type == 'MZ' and x1 == x2:
-            moment_dir = array([0., 0., 1.])
+            moment_dir = np.array([0., 0., 1.])
         M += p1 * moment_dir
     elif load.Type in ['FXE', 'FYE', 'FZE']:
         r = (1 - x1) * n1 + x1 * n2
@@ -646,7 +698,7 @@ def _bar_eq_pload1(load, elem, xyz, Ldir,
             msg += 'force_dir = %s\n' % force_dir
             msg += 'load = \n%s' % str(load)
             raise FloatingPointError(msg)
-        M += cross(r - p, F)
+        M += np.cross(r - xyz_ref, F)
         del force_dir
 
     elif load.Type in ['MXE', 'MYE', 'MZE']:
@@ -672,35 +724,48 @@ def _bar_eq_pload1(load, elem, xyz, Ldir,
     return F, M
 
 
-def _pload4_total(loadcase_id, load, scale, xyz, F, M, p):
+def _pload4_total(loadcase_id: int, load: PLOAD4, scale: float,
+                  xyz: dict[int, np.ndarray],
+                  F: np.ndarray, M: np.ndarray,
+                  xyz_ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """helper method for ``sum_forces_moments``"""
-    assert load.line_load_dir == 'NORM', 'line_load_dir = %s' % (load.line_load_dir)
+    assert load.line_load_dir == 'NORM', f'line_load_dir = {load.line_load_dir!r}'
     for elem in load.eids_ref:
-        fi, mi = _pload4_helper(loadcase_id, load, scale, elem, xyz, p)
+        fi, mi = _pload4_helper(loadcase_id, load, scale, elem, xyz, xyz_ref)
         F += fi
         M += mi
     return F, M
 
-def _pload4_elements(loadcase_id, load, scale, eids, xyz, F, M, p):
+
+def _pload4_elements(loadcase_id: int, load: PLOAD4,
+                     scale: float, eids: list[int],
+                     xyz: dict[int, np.ndarray],
+                     F: np.ndarray, M: np.ndarray,
+                     xyz_ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """helper method for ``sum_forces_moments_elements``"""
-    assert load.line_load_dir == 'NORM', 'line_load_dir = %s' % (load.line_load_dir)
+    assert load.line_load_dir == 'NORM', f'line_load_dir = {load.line_load_dir!r}'
     for elem in load.eids_ref:
         eid = elem.eid
         if eid not in eids:
             continue
-        fi, mi = _pload4_helper(loadcase_id, load, scale, elem, xyz, p)
+        fi, mi = _pload4_helper(loadcase_id, load, scale, elem, xyz, xyz_ref)
         F += fi
         M += mi
     return F, M
 
-def _get_pload4_area_centroid_normal_nface(loadcase_id, load, elem, xyz):
+
+def _get_pload4_area_centroid_normal_nface(
+        loadcase_id: int, load: PLOAD4, elem: CTRIA3 | CQUAD4,
+        xyz: dict[int, np.ndarray]) -> tuple[
+                list[int], float,
+                np.ndarray, np.ndarray, int]:
     """gets the nodes, area, face_centroid, normal, and nface"""
     etype = elem.type
     if etype in ['CTRIA3', 'CTRIA6', 'CTRIAR',]:
         # triangles
         nodes = elem.node_ids
         n1, n2, n3 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]]
-        axb = cross(n1 - n2, n1 - n3)
+        axb = np.cross(n1 - n2, n1 - n3)
         area, normal = _get_area_normal(axb, nodes, xyz)
         face_centroid = (n1 + n2 + n3) / 3.
         nface = 3
@@ -708,7 +773,7 @@ def _get_pload4_area_centroid_normal_nface(loadcase_id, load, elem, xyz):
         # quads
         nodes = elem.node_ids
         n1, n2, n3, n4 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]], xyz[nodes[3]]
-        axb = cross(n1 - n3, n2 - n4)
+        axb = np.cross(n1 - n3, n2 - n4)
         area, normal = _get_area_normal(axb, nodes, xyz)
         face_centroid = (n1 + n2 + n3 + n4) / 4.
         nface = 4
@@ -776,8 +841,8 @@ def _get_pload4_area_centroid_normal_nface(loadcase_id, load, elem, xyz):
             p1 = xyzs[in13[0]]
             p3 = xyzs[in13[1]]
             p2 = xyzs[4]  # top node
-            v21 = p2 - p1 # towards the top
-            v31 = p3 - p1 # towards the base
+            v21 = p2 - p1  # towards the top
+            v31 = p3 - p1  # towards the base
             normal = np.cross(v21, v31)
             face_centroid = (p1 + p2 + p3) / 3.
             nface = 3
@@ -802,7 +867,12 @@ def _get_pload4_area_centroid_normal_nface(loadcase_id, load, elem, xyz):
         raise NotImplementedError(msg)
     return nodes, area, face_centroid, normal, nface
 
-def _pload4_helper(loadcase_id, load, scale, elem, xyz, p):
+
+def _pload4_helper(loadcase_id: int, load: PLOAD4, scale: float,
+                   elem: CTRIA3 | CQUAD4,
+                   xyz: dict[int, np.ndarray],
+                   xyz_ref: np.ndarray,
+                   ) -> tuple[np.ndarray, np.ndarray]:
     """gets the contribution for a single PLOAD4 element"""
     #eid = elem.eid
     nodes, area, face_centroid, normal, nface = _get_pload4_area_centroid_normal_nface(
@@ -815,23 +885,26 @@ def _pload4_helper(loadcase_id, load, scale, elem, xyz, p):
         pressure = _mean_pressure_on_pload4(pressures, load, elem)
         load_dir = update_pload4_vector(load, normal, cid)
 
-        r = face_centroid - p
+        r = face_centroid - xyz_ref
         fi = pressure * area * load_dir * scale
         #load.cid_ref.transform_to_global()
-        mi = cross(r, fi)
+        mi = np.cross(r, fi)
 
     elif load.surf_or_line == 'LINE':
         load_dir = update_pload4_vector(load, normal, cid)
-        fi, mi = _pload4_helper_line(load, load_dir, elem, scale, pressures, nodes, xyz, p)
+        fi, mi = _pload4_helper_line(load, load_dir, elem, scale, pressures, nodes, xyz, xyz_ref)
     else:  # pragma: no cover
         msg = 'surf_or_line=%r on PLOAD4 is not supported\n%s' % (
             load.surf_or_line, str(load))
         raise NotImplementedError(msg)
     return fi, mi
 
-def _get_area_normal(axb, nodes, xyz):
+
+def _get_area_normal(axb: np.ndarray,
+                     nodes: list[int],
+                     xyz: dict[int, np.ndarray]) -> tuple[float, float]:
     """gets the area/normal vector"""
-    nunit = norm(axb)
+    nunit = np.linalg.norm(axb)
     area = 0.5 * nunit
     try:
         normal = axb / nunit
@@ -844,10 +917,13 @@ def _get_area_normal(axb, nodes, xyz):
         raise FloatingPointError(msg)
     return area, normal
 
-def _mean_pressure_on_pload4(pressures, load, unused_elem):
+
+def _mean_pressure_on_pload4(pressures: list[float],
+                             load: PLOAD4,
+                             unused_elem: CTRIA3 | CQUAD4) -> float:
     """gets the mean pressure"""
     if min(pressures) != max(pressures):
-        pressure = mean(pressures)
+        pressure = np.mean(pressures)
         #msg = ('%s%s\npressure.min=%s != pressure.max=%s using average of %%s; '
                #'load=%s eid=%%s'  % (str(load), str(elem), min(pressures),
                                      #max(pressures), load.sid))
@@ -856,7 +932,9 @@ def _mean_pressure_on_pload4(pressures, load, unused_elem):
         pressure = load.pressures[0]
     return pressure
 
-def _get_load_summation_point(model, p0, cid=0):
+
+def _get_load_summation_point(model: BDF, p0: np.ndarray,
+                              cid: int=0) -> np.ndarray:
     """
     helper method
 
@@ -874,10 +952,15 @@ def _get_load_summation_point(model, p0, cid=0):
         else:
             p = model.nodes[p0].get_position_wrt(model, cid)
     else:
-        p = array(p0)
+        p = np.array(p0)
     return p
 
-def _pload4_helper_line(load, load_dir, elem, scale, pressures, nodes, xyz, p):
+
+def _pload4_helper_line(load: PLOAD4, load_dir: np.ndarray,
+                        elem: CQUAD4 | CTRIA3, scale: float,
+                        pressures: list[float], nodes: list[int],
+                        xyz: dict[int, np.ndarray],
+                        xyz_ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     # this is pressure per unit length?
     # edge_length * thickness I assume?
     fi = np.zeros(3)
@@ -950,12 +1033,12 @@ def _pload4_helper_line(load, load_dir, elem, scale, pressures, nodes, xyz, p):
             centroid2 = (2*xyz2 + xyz1) / 3.
             pnominal = p1
 
-        r1 = centroid1 - p
-        r2 = centroid2 - p
+        r1 = centroid1 - xyz_ref
+        r2 = centroid2 - xyz_ref
         f1 = pnominal * area_edge * load_dir * scale
         f2 = dp * area_edge * load_dir * scale
-        m1 = cross(r1, f1)
-        m2 = cross(r2, f2)
+        m1 = np.cross(r1, f1)
+        m2 = np.cross(r2, f2)
         fi += f1 + f2
         mi += m1 + m2
         #assert abs(dp) >= 0.0, dp
@@ -969,7 +1052,8 @@ def _pload4_helper_line(load, load_dir, elem, scale, pressures, nodes, xyz, p):
     return fi, mi
 
 
-def get_static_force_vector_from_subcase_id(model: BDF, subcase_id: int):
+def get_static_force_vector_from_subcase_id(model: BDF,
+                                            subcase_id: int) -> np.ndarray:
     """
     solves for F in:
       [K]{x} = {F}
@@ -991,20 +1075,22 @@ def get_static_force_vector_from_subcase_id(model: BDF, subcase_id: int):
         F = _Fg_vector_from_loads(model, loads, ndof_per_grid, ndof)
     return F
 
-def get_ndof(model: BDF, subcase: Subcase) -> Tuple[int, int, int]:
+
+def get_ndof(model: BDF, subcase: Subcase) -> tuple[int, int, int]:
     """gets the size of the DOFs"""
     ndof_per_grid = 6
     if 'HEAT' in subcase:
         ndof_per_grid = 1
     ngrid = model.card_count['GRID'] if 'GRID' in model.card_count else 0
-    nspoint = len(model.spoints) # if 'SPOINT' in model.card_count else 0
-    nepoint = len(model.epoints) # if 'EPOINT' in model.card_count else 0
+    nspoint = len(model.spoints)  # if 'SPOINT' in model.card_count else 0
+    nepoint = len(model.epoints)  # if 'EPOINT' in model.card_count else 0
     ndof = ngrid * ndof_per_grid + nspoint + nepoint
     #print(f'ngrid={ngrid} nspoint={nspoint}')
     assert ndof > 0, model.card_count
     return ngrid, ndof_per_grid, ndof
 
-def _get_loadid_ndof(model: BDF, subcase_id) -> Tuple[int, int, int]:
+
+def _get_loadid_ndof(model: BDF, subcase_id: int) -> tuple[int, int, int]:
     """helper method for ``get_static_force_vector_from_subcase_id``"""
     subcase = model.subcases[subcase_id]
     load_id = None
@@ -1013,7 +1099,8 @@ def _get_loadid_ndof(model: BDF, subcase_id) -> Tuple[int, int, int]:
     unused_ngrid, ndof_per_grid, ndof = get_ndof(model, subcase)
     return load_id, ndof_per_grid, ndof
 
-def _get_dof_map(model: BDF) -> Dict[Tuple[int, int], int]:
+
+def _get_dof_map(model: BDF) -> dict[tuple[int, int], int]:
     """helper method for ``get_static_force_vector_from_subcase_id``"""
     i = 0
     dof_map = {}
@@ -1022,19 +1109,22 @@ def _get_dof_map(model: BDF) -> Dict[Tuple[int, int], int]:
     for nid, node_ref in model.nodes.items():
         if node_ref.type == 'GRID':
             for dof in range(1, 7):
-                dof_map[(nid, dof)] = i
+                nid_dof = (nid, dof)
+                print(f'adding GRID {nid_dof}')
+                dof_map[nid_dof] = i
                 i += 1
             for psi in node_ref.ps:
                 nid_dof = (nid, int(psi))
+                print(f'adding GRID {nid_dof}')
                 j = dof_map[nid_dof]
                 ps.append(j)
         elif node_ref.type == 'SPOINT':
+            print(f'adding SPOINT {node_ref}')
             spoints.append(node_ref)
             #dof_map[(nid, 0)] = i
             #i += 1
         else:
             raise NotImplementedError(node_ref)
-
     # we want the GRID points to be first
     assert len(spoints) == 0, spoints
 
@@ -1046,43 +1136,60 @@ def _get_dof_map(model: BDF) -> Dict[Tuple[int, int], int]:
     assert len(dof_map) > 0
     return dof_map, ps
 
-def _Fg_vector_from_loads(model: BDF, loads, ndof_per_grid: int, ndof: int,
+
+def _Fg_vector_from_loads(model: BDF, loads: list[FgLoad],
+                          ndof_per_grid: int, ndof: int,
                           fdtype: str='float64'):
-    """helper method for ``get_static_force_vector_from_subcase_id``"""
+    """
+    helper method for ``get_static_force_vector_from_subcase_id``
+    requires cross-referencing
+    """
     dof_map, unused_ps = _get_dof_map(model)
     Fg = np.zeros([ndof], dtype=fdtype)
     skipped_load_types = set([])
     not_static_loads = []
+    show_force_warning = True
+    log = model.log
     for load in loads:
         loadtype = load.type
+        # print(load)
         if load.type in ['FORCE', 'MOMENT']:
             offset = 1 if load.type[0] == 'F' else 4
-            _add_force(Fg, dof_map, model, load, offset, ndof_per_grid, cid=load.cid)
+            show_force_warning = _add_force(Fg, dof_map, model, load, offset, ndof_per_grid,
+                                            cid=load.cid, show_warning=show_force_warning)
         elif load.type in ['FORCE1', 'MOMENT1',
                            'FORCE2', 'MOMENT2']:
             offset = 1 if load.type[0] == 'F' else 4
-            _add_force(Fg, dof_map, model, load, offset, ndof_per_grid, cid=0)
+            show_force_warning = _add_force(Fg, dof_map, model, load, offset, ndof_per_grid,
+                                            cid=0, show_warning=show_force_warning)
 
         elif loadtype == 'SLOAD':
             for nid, mag in zip(load.nodes, load.mags):
                 try:
                     irow = dof_map[(nid, 0)]
-                except KeyError:
-                    print('spoints =', model.spoints)
-                    print('dof_map =', dof_map)
-                    raise
+                except KeyError as error:
+                    msg = (
+                        f'SLOAD Error (must reference an SPOINT):\n{str(load)}'
+                        f'SPOINTs: {model.spoints}\n'
+                        f'dof_map: {dof_map}\n')
+                    raise RuntimeError(msg) from error
                 Fg[irow] += mag
         elif loadtype in not_static_loads:
             continue
+        elif loadtype == 'PLOAD':
+            _add_pload(Fg, dof_map, model, load)
+        elif loadtype == 'PLOAD2':
+            _add_pload2(Fg, dof_map, model, load)
         else:
             skipped_load_types.add(load.type)
     if skipped_load_types:
         skipped_load_types = list(skipped_load_types)
         skipped_load_types.sort()
-        model.log.warning(f'skipping {skipped_load_types} in Fg')
+        log.warning(f'skipping {skipped_load_types} in Fg')
     return Fg
 
-def _force_to_local(cd_ref, vector):
+
+def _force_to_local(cd_ref: Coord, vector: np.ndarray) -> np.ndarray:
     #if cd_ref.type[-1] in ['C', 'S']:
     return cd_ref.transform_vector_to_local(vector)
     #else:
@@ -1090,8 +1197,11 @@ def _force_to_local(cd_ref, vector):
         #asdf
 
 
-def _add_force(Fg: np.ndarray, dof_map: Dict[Tuple[int, int], int], model: BDF,
-               load, offset: int, ndof_per_grid: int, cid: int=0):
+def _add_force(Fg: np.ndarray,
+               dof_map: dict[tuple[int, int], int],
+               model: BDF,
+               load, offset: int, ndof_per_grid: int, cid: int=0,
+               show_warning: bool=True):
     """adds the FORCE/MOMENT loads to Fg"""
     #cid = load.cid
     nid = load.node
@@ -1103,7 +1213,9 @@ def _add_force(Fg: np.ndarray, dof_map: Dict[Tuple[int, int], int], model: BDF,
         fglobal = load.mag * load.xyz
     elif node_ref.cd != cid:
         fbasic = load.to_global()
-        model.log.warning(f'differing cid & cd is not supported; cid={cid} cd={node_ref.cd}')
+        if show_warning:
+            model.log.warning(f'differing cid & cd is not supported; cid={cid} cd={node_ref.cd}')
+            show_warning = False
         cd_ref = node_ref.cd_ref
         Tbg = cd_ref.beta()
         fglobal = _force_to_local(cd_ref, fbasic)
@@ -1144,10 +1256,84 @@ def _add_force(Fg: np.ndarray, dof_map: Dict[Tuple[int, int], int], model: BDF,
                 # rectangular
                 pass
             Tgb = Tbg.T
-            fglobal = np.dot(Tgb, fbasic)
+            fglobal = Tgb @ fbasic
     else:
         raise NotImplementedError(f'node_ref.cd={node_ref.cd} cid={cid} load:\n{str(load)}')
 
+    # TODO: how does this handle GRIDs vs. SPOINTs?
+    #       GRIDs have a DOF 1-3
+    #       SPOINTs have a DOF of 0
     for dof in range(3):
         irow = dof_map[(nid, dof+offset)]
         Fg[irow] += fglobal[dof]
+    return show_warning
+
+
+def _add_pload2(Fg: np.ndarray, dof_map: dict[int, int],
+                model: BDF, load: PLOAD2) -> None:
+    """adds the PLOAD2 loads to Fg"""
+    #PLOAD2       150     1.5       1    THRU       7
+    #print(load.get_stats())
+    pressure = load.pressure
+    for element in load.eids_ref:
+        area = element.Area()
+        normal = element.Normal()
+        force_per_node = pressure * area / len(element.nodes)
+        for nid, node_ref in zip(element.nodes, element.nodes_ref):
+            if node_ref.cd == 0:
+                force = force_per_node
+            else:
+                model.log.warning(f'PLOAD2 doesnt support CD frame\n{load}{node_ref}')
+                continue
+            fglobal = force * normal
+            for dof in range(3):
+                irow = dof_map[(nid, dof+1)]
+                Fg[irow] += fglobal[dof]
+            #model.log.warning('PLOAD2 havent been verified')
+
+
+def _add_pload(Fg: np.ndarray,
+               dof_map: dict[int, int],
+               model: BDF, load: PLOAD) -> None:
+    """adds the PLOAD loads to Fg"""
+    scale = 1.0
+    #print(load)
+    #PLOAD        300     10.     302     303     403     402
+    #PLOAD        300     10.     401     402     500
+    #print(load.get_stats())
+    nodes = load.node_ids
+    nnodes = len(nodes)
+    n1 = load.nodes_ref[0].get_position()
+    n2 = load.nodes_ref[1].get_position()
+    n3 = load.nodes_ref[2].get_position()
+    if nnodes == 3:
+        #n1, n2, n3 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]]
+        axb = np.cross(n1 - n2, n1 - n3)
+        #centroid = (n1 + n2 + n3) / 3.
+    elif nnodes == 4:
+        n4 = load.nodes_ref[3].get_position()
+        #n1, n2, n3, n4 = xyz[nodes[0]], xyz[nodes[1]], xyz[nodes[2]], xyz[nodes[3]]
+        axb = np.cross(n1 - n3, n2 - n4)
+        #centroid = (n1 + n2 + n3 + n4) / 4.
+    else:
+        msg = 'invalid number of nodes on PLOAD card; nodes=%s' % str(nodes)
+        raise RuntimeError(msg)
+
+    #area, normal = _get_area_normal(axb, nodes, xyz)
+    nunit = np.linalg.norm(axb)
+    area = 0.5 * nunit
+    normal = axb / nunit
+
+    #r = centroid - xyz_ref
+    fglobal = load.pressure * area * normal * scale / nnodes
+
+    for nid, node_ref in zip(load.nodes, load.nodes_ref):
+        if node_ref.cd == 0:
+            pass
+        else:
+            model.log.warning(f'PLOAD doesnt support CD frame\n{load}{node_ref}')
+            continue
+        for dof in range(3):
+            irow = dof_map[(nid, dof+1)]
+            Fg[irow] += fglobal[dof]
+            #model.log.warning('PLOAD havent been verified')

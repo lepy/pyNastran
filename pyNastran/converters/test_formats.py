@@ -1,10 +1,12 @@
 import unittest
 
-from pyNastran.converters.nastran.test_nastran import TestNastran
+from pyNastran.converters.nastran.test_nastran import TestNastran, TestNastranGUIObjects
 
 from pyNastran.converters.cart3d.test_cart3d import TestCart3d
 from pyNastran.converters.fast.test_fast import TestFast
-from pyNastran.converters.openfoam.test_openfoam import TestOpenFOAM
+from pyNastran.converters.fld.test_fld import TestFLD
+from pyNastran.converters.fluent.test_fluent import TestFluent
+from pyNastran.converters.neu.test_neu import TestNeu
 from pyNastran.converters.panair.test_panair import TestPanair
 from pyNastran.converters.stl.test_stl import TestSTL
 from pyNastran.converters.tecplot.test_tecplot import TestTecplot
@@ -15,16 +17,16 @@ from pyNastran.converters.usm3d.test_usm3d import TestUsm3d
 
 from pyNastran.converters.aflr.aflr2.test_bedge import TestBEdge
 from pyNastran.converters.aflr.ugrid.test_ugrid import TestUgrid
+from pyNastran.converters.aflr.surf.test_surf import TestSurf
 
 #try:
 from pyNastran.converters.dev.avus.test_avus import TestAvus
-#except ImportError:  # pragma: no cover
+#except ModuleNotFoundError:  # pragma: no cover
     #pass
 
 try:
-    from pyNastran.converters.dev.code_aster.test_code_aster import TestCodeAster
     from pyNastran.converters.dev.vrml.test_vrml import TestVrml
-except ImportError:  # pragma: no cover
+except ModuleNotFoundError:  # pragma: no cover
     pass
 
 if __name__ == '__main__':  # pragma: no cover

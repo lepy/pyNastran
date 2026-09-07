@@ -1,3 +1,10 @@
+"""
+By default, there will be no syntax highlighting.  To get that, install:
+ - PyQt5: QScintilla, pygments
+ - PyQt6: QScintilla2, pygments
+
+It doesn't work in PySide2/6
+"""
 from pyNastran.gui.qt_version import qt_version, is_pygments
 
 from qtpy.QtGui import QFont, QFontMetrics, QColor
@@ -6,19 +13,32 @@ from qtpy import QtCore
 #import QScintilla
 from qtpy.QtWidgets import (
     QPushButton, QTextEdit, QDockWidget,
-    QVBoxLayout, QHBoxLayout, QWidget, qApp, QMenu)
+    QVBoxLayout, QHBoxLayout, QWidget)
 #import qtpy.Qsci as Qsci
 
+QSCINTILLA_VERSION = 'N/A'
 if qt_version == 'pyqt5':
     try:
         import PyQt5.Qsci as Qsci
+        QSCINTILLA_VERSION = Qsci.QSCINTILLA_VERSION_STR
         IS_SCINTILLA = True
-    except ImportError:
+        RightArrow = Qsci.QsciScintilla.RightArrow
+        SloppyBraceMatch = Qsci.QsciScintilla.SloppyBraceMatch
+    except ModuleNotFoundError:
         IS_SCINTILLA = False
-elif qt_version == 'pyside2':
+elif qt_version == 'pyqt6':
+    try:
+        import PyQt6.Qsci as Qsci
+        QSCINTILLA_VERSION = Qsci.QSCINTILLA_VERSION_STR
+        IS_SCINTILLA = True
+        RightArrow = Qsci.QsciScintilla.MarkerSymbol.RightArrow
+        SloppyBraceMatch = Qsci.QsciScintilla.BraceMatch.SloppyBraceMatch
+    except ModuleNotFoundError:
+        IS_SCINTILLA = False
+elif qt_version in {'pyside2', 'pyside6', 'pyqt6'}:
     IS_SCINTILLA = False
 else:
-    raise NotImplementedError('qt_version = %r' % qt_version)
+    raise NotImplementedError(f'qt_version = {qt_version!r}')
 
 # hack for pyinstaller...if QScintilla isn't working in the exe, but it is in
 # gui, enable this print block and diff the outputs
@@ -64,21 +84,16 @@ if IS_SCINTILLA:
 
             # Clickable margin 1 for showing markers
             self.setMarginSensitivity(1, True)
-            if qt_version == 'pyqt4':
-                self.connect(self,
-                             QtCore.SIGNAL('marginClicked(int, int, Qt::KeyboardModifiers)'),
-                             self.on_margin_clicked)
-            else:
-                self.marginClicked.connect(self.on_margin_clicked)
+            self.marginClicked.connect(self.on_margin_clicked)
 
-            self.markerDefine(Qsci.QsciScintilla.RightArrow,
+            self.markerDefine(RightArrow,
                               self.ARROW_MARKER_NUM)
             self.setMarkerBackgroundColor(QColor("#ee1111"),
                                           self.ARROW_MARKER_NUM)
 
             # Brace matching: enable for a brace immediately before or after
             # the current position
-            self.setBraceMatching(Qsci.QsciScintilla.SloppyBraceMatch)
+            self.setBraceMatching(SloppyBraceMatch)
 
             # Current line visible with special background color
             self.setCaretLineVisible(True)
@@ -91,11 +106,8 @@ if IS_SCINTILLA:
             lexer.setDefaultFont(font)
             self.setLexer(lexer)
 
-            if qt_version == 'pyqt4':
-                self.SendScintilla(Qsci.QsciScintilla.SCI_STYLESETFONT, 1, 'Courier')
-            else:
-                font_style = bytearray(str.encode("Courier"))
-                self.SendScintilla(Qsci.QsciScintilla.SCI_STYLESETFONT, 1, font_style)
+            font_style = bytearray(str.encode("Courier"))
+            self.SendScintilla(Qsci.QsciScintilla.SCI_STYLESETFONT, 1, font_style)
 
             # Don't want to see the horizontal scrollbar at all
             # Use raw message to Scintilla here (all messages are documented
@@ -119,11 +131,40 @@ if IS_SCINTILLA:
             #else:
                 #self.markerAdd(nline, self.ARROW_MARKER_NUM)
 
-        def toPlainText(self):
+        def add(self, word: str):
+            cursor = self.text.textCursor()
+            pos = cursor.position()
+            self.text.setTextCursor(cursor)
+            self.text.setText(var)
+
+        def toPlainText(self) -> str:
             data = str(self.text())
             return data
 
 class PythonConsoleWidget(QDockWidget):
+    def __init__(self, parent):
+        self.parent = parent
+        super(PythonConsoleWidget, self).__init__('Python Console', parent=parent)
+
+        self.vbox = PythonConsoleLayout(parent)
+        self.vbox.setup_connections()
+        #self.vbox.layout()
+        #self.layout()
+
+        vbox_widget = layout_to_widget(self.vbox)
+        self.setWidget(vbox_widget)
+
+    @property
+    def enter_data(self):
+        return self.vbox.enter_data
+    @property
+    def execute_python_button(self):
+        return self.vbox.execute_python_button
+    @property
+    def execute_and_clear_python_button(self):
+        return self.vbox.execute_and_clear_python_button
+
+class PythonConsoleLayout(QVBoxLayout):
     """
     original code pulled from:
     http://stackoverflow.com/questions/31380457/add-right-click-functionality-to-listwidget-in-pyqt4
@@ -132,31 +173,32 @@ class PythonConsoleWidget(QDockWidget):
     """
     def __init__(self, parent):
         self.parent = parent
-        super(PythonConsoleWidget, self).__init__('Python Console', parent=parent)
+        super(PythonConsoleLayout, self).__init__()
 
         # I think this works by accident in qt4/5
         #super(QDockWidget, self).__init__('Python Console', parent=parent)
 
-        #self.listMenu = QMenu()
         self.execute_python_button = QPushButton('Execute')
         self.execute_and_clear_python_button = QPushButton('Execute and Clear')
 
         self.enter_data = get_code_block()
 
-        self.setup_connections()
-        self.layout()
+        #self.setup_connections()
+        self.setup_layout()
 
-    def layout(self):
-        vbox = QVBoxLayout()
+    def setup_layout(self):
+        #vbox = QVBoxLayout()
         hbox = QHBoxLayout()
 
-        vbox.addWidget(self.enter_data)
+        self.addWidget(self.enter_data)
         hbox.addWidget(self.execute_python_button)
         hbox.addWidget(self.execute_and_clear_python_button)
-        vbox.addLayout(hbox)
+        #vbox.addLayout(hbox)
+        self.addLayout(hbox)
+        #self.layout()
 
-        vbox_widget = layout_to_widget(vbox)
-        self.setWidget(vbox_widget)
+        #vbox_widget = layout_to_widget(vbox)
+        #self.setWidget(vbox_widget)
 
     def setup_connections(self):
         """sets up the callbacks"""
@@ -217,12 +259,26 @@ class PythonConsoleWidget(QDockWidget):
     #def on_clear(self):
         #print(4)
 
+class QTextEditAdd(QTextEdit):
+    def add(self, word: str):
+        cursor = self.textCursor()
+        pos = cursor.position()
+        old_text = self.toPlainText()
+        #self.setTextCursor(cursor)
+        fore = old_text[:pos] + word
+        new_text = fore + old_text[pos:]
+        self.setText(new_text)
+        inside = len(fore) - 1
+        cursor.setPosition(inside)
+        self.setTextCursor(cursor)
+
+
 def get_code_block():
     if is_pygments and IS_SCINTILLA:
         #self.enter_data = QSyntaxHighlighting()
         enter_data = SimplePythonEditorWidget()
     else:
-        enter_data = QTextEdit()
+        enter_data = QTextEditAdd()
         font = QFont()
         font.setFamily('Courier')
         enter_data.setFont(font)

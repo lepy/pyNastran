@@ -8,23 +8,30 @@ defines:
                           log=None, debug=False)
 
 """
+from __future__ import annotations
 from itertools import chain
 from io import StringIO, IOBase
-from typing import List, Dict, Optional, Union
+from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 
-from pyNastran.bdf.bdf import BDF
+from pyNastran.bdf.bdf import BDF, Material
+from pyNastran.utils import PathLike
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.utils.mathematics import roundup
+if TYPE_CHECKING:  # pragma: no cover
+    from cpylog import SimpleLogger
 
 
-def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
-                 bdf_filename_out: str,
-                 size=8, is_double=False,
-                 starting_id_dict=None, round_ids: bool=False,
-                 cards_to_skip: Optional[List[str]]=None,
-                 log=None, debug=False) -> BDF:
+def bdf_renumber(bdf_filename: PathLike | BDF | StringIO,
+                 bdf_filename_out: PathLike,
+                 size: int=8, is_double: bool=False,
+                 starting_id_dict: Optional[dict[str, int]]=None,
+                 round_ids: bool=False,
+                 cards_to_skip: Optional[list[str]]=None,
+                 punch: bool=False,
+                 log: Optional[SimpleLogger]=None,
+                 debug: bool=False) -> BDF:
     """
     Renumbers a BDF
 
@@ -54,7 +61,7 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
         This makes it easier to read a deck and verify that it's been
         renumbered properly.
         This only really applies when starting_id_dict is None
-    cards_to_skip : List[str]; (default=None -> don't skip any cards)
+    cards_to_skip : list[str]; (default=None -> don't skip any cards)
         There are edge cases (e.g. FLUTTER analysis) where things can
         break due to uncross-referenced cards.  You need to disable
         entire classes of cards in that case (e.g. all aero cards).
@@ -63,8 +70,8 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
     -------
     model : BDF()
         a renumbered BDF object corresponding to bdf_filename_out
-    mapper : Dict[bdf_attribute] : old_id_to_new_id_dict
-        List of mapper dictionaries of original ids to merged
+    mapper : dict[bdf_attribute] : old_id_to_new_id_dict
+        list of mapper dictionaries of original ids to merged
         bdf_attribute : str
             a BDF attribute (e.g., 'nodes', 'elements')
         old_id_to_new_id_dict : dict[id_old] : id_new
@@ -195,30 +202,30 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
     assert size in [8, 16], size
     assert isinstance(is_double, bool), is_double
     starting_id_dict_default = {
-        'cid' : 1,
-        'nid' : 1,
-        'eid' : 1,
-        'pid' : 1,
-        'mid' : 1,
-        'spc_id' : 1,
-        'mpc_id' : 1,
-        'load_id' : 1,
-        'set_id' : 1,
-        'dload_id' : 1,
+        'cid': 1,
+        'nid': 1,
+        'eid': 1,
+        'pid': 1,
+        'mid': 1,
+        'spc_id': 1,
+        'mpc_id': 1,
+        'load_id': 1,
+        'set_id': 1,
+        'dload_id': 1,
 
-        'method_id' : 1,
-        'cmethod_id' : 1,
-        'spline_id' : 1,
-        'caero_id' : 1,
-        'table_id' : 1,
-        'flfact_id' : 1,
-        'flutter_id' : 1,
-        'freq_id' : 1,
-        'tstep_id' : 1,
-        'tstepnl_id' : 1,
-        'suport_id' : 1,
-        'suport1_id' : 1,
-        'tf_id' : 1,
+        'method_id': 1,
+        'cmethod_id': 1,
+        'spline_id': 1,
+        'caero_id': 1,
+        'table_id': 1,
+        'flfact_id': 1,
+        'flutter_id': 1,
+        'freq_id': 1,
+        'tstep_id': 1,
+        'tstepnl_id': 1,
+        'suport_id': 1,
+        'suport1_id': 1,
+        'tf_id': 1,
     }
     # fill up starting_id_dict
     if starting_id_dict is None:
@@ -228,34 +235,40 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
             if key not in starting_id_dict:
                 starting_id_dict[key] = value
 
+    # basic
     nid = None
     cid = None
     eid = None
     pid = None
     mid = None
-    nsm_id = None
     spc_id = None
     mpc_id = None
     load_id = None
+    suport_id = None
+    suport1_id = None
+    nsm_id = None
+
+    # freq/transient/nonlinear dynamics
+    table_id = None
+    freq_id = None
     dload_id = None
     method_id = None
     cmethod_id = None
+    tf_id = None
+    tstep_id = None
+    tstepnl_id = None
+
+    # aero
+    set_id = None
+    caero_id = None
     spline_id = None
-    table_id = None
     flfact_id = None
     flutter_id = None
-    freq_id = None
-    ##tstep_id = None
-    tstepnl_id = None
-    set_id = None
-    suport_id = None
-    suport1_id = None
-    tf_id = None
 
     # turn them into variables
     for key, value in sorted(starting_id_dict.items()):
         #assert isinstance(key, str), key
-        assert key in starting_id_dict_default, 'key=%r is invalid' % (key)
+        assert key in starting_id_dict_default, f'key={key!r} is invalid'
         #assert isidentifier(key), 'key=%s is invalid' % key
         if value is None:
             pass
@@ -327,7 +340,7 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
         elif key == 'tf_id':
             tf_id = int(value)
         else:
-            raise NotImplementedError('key=%r' % key)
+            raise NotImplementedError(f'key={key!r}')
 
     # just to make pylint be quiet
     str(
@@ -359,7 +372,8 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
     #suport_map = {}
     suport1_map = {}
 
-    model = _get_bdf_model(bdf_filename, cards_to_skip=cards_to_skip, log=log, debug=debug)
+    model = _get_bdf_model(bdf_filename, cards_to_skip=cards_to_skip,
+                           punch=punch, log=log, debug=debug)
 
     nid_map, unused_reverse_nid_map = _create_nid_maps(model, starting_id_dict, nid)
     mid_map, all_materials = _create_mid_map(model, mid)
@@ -408,10 +422,10 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
             set_map[sidi] = set_id
             set_id += 1
 
+    delta_box1_map = {}
+    delta_box2_map = {}
     if 'spline_id' in starting_id_dict and spline_id is not None:
         # set up spline1 box mapping
-        delta_box1_map = {}
-        delta_box2_map = {}
         for sidi, spline in sorted(model.splines.items()):
             if spline.type in ['SPLINE1', 'SPLINE2']:
                 delta_box1_map[sidi] = spline.box1 - spline.caero
@@ -426,7 +440,7 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
     if 'caero_id' in starting_id_dict and caero_id is not None:
         # caeros
         for caero_idi, caero in sorted(model.caeros.items()):
-            if caero.type in ['CAERO1', 'CAERO3', 'CAERO4']: # not CAERO5
+            if caero.type in ['CAERO1', 'CAERO3', 'CAERO4']:  # not CAERO5
                 caero.eid = caero_id
                 caero_id_map[caero_idi] = caero_id
                 caero_id += caero.shape[0] * caero.shape[1]
@@ -576,57 +590,57 @@ def bdf_renumber(bdf_filename: Union[str, BDF, StringIO],
             assert hasattr(transfer_function, 'sid')
             transfer_function.sid = tf_id
         tranfer_function_map[tf_idi] = tf_id
-        load_id += 1
+        tf_id += 1
 
-    lseq_map = load_map # wrong???
-    temp_map = load_map # wrong???
+    lseq_map = load_map  # wrong???
+    temp_map = load_map  # wrong???
 
     mapper = {
-        'elements' : eid_map,
-        'masses' : mass_id_map,
-        'rigid_elements' : rigid_elements_map,
-        'nodes' : nid_map,
-        'coords' : cid_map,
-        'materials' : mid_map,
-        'properties' : properties_map,
-        'properties_mass' : properties_mass_map,
-        'spcs' : spc_map,
-        'mpcs' : mpc_map,
-        'METHOD' : method_map,
-        'CMETHOD' : cmethod_map,
-        'FLFACT' : flfact_map,
-        'FMETHOD' : flutter_map,
-        'FREQUENCY' : freq_map,
-        'sets' : set_map,
-        'splines' : spline_id_map,
-        'caeros' : caero_id_map,
+        'elements': eid_map,
+        'masses': mass_id_map,
+        'rigid_elements': rigid_elements_map,
+        'nodes': nid_map,
+        'coords': cid_map,
+        'materials': mid_map,
+        'properties': properties_map,
+        'properties_mass': properties_mass_map,
+        'spcs': spc_map,
+        'mpcs': mpc_map,
+        'METHOD': method_map,
+        'CMETHOD': cmethod_map,
+        'FLFACT': flfact_map,
+        'FMETHOD': flutter_map,
+        'FREQUENCY': freq_map,
+        'sets': set_map,
+        'splines': spline_id_map,
+        'caeros': caero_id_map,
 
-        'DLOAD' : dload_map,
-        'RANDOM' : dload_map, # RANDPS, RANDT1
-        'LOAD' : load_map,
-        'LOADSET' : lseq_map,
-        'CLOAD' : lseq_map,
-        'TSTEP' : tstep_map,
-        'TSTEPNL' : tstepnl_map,
-        'SUPORT1' : suport1_map,
-        'NLPARM' : nlparm_map,
-        'SDAMPING' : table_sdamping_map,
-        'DESSUB' : dessub_map,
-        'DESOBJ' : dresp_map,
-        'GUST' : gust_map,
-        'TRIM' : trim_map,
-        'IC' : tic_map,
-        'CSSCHD' : csschd_map,
-        'TFL' : tranfer_function_map,
-        #'DESSUB' : dessub_map,
+        'DLOAD': dload_map,
+        'RANDOM': dload_map,  # RANDPS, RANDT1
+        'LOAD': load_map,
+        'LOADSET': lseq_map,
+        'CLOAD': lseq_map,
+        'TSTEP': tstep_map,
+        'TSTEPNL': tstepnl_map,
+        'SUPORT1': suport1_map,
+        'NLPARM': nlparm_map,
+        'SDAMPING': table_sdamping_map,
+        'DESSUB': dessub_map,
+        'DESOBJ': dresp_map,
+        'GUST': gust_map,
+        'TRIM': trim_map,
+        'IC': tic_map,
+        'CSSCHD': csschd_map,
+        'TFL': tranfer_function_map,
+        #'DESSUB': dessub_map,
         # bad...
-        'TEMPERATURE(LOAD)' : temp_map,
-        'TEMPERATURE(INITIAL)' : temp_map,
-        #'DATAREC' : datarec_map,
-        #'ADAPT' : adapt_map,
-        #'SUPER' : super_map,
-        #'BOUTPUT' : boutput_map,
-        #'OUTRCV' : outrcv_map,
+        'TEMPERATURE(LOAD)': temp_map,
+        'TEMPERATURE(INITIAL)': temp_map,
+        #'DATAREC': datarec_map,
+        #'ADAPT': adapt_map,
+        #'SUPER': super_map,
+        #'BOUTPUT': boutput_map,
+        #'OUTRCV': outrcv_map,
     }
     #print('****suport1_map', suport1_map)
     #print('****dessub_map', dessub_map)
@@ -647,7 +661,7 @@ def _write_bdf(model, bdf_filename_out, size=8, is_double=False):
                         interspersed=False, close=close)
 
 
-def get_renumber_starting_ids_from_model(model: BDF) -> Dict[str, int]:
+def get_renumber_starting_ids_from_model(model: BDF) -> dict[str, int]:
     """
     Get the starting ids dictionary used for renumbering with ids greater
     than those in model.
@@ -666,6 +680,7 @@ def get_renumber_starting_ids_from_model(model: BDF) -> Dict[str, int]:
         max(model.elements),
         max(model.masses) if model.masses else 0,
         max(model.rigid_elements) if model.rigid_elements else 0,
+        max(model.plotels) if model.plotels else 0,
     ])
     pid_max = max([
         max(model.properties) if model.properties else 0,
@@ -673,15 +688,15 @@ def get_renumber_starting_ids_from_model(model: BDF) -> Dict[str, int]:
     ])
     mids = model.material_ids
     starting_id_dict = {
-        'cid' : max(model.coords) + 1,
-        'nid' : max(model.point_ids) + 1,
-        'eid' : eid_max + 1,
-        'pid' : pid_max + 1,
-        'mid' : max(mids) + 1 if mids else 1,
-        'set_id' : max(model.sets) + 1 if model.sets else 1,
-        'spline_id' : max(model.splines) + 1 if model.splines else 1,
-        'caero_id' : max(caero.box_ids[-1, -1]
-                         for caero in model.caeros.values()) + 1 if model.caeros else 1,
+        'cid': max(model.coords) + 1,
+        'nid': max(model.point_ids) + 1,
+        'eid': eid_max + 1,
+        'pid': pid_max + 1,
+        'mid': max(mids) + 1 if mids else 1,
+        'set_id': max(model.sets) + 1 if model.sets else 1,
+        'spline_id': max(model.splines) + 1 if model.splines else 1,
+        'caero_id': max(caero.box_ids[-1, -1]
+                        for caero in model.caeros.values()) + 1 if model.caeros else 1,
     }
     return starting_id_dict
 
@@ -690,31 +705,31 @@ def get_starting_ids_dict_from_mapper(model, mapper):
     starting_id_dict2 = {}
     missed_keys = []
     name_map = {
-        'nodes' : 'nid',
-        'elements' : 'eid',
-        'properties' : 'pid',
-        'materials' : 'mid',
-        'coords' : 'cid',
-        'TFL' : 'tf_id',
-        'FREQUENCY' : 'freq_id',
-        'splines' : 'spline_id',
-        'METHOD' : 'method_id',
-        'CMETHOD' : 'cmethod_id',
-        'caeros' : 'caero_id',
-        'TSTEP' : 'tstep_id',
-        'TSTEPNL' : 'tstepnl_id',
-        'FLFACT' : 'flfact_id',
-        'FMETHOD' : 'flutter_id',
-        'spcs' : 'spc_id',
-        'mpcs' : 'mpc_id',
-        'LOAD' : 'load_id',
-        'DLOAD' : 'dload_id', 'RANDOM' : 'dload_id',
-        'SUPORT' : 'suport_id',
-        'SUPORT1' : 'suport1_id',
-        'sets' : 'set_id',
+        'nodes': 'nid',
+        'elements': 'eid',
+        'properties': 'pid',
+        'materials': 'mid',
+        'coords': 'cid',
+        'TFL': 'tf_id',
+        'FREQUENCY': 'freq_id',
+        'splines': 'spline_id',
+        'METHOD': 'method_id',
+        'CMETHOD': 'cmethod_id',
+        'caeros': 'caero_id',
+        'TSTEP': 'tstep_id',
+        'TSTEPNL': 'tstepnl_id',
+        'FLFACT': 'flfact_id',
+        'FMETHOD': 'flutter_id',
+        'spcs': 'spc_id',
+        'mpcs': 'mpc_id',
+        'LOAD': 'load_id',
+        'DLOAD': 'dload_id', 'RANDOM': 'dload_id',
+        'SUPORT': 'suport_id',
+        'SUPORT1': 'suport1_id',
+        'sets': 'set_id',
 
         # other valid names in starting_id_dict
-        #'table_id' : 1,
+        #'table_id': 1,
     }
     #print('------------------------------------')
     for key, old_new_map in mapper.items():
@@ -736,7 +751,7 @@ def get_starting_ids_dict_from_mapper(model, mapper):
             #if key2 == 'nid':
                 #print("  nid_offset = %s" % offset)
                 #print("  nid map = %s" % old_new_map)
-            starting_id_dict2[key2] = max(old_new_map.values()) + 1 # offset
+            starting_id_dict2[key2] = max(old_new_map.values()) + 1  # offset
         else:
             if len(old_new_map):
                 missed_keys.append(key)
@@ -745,9 +760,11 @@ def get_starting_ids_dict_from_mapper(model, mapper):
     return starting_id_dict2
 
 
-def superelement_renumber(bdf_filename, bdf_filename_out=None, size=8, is_double=False,
+def superelement_renumber(bdf_filename: PathLike | BDF,
+                          bdf_filename_out=None, size=8, is_double=False,
                           starting_id_dict=None, cards_to_skip=None,
-                          log=None, debug=False):
+                          log: Optional[SimpleLogger]=None,
+                          debug: bool=False):
     """
     Renumbers a superelement
 
@@ -772,7 +789,7 @@ def superelement_renumber(bdf_filename, bdf_filename_out=None, size=8, is_double
             starting_id : int, None
                 int : the value to start from
                 None : don't renumber this key
-    cards_to_skip : List[str]; (default=None -> don't skip any cards)
+    cards_to_skip : list[str]; (default=None -> don't skip any cards)
         There are edge cases (e.g. FLUTTER analysis) where things can
         break due to uncross-referenced cards.  You need to disable
         entire classes of cards in that case (e.g. all aero cards).
@@ -784,11 +801,11 @@ def superelement_renumber(bdf_filename, bdf_filename_out=None, size=8, is_double
     """
     if starting_id_dict is None:
         starting_id_dict = {
-            'cid' : 1,
-            'nid' : 1,
-            'eid' : 1,
-            'pid' : 1,
-            'mid' : 1,
+            'cid': 1,
+            'nid': 1,
+            'eid': 1,
+            'pid': 1,
+            'mid': 1,
         }
 
     model = _get_bdf_model(bdf_filename, cards_to_skip=cards_to_skip, log=log, debug=debug)
@@ -817,11 +834,21 @@ def superelement_renumber(bdf_filename, bdf_filename_out=None, size=8, is_double
         model.write_bdf(bdf_filename_out)
 
     _write_bdf(model, bdf_filename_out, size=size, is_double=is_double)
-    return model #, mapper
+    return model  # mapper
 
 
-def _create_nid_maps(model, starting_id_dict, nid):
-    """builds the nid_maps"""
+def _create_nid_maps(model: BDF,
+                     starting_id_dict: dict[int, int],
+                     nid: int) -> tuple[dict[int, int], dict[int, int]]:
+    """builds the nid_maps
+
+    Returns
+    -------
+    nid_map : dict[int, int]
+        ???
+    reverse_nid_map : dict[int, int]
+        ???
+    """
     nid_map = {}
     reverse_nid_map = {}
 
@@ -846,13 +873,13 @@ def _create_nid_maps(model, starting_id_dict, nid):
         for nidi in nids_spoints_epoints:
             if nidi in spoints or nidi in epoints:
                 pass
-                #print('sid=%s -> %s' % (nid, i))
+                #print('sid=%s -> %s' % (nidi, i))
                 #i += 1
             else:
                 while i in spoints or i in epoints:
                     #print('*bump')
                     i += 1
-                #print('nid=%s -> %s' % (nid, i))
+                #print('nid=%s -> %s' % (nidi, i))
                 nid_map[nidi] = i
                 reverse_nid_map[i] = nidi
                 i += 1
@@ -869,7 +896,9 @@ def _create_nid_maps(model, starting_id_dict, nid):
     return nid_map, reverse_nid_map
 
 
-def _create_mid_map(model, mid):
+def _create_mid_map(model: BDF, mid: int,
+                    ) -> tuple[ dict[int, int],
+                                tuple[dict[int, Material], ...], ]:
     """builds the mid_map"""
     mid_map = {}
     all_materials = (
@@ -886,6 +915,7 @@ def _create_mid_map(model, mid):
         #model.MATT7,
         model.MATT8,
         model.MATT9,
+        model.MATT11,
         model.MATS1,
         model.MATS3,
         model.MATS8,
@@ -905,18 +935,24 @@ def _create_mid_map(model, mid):
     return mid_map, all_materials
 
 
-def _get_bdf_model(bdf_filename, cards_to_skip=None, log=None, debug=False):
+def _get_bdf_model(bdf_filename: PathLike | BDF | StringIO,
+                   punch: bool=False,
+                   xref: bool=True,
+                   cards_to_skip=None, log=None, debug: bool=False):
     """helper method"""
     if isinstance(bdf_filename, BDF):
         model = bdf_filename
     else:
         model = BDF(log=log, debug=debug)
         model.disable_cards(cards_to_skip)
-        model.read_bdf(bdf_filename)
+        model.read_bdf(bdf_filename, punch=punch, xref=xref)
     return model
 
 
-def _update_nodes(model, starting_id_dict, nid, nid_map):
+def _update_nodes(model: BDF,
+                  starting_id_dict: dict[str, int],
+                  nid: int,
+                  nid_map: dict[int, int]) -> None:
     """updates the nodes"""
     if 'nid' in starting_id_dict and nid is not None:
         #spoints2 = arange(1, len(spoints) + 1)
@@ -928,8 +964,10 @@ def _update_nodes(model, starting_id_dict, nid, nid_map):
             node.nid = nid_new
 
 
-def _update_properties(model, starting_id_dict, pid,
-                       properties_map, properties_mass_map):
+def _update_properties(model: BDF,
+                       starting_id_dict: dict[str, int], pid: int,
+                       properties_map: dict[int, int],
+                       properties_mass_map: dict[int, int]) -> None:
     """updates the properties"""
     if 'pid' in starting_id_dict and pid is not None:
         # properties
@@ -956,8 +994,11 @@ def _update_properties(model, starting_id_dict, pid,
             pid += 1
 
 
-def _update_elements(model, starting_id_dict, eid,
-                     eid_map, mass_id_map, rigid_elements_map):
+def _update_elements(model: BDF,
+                     starting_id_dict: dict[str, int], eid: int,
+                     eid_map: dict[int, int],
+                     mass_id_map: dict[int, int],
+                     rigid_elements_map: dict[int, int]) -> None:
     """updates the elements"""
     if 'eid' in starting_id_dict and eid is not None:
         # elements
@@ -983,8 +1024,11 @@ def _update_elements(model, starting_id_dict, eid,
             #pass
 
 
-def _update_materials(unused_model, starting_id_dict, mid,
-                      mid_map, all_materials):
+def _update_materials(model: BDF,
+                      starting_id_dict: dict[str, int], mid: int,
+                      mid_map: dict[int, int],
+                      all_materials: tuple[dict[int, Material], ...]) -> None:
+    del model
     if 'mid' in starting_id_dict and mid is not None:
         #mid = 1
         for materials in all_materials:
@@ -994,8 +1038,9 @@ def _update_materials(unused_model, starting_id_dict, mid,
                 material.mid = mid
 
 
-def _update_spcs(model, starting_id_dict, spc_id,
-                 spc_map):
+def _update_spcs(model: BDF,
+                 starting_id_dict: dict[str, int], spc_id: int,
+                 spc_map: dict[int, int]) -> None:
     """updates the spcs"""
     if 'spc_id' in starting_id_dict and spc_id is not None:
         # spc
@@ -1020,8 +1065,8 @@ def _update_spcs(model, starting_id_dict, spc_id,
             spc_map[spc_id] = spc_id
 
 
-def _update_mpcs(model, starting_id_dict, mpc_id,
-                 mpc_map):
+def _update_mpcs(model: BDF, starting_id_dict: dict[str, int], mpc_id: int,
+                 mpc_map: dict[int, int]):
     """updates the mpcs"""
     if 'mpc_id' in starting_id_dict and mpc_id is not None:
         # mpc
@@ -1046,8 +1091,9 @@ def _update_mpcs(model, starting_id_dict, mpc_id,
             mpc_map[mpc_id] = mpc_id
 
 
-def _update_coords(model, starting_id_dict, cid,
-                   cid_map):
+def _update_coords(model: BDF,
+                   starting_id_dict: dict[str, int], cid: int,
+                   cid_map: dict[int, int]) -> None:
     """updates the coords"""
     if 'cid' in starting_id_dict and cid is not None:
         # coords
@@ -1060,7 +1106,8 @@ def _update_coords(model, starting_id_dict, cid,
             cid += 1
 
 
-def _update_case_control(model, mapper):
+def _update_case_control(model: BDF,
+                         mapper: dict[str, list[int]]) -> None:
     """
     Updates the case control deck; helper method for ``bdf_renumber``.
 
@@ -1068,15 +1115,15 @@ def _update_case_control(model, mapper):
     ----------
     model : BDF()
         the BDF object
-    mapper : dict[str] = List[int]
+    mapper : dict[str] = list[int]
         Defines the possible case control header values for each entry (e.g. `LOAD`)
 
     """
     # unified system that uses the same key
     # for bdf_merge and _update_case_control
     case_control_card_to_pynastran_key = {
-        'MPC' : 'mpcs',
-        'SPC' : 'spcs',
+        'MPC': 'mpcs',
+        'SPC': 'spcs',
     }
 
     elemental_quantities = ['STRESS', 'STRAIN', 'FORCE', 'ESE', 'EKE']
@@ -1103,7 +1150,7 @@ def _update_case_control(model, mapper):
         'TITLE', 'ECHO', 'ANALYSIS', 'SUBTITLE', 'LABEL', 'SUBSEQ', 'OUTPUT',
         'TCURVE', 'XTITLE', 'YTITLE', 'AECONFIG', 'AESYMXZ', 'MAXLINES', 'PARAM', 'CONTOUR',
         'PTITLE', 'PLOTTER', 'K2PP', 'CSCALE', 'XGRID LINES', 'YGRID LINES', 'YMIN', 'YMAX',
-        'LINE', 'XAXIS', 'YAXIS',
+        'LINE', 'XAXIS', 'YAXIS', 'AUTOSPC',
         ] + skip_keys_temp
     warn_keys = ['RANDOM']
 
@@ -1168,7 +1215,7 @@ def _update_case_control(model, mapper):
                             if seti_key in sets_analyzed:
                                 continue
                             sets_analyzed.add(seti_key)
-                            msgi = 'seti_key=%s must be an integer; type(seti_key)=%s\n'  % (
+                            msgi = 'seti_key=%s must be an integer; type(seti_key)=%s\n' % (
                                 seti_key, type(seti_key))
                             msgi += '  key=%r value=%r options=%r param_type=%r\n' % (
                                 key, value, options, param_type)
@@ -1191,7 +1238,6 @@ def _update_case_control(model, mapper):
                             model.log.warning(f"  couldn't find eids={eids_missing}...dropping")
                         if nids_missing:
                             model.log.warning(f"  couldn't find nids={nids_missing}...dropping")
-
 
                         param_type = 'SET-type'
                         #print('adding seti=%r values2=%r seti_key=%r param_type=%r'  % (
@@ -1232,6 +1278,8 @@ def _update_case_control(model, mapper):
                     pass
                 elif key == '':
                     pass
+                elif key.startswith('XYPRINT'):
+                    continue
                 else:
                     msg = 'key=%s options=%s param_type=%s value=%s' % (
                         key, options, param_type, value)
@@ -1242,9 +1290,12 @@ def _update_case_control(model, mapper):
                     #if value ==
         #print()
 
+
 def _update_case_key(key, elemental_quantities, seti2, eid_map, nid_map):
-    """Updates a Case Control SET card.  A set may have an elemental result
-    or a nodal result."""
+    """
+    Updates a Case Control SET card.  A set may have an elemental result
+    or a nodal result.
+    """
     values2 = []
     eids_missing = []
     nids_missing = []

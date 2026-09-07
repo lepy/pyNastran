@@ -1,6 +1,5 @@
-from collections import OrderedDict
 import numpy as np
-import vtk
+import vtkmodules
 
 from pyNastran.gui.gui_objects.gui_result import GuiResult, NormalResult
 from pyNastran.gui.utils.vtk.vtk_utils import (
@@ -73,7 +72,7 @@ class Vrml_io:
         self.gui.scalar_bar_actor.Modified()
 
         self.gui.isubcase_name_map = {1: ['AFLR UGRID Surface', '']}
-        cases = OrderedDict()
+        cases = {}
         ID = 1
 
         node_ids = np.arange(1, nnodes + 1, dtype='int32')

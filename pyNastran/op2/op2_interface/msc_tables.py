@@ -1,5 +1,4 @@
 from collections import Counter
-from typing import List, Dict
 import numpy as np
 
 MSC_ELEMENTS = {
@@ -112,9 +111,9 @@ MSC_ELEMENTS = {
     100: 'BAR-100',
     101: 'AABSF',
     102: 'CBUSH',
-    103: 'QUADP',
-    104: 'TRIAP',
-    105: 'BEAMP',
+    103: 'p-element QUADP',
+    104: 'p-element TRIAP',
+    105: 'p-element BEAMP',
     106: 'DAMP5',
     107: 'CHBDYE',
     108: 'CHBDYG',
@@ -151,16 +150,16 @@ MSC_ELEMENTS = {
     136: 'QUADOB-old',
     137: 'TRIAOB-old',
     138: 'LINEX-old',
-    139: 'QUAD4FD',
-    140: 'HEXA8FD',
+    139: 'Hyperelastic QUAD4FD',
+    140: 'Hyperelastic HEXA8FD',
 
-    141: 'HEXAP',
-    142: 'PENTAP',
-    143: 'TETRAP',
+    141: 'p-element HEXAP',
+    142: 'p-element PENTAP',
+    143: 'p-element TETRAP',
     144: 'QUAD144',
-    145: 'VUHEXA',
-    146: 'VUPENTA',
-    147: 'VUTETRA',
+    145: 'p-element VUHEXA',
+    146: 'p-element VUPENTA',
+    147: 'p-element VUTETRA',
     148: 'HEXAM-old',
     149: 'PENTAM-old',
     150: 'TETRAM-old',
@@ -173,20 +172,20 @@ MSC_ELEMENTS = {
     157: 'LINEPW-old',
     158: 'QUADOBM-old',
     159: 'SEAMP',
-    160: 'PENTA6FD',
-    161: 'TETRA4FD',
-    162: 'TRIA3FD',
-    163: 'HEXAFD',
-    164: 'QUADFD',
-    165: 'PENTAFD',
-    166: 'TETRAFD',
-    167: 'TRIAFD',
-    168: 'TRIAX3FD',
-    169: 'TRIAXFD',
-    170: 'QUADX4FD',
-    171: 'QUADXFD',
-    172: 'QUADRNL',
-    173: 'TRIARNL',
+    160: 'Hyperelastic PENTA6FD',
+    161: 'Hyperelastic TETRA4FD',
+    162: 'Hyperelastic TRIA3FD',
+    163: 'Hyperelastic HEXAFD',
+    164: 'Hyperelastic QUADFD',
+    165: 'Hyperelastic PENTAFD',
+    166: 'Hyperelastic TETRAFD',
+    167: 'Hyperelastic TRIAFD',
+    168: 'Hyperelastic axisymmetric TRIAX3FD',
+    169: 'Hyperelastic axisymmetric TRIAXFD',
+    170: 'Hyperelastic axisymmetric QUADX4FD',
+    171: 'Hyperelastic axisymmetric QUADXFD',
+    172: 'Nonlinear QUADRNL',
+    173: 'Nonlinear TRIARNL',
     174: 'LINEOBM-old',
     175: 'LINXOBM-old',
     176: 'QUADWGM-old',
@@ -202,9 +201,9 @@ MSC_ELEMENTS = {
     186: 'QUADPWM-old',
     187: 'TRIAPWM-old',
     188: 'LINEPWM-old',
-    189: 'VUQUAD',
-    190: 'VUTRIA',
-    191: 'VUBEAM',
+    189: 'p-element VUQUAD',
+    190: 'p-element VUTRIA',
+    191: 'p-element VUBEAM',
     192: 'CVINT',
     193: 'QUADFR-old',
     194: 'TRIAFR-old',
@@ -214,56 +213,59 @@ MSC_ELEMENTS = {
     198: 'CNVPEL',
     199: 'VUHBDY',
     200: 'WELD',
-    201: 'QUAD4FD',
-    202: 'HEXA8FD',
+    201: 'Hyperelastic QUAD4FD',
+    202: 'Hyperelastic HEXA8FD',
     203: 'SLIF1D',
-    204: 'PENTA6FD',
-    205: 'TETRA4FD',
-    206: 'TRIA3FD',
-    207: 'HEXAFD',
-    208: 'QUADFD',
-    209: 'PENTAFD',
-    210: 'TETRAFD',
-    211: 'TRIAFD',
-    212: 'TRIAX3FD',
-    213: 'TRIAXFD',
-    214: 'QUADX4FD',
-    215: 'QUADXFD',
-    216: 'TETRA4FD',
-    217: 'TRIA3FD',
-    218: 'HEXAFD',
-    219: 'QUADFD',
-    220: 'PENTAFD',
-    221: 'TETRAFD',
-    222: 'TRIAX3FD',
-    223: 'QUADXFD',
-    224: 'ELAS1',
-    225: 'ELAS3',
-    226: 'BUSH',
+    204: 'Hyperelastic PENTA6FD',
+    205: 'Hyperelastic TETRA4FD',
+    206: 'Hyperelastic TRIA3FD',
+    207: 'Hyperelastic HEXAFD',
+    208: 'Hyperelastic QUADFD',
+    209: 'Hyperelastic PENTAFD',
+    210: 'Hyperelastic TETRAFD',
+    211: 'Hyperelastic TRIAFD',
+    212: 'Hyperelastic axisymmetric TRIAX3FD',
+    213: 'Hyperelastic axisymmetric TRIAXFD',
+    214: 'Hyperelastic axisymmetric QUADX4FD',
+    215: 'Hyperelastic axisymmetric QUADXFD',
+    216: 'Hyperelastic TETRA4FD',
+    217: 'Hyperelastic TRIA3FD',
+    218: 'Hyperelastic HEXAFD',
+    219: 'Hyperelastic QUADFD',
+    220: 'Hyperelastic PENTAFD',
+    221: 'Hyperelastic TETRAFD',
+    222: 'Hyperelastic axisymmetric TRIAX3FD',
+    223: 'Hyperelastic axisymmetric QUADXFD',
+    224: 'Nonlinear ELAS1',
+    225: 'Nonlinear ELAS3',
+    226: 'Nonlinear BUSH',
     227: 'RBAR',
     228: 'RBE1',
     229: 'RBE3',
     230: 'RJOINT',
     231: 'RROD',
-    232: 'QUADRLC',
-    233: 'TRIARLC',
+    232: 'Composite QUADRLC',
+    233: 'Composite TRIARLC',
     234: None,
     235: 'CQUADR',
-    236: 'CTRIAR',
-    237 : 'CTRIAR',
-    238 : 'CBAR',
-    239 : 'CEAM',
-    240 : 'CBAR',
+    236: 'CTRIAR-corner',
+    237 : 'CTRIAR-center',
+    238 : 'CBAR with ABCS',
+    239 : 'CBEAM with ABCS',
+    240 : 'CBAR nonlinear',
     241 : 'AXISYM',
+    242 : 'CHEXA/CPYRAM?',
+    243 : 'CPYRAM?',
 }
 
-MSC_GEOM_TABLES = [
+MSC_GEOM_TABLES: list[bytes] = [
     # GEOM2 - Table of Bulk Data entry images related to element connectivity andscalar points
     # GEOM4 - Table of Bulk Data entry images related to constraints, degree-of-freedom membership and rigid element connectivity.
     b'GEOM1', b'GEOM2', b'GEOM3', b'GEOM4',  # regular
     b'GEOM1S', b'GEOM2S', b'GEOM3S', b'GEOM4S', # superelements
     b'GEOM1N', b'GEOM1VU', b'GEOM2VU',
     b'GEOM1OLD', b'GEOM2OLD', b'GEOM4OLD',
+    b'GEOM1X', b'GEOM2X',b'GEOM4X',
 
     b'EPT', b'EPTS', b'EPTOLD',
     b'EDTS',
@@ -295,7 +297,17 @@ MSC_GEOM_TABLES = [
     b'CASEXX',
 ]
 
-MSC_MATRIX_TABLES = [
+MSC_MATRIX_TABLES: list[bytes] = [
+    # 2020
+    b'MATB', b'MATK4', b'MATP', b'MUG1', b'MUG1O', # b'TQG1', # b'TUG1',
+    #b'MUG1B',
+    b'MATAKA',
+    b'MATPH2',
+    b'MATAMA',
+    b'MATK',
+    b'MATV',
+    # -----------
+
     #b'TOLD',
     b'SDT', #b'STDISP',
     b'TOLB2', b'ADSPT', #b'MONITOR',
@@ -327,6 +339,7 @@ MSC_MATRIX_TABLES = [
     b'FMPF', b'FN', b'FOLMAT', b'FORE', b'FREQMASS', b'FRMDS', b'GC', b'GDGK',
     b'GDKI', b'GDKSKS', b'GEG', b'GLBRSP', b'GLBRSPDS', b'GM', b'GMD', b'GMNE',
     b'GMS', b'GOA', b'GOD', b'GPFMAT', b'GPGK', b'GPKH', b'GPIK', b'GPKE',
+    b'GPAK',
     b'GPMPF', b'GRDRM', b'GS', b'HMKT', b'IFD', b'IFG', b'IFP', b'IFS', b'IFST',
     b'IMAT', b'IMATG', b'K2DD', b'K2GG', b'K2PP', b'K4AA', b'K4KK', b'K4XX',
     b'KAA', b'KAAL', b'KDD', b'KDICTDS', b'KDICTX', b'KFHH', b'KFS', b'KGG',
@@ -370,17 +383,26 @@ MSC_MATRIX_TABLES = [
 
     # not sure - per BAH_Plane_cont_gust.f06 (MONITOR point deck)
     b'PMRF', b'PERF', b'PFRF', b'PGRF', b'AFRF', b'AGRF', b'MP3F',
-] # type: List[bytes]
 
-MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
-    # ???
+    b'FEFFMOD',  #  think this is right
+]
+
+MSC_RESULT_TABLES: list[bytes] = [b'ASSIG', b'ASEPS'] + [
+    # Qualifier Information Table - which is what???
     b'QUALINFO',
+
+    b'OGPSR',
+
 
     # new
     b'TOLD',
-    b'RAPCONS', b'RAQCONS', b'RADCONS', b'RASCONS', b'RAFCONS', b'RAECONS',
-    b'RANCONS', b'RAGCONS', b'RADEFFM', b'RAPEATC', b'RAQEATC', b'RADEATC',
-    b'RASEATC', b'RAFEATC', b'RAEEATC', b'RANEATC', b'RAGEATC',
+    #   ?         ?         displacement, stress  force/shellstress strain  spcforce    strainenergy  gridpointforces
+    b'RAPCONS', b'RAQCONS', b'RADCONS', b'RASCONS', b'RAFCONS', b'RAECONS', b'RARCONS', b'RANCONS', b'RAGCONS',
+    b'RAPEATC', b'RAQEATC', b'RADEATC', b'RASEATC', b'RAFEATC', b'RAEEATC', b'RAREATC', b'RANEATC', b'RAGEATC',
+
+    # mpc force
+    b'ROQGM1',
+    b'RADEFFM', # eigenvectors
 
     # other
     b'MKLIST',
@@ -389,6 +411,7 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'OES1X1', b'OES1', b'OES1X', b'OES1C', b'OESCP',
     b'OESNLXR', b'OESNLXD', b'OESNLBR', b'OESTRCP',
     b'OESNL1X', b'OESRT',
+    b'OES1A',
     #----------------------
     # strain
     b'OSTR1', b'OSTR1X', b'OSTR1C',
@@ -402,6 +425,7 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     # DOEF1 - Scaled Response Spectra
     b'OEFIT', b'OEF1X', b'OEF1', b'DOEF1',
     b'OEFITSTN', # output.op2
+    b'OGPSTRS', b'OGPFI', b'OQS2SGT1', b'OGTEMP', b'OERPM',
 
 
     # Table of Max values?
@@ -422,6 +446,7 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'OUG1', b'OAG1',
     b'OUGV1', b'BOUGV1', b'OUGV1PAT',
     b'OUPV1',
+    b'OUG1F',  #  I think this is
 
     # OUGV1PAT - Displacements in the basic coordinate system
     # OUGV1  - Output (O) Displacements (U) in the global/g-set (G)
@@ -435,13 +460,13 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     #----------------------
     # applied loads
     # OPG1 - Applied static loads
-    b'OPNL1', # nonlinear applied loads - sort 1
-    b'OPG1', # applied loads - gset? - sort 1
+    b'OPNL1',  # nonlinear applied loads - sort 1
+    b'OPG1',  # applied loads - gset? - sort 1
     b'OPGV1',
-    b'OPG2', # applied loads - sort 2 - v0.8
+    b'OPG2',  # applied loads - sort 2 - v0.8
 
     # grid point stresses
-    b'OGS1', # grid point stresses/strains - sort 1
+    b'OGS1',  # grid point stresses/strains - sort 1
 
     #-----------------------------------------------------
     # random analysis
@@ -477,6 +502,7 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'OQGATO2', b'OQGCRM2', b'OQGPSD2', b'OQGRMS2', b'OQGNO2',
 
     # nx mpc forces
+    b'OQMATO1', b'OQMCRM1', b'OQMPSD1', b'OQMRMS1', b'OQMNO1',
     b'OQMATO2', b'OQMCRM2', b'OQMPSD2', b'OQMRMS2', b'OQMNO2',
 
     # stress
@@ -497,10 +523,30 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'OEFATO2', b'OEFCRM2', b'OEFPSD2', b'OEFRMS2', b'OEFNO2',
     #b'OEFPSD2', b'OEFCRM2', b'OEFRMS2', b'OEFATO2', b'OEFNO2',
 
+    # 2020
+    # Output Frequency Response Result to ADF Format File
+    # This module support the output table block of:
+    # - OUGx, OSMPF1, OAFMPF1, OASMPF1, OAPMPF1, OAPPF1, OAGPF1 and OSPPF1
+    #   (TCODE=1, 10, 11 and 61 to 67).
+
+    # SORT1
+    b'OSMPF1',  # structural          modal participation factors
+    b'OAFMPF1', # acoustic fluid      modal participation factors
+    b'OASMPF1', # acoustic structural modal participation
+    b'OAPMPF1', # acoustic panel      modal participation factor
+    b'OAPPF1',  # acoustic panel participation
+    b'OAGPF1',  # normalized acoustic grid participation factors
+    b'OSPPF1',  # structure panel participation
+
     #-----------------------------------------------------
     # other
-    b'OFMPF2M',
-    b'OSMPF2M', b'OPMPF2M', b'OLMPF2M', b'OGPMPF2M',
+
+    # SORT2
+    b'OFMPF2M',  # fluid      modal participation factors by natural modes
+    b'OSMPF2M',  # structural modal participation factors by natural modes
+    b'OLMPF2M',  # load       modal participation factors by natural modes
+    b'OPMPF2M',  # panel      modal participation factors by natural modes
+    b'OGPMPF2M', # panel grid modal participation factors by natural modes
 
     b'OCRUG',
     b'OCRPG',
@@ -526,11 +572,11 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'IBULK',
     #b'FRL',  # frequency response list
     b'TOL',
-    b'DSCM2', # normalized design sensitivity coeff. matrix
+    b'DSCM2',  # normalized design sensitivity coeff. matrix (nDESVAR, nDRESPx)
 
     # dont seem to crash
     b'DESCYC',
-    b'DBCOPT', # design optimization history for post-processing
+    b'DBCOPT',  # design optimization history for post-processing
     b'PVT',    # table containing PARAM data
     b'XSOP2DIR',
     b'ONRGY',
@@ -541,15 +587,15 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'EXTDB',
 
 
-    b'OQG2', # single point forces - sort 2 - v0.8
-    b'OBC1', b'OBC2', # contact pressures and tractions at grid points
-    b'OBG1', # glue normal and tangential tractions at grid points in basic coordinate system
-    b'OES2', # element stresses - sort 2 - v0.8
-    b'OEF2', # element forces - sort 2 - v0.8
-    b'OUGV2', # absolute displacements/velocity/acceleration - sort 2
+    b'OQG2',  # single point forces - sort 2 - v0.8
+    b'OBC1', b'OBC2',  # contact pressures and tractions at grid points
+    b'OBG1',  # glue normal and tangential tractions at grid points in basic coordinate system
+    b'OES2',  # element stresses - sort 2 - v0.8
+    b'OEF2',  # element forces - sort 2 - v0.8
+    b'OUGV2',  # absolute displacements/velocity/acceleration - sort 2
 
     # contact
-    b'OSPDSI1', # intial separation distance
+    b'OSPDSI1',  # initial separation distance
     b'OSPDS1',  # final separation distance
     b'OQGCF1', b'OQGCF2', # contact force at grid point
     b'OQGGF1', b'OQGGF2', # glue forces in grid point basic coordinate system
@@ -563,13 +609,54 @@ MSC_RESULT_TABLES = [b'ASSIG', b'ASEPS'] + [
     b'ROUGV2',  # relative displacement
     b'CDDATA',  # cambpell diagram table
     b'OEKE1',
-    b'OES1MX', # extreme stresses?
+    b'OES1MX',  # extreme stresses?
     b'OESNLBR2',
-    b'BGPDTVU', # basic grid point defintion table for a superelement and related to geometry with view-grids added
+    b'BGPDTVU', # basic grid point definition table for a superelement and related to geometry with view-grids added
 
     b'OUG2T',
-    b'AEMONPT',
+    b'AEMONPT', # Aerodynamic monitor points
     #b'KDICT',
+    #---------------------
+    # 2020
+    b'OCNTCHK0', # OUG-type table of contact check of active nodes status and distance
+    b'OCOMP',
+    b'META',     #  User to store additional info by SE
+    b'OFCRFMD',
+    b'OEXTFIB',  # EXTREME PLY composite element output in SORT1 format
+    b'OELAFG',   # OFP table of Elastic Forces
+    b'OQS2SGN1',
+    b'MATRV', b'TUG1', # b'MUG1',
+
+    #2020 - could these be matrices?
+    b'OFCON3DD', b'OFCON3D0',  # glued contact
+    b'OFGCOND',
+    b'OCOMPQT',
+    b'OGS1X',
+    b'OVINT',  # element vibration intensities
+    #b'TUG1',
+    #b'MUG1',
+    b'TEF1', b'MEF1',
+    b'TQG1', # b'MKQG1',
+    b'MUG1B',
+
+
+    # for sure results
+    b'OUTSFLOW',
+    b'OERPDSN',
+    b'OUG1S',
+    b'OVG1',
+    b'OUGSTRS0',  # OUG-type table of geometry adjustment by initial stress-free contact
+    b'OBCNURB0',  # Table of analytical contact surface spline
+    b'OBCNURBD',
+    b'OETEMP',
+    b'OCNTCHKD',
+
+    # C:\MSC.Software\msc_nastran_runs\pcomp1.op2
+    # C:\MSC.Software\msc_nastran_runs\pcdyn111s2.op2
+    b'OGPSTRN', b'OGPFIN', b'OESRTN', b'OGPSRN',
+
+    # msc/units_mass_spring_damper/units_mass_spring_damper/op2
+    b'UNITS',  # b'CPHSF',
 ]
 if len(MSC_RESULT_TABLES) != len(np.unique(MSC_RESULT_TABLES)):  # pragma: no cover
     counter = Counter(MSC_RESULT_TABLES)
@@ -579,7 +666,7 @@ if len(MSC_RESULT_TABLES) != len(np.unique(MSC_RESULT_TABLES)):  # pragma: no co
             _MSG += '%s = %s\n' % (key, cvaluei)
     raise RuntimeError(_MSG)
 
-MSC_TABLE_CONTENT = {
+MSC_TABLE_CONTENT: dict[int, str] = {
     # dmap 2014
     0: '',
     1: 'OUG - Displacement vector',
@@ -627,8 +714,10 @@ MSC_TABLE_CONTENT = {
     #53: 'OPMPF2M - ???',
     #54: 'OLMPF2M - ???',
     #55: 'OGMPF2M - ???',
-} # type: Dict[int, str]
-MSC_OEF_REAL_MAPPER = {
+    56: 'OESRT - Ply strength ratios???',
+    89: 'OESRT - Ply strength ratios',
+}
+MSC_OEF_REAL_MAPPER: dict[int, int] = {
     1: 3,   # CROD
     2: 1 + (10 - 1) * 11,  # CBEAM
     3: 3,   # CTUBE

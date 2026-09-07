@@ -6,14 +6,18 @@ defines:
 
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING
 
 import numpy as np
 from numpy.linalg import norm  # type: ignore
 
 from pyNastran.utils.numpy_utils import integer_types
+
+from pyNastran.bdf import MAX_INT
+from pyNastran.bdf.cards.base_card import BaseCard
 from pyNastran.bdf.cards.elements.bars import (
-    LineElement, init_x_g0, BaseCard, rotate_v_wa_wb, check_offt)
+    LineElement, init_x_g0, rotate_v_wa_wb, check_offt)
+from pyNastran.bdf.bdf_interface.internal_get import node_id
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double_or_blank, integer_double_string_or_blank,
     integer_double_or_blank, integer_string_or_blank,
@@ -23,7 +27,9 @@ from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.utils.mathematics import integrate_positive_unit_line
 if TYPE_CHECKING:  # pragma: no cover
-    from pyNastran.bdf.bdf import BDF
+    from cpylog import SimpleLogger
+    from pyNastran.bdf.bdf import BDF, GRID
+    from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
 
 
 class CBEAM(LineElement):
@@ -50,18 +56,54 @@ class CBEAM(LineElement):
     |       | SA  | SB  |     |     |     |     |     |          |
     +-------+-----+-----+-----+-----+-----+-----+-----+----------+
 
-    offt/bit are MSC specific fields
-
+    bit is an MSC specific field
+    NX 2020 added offt
     """
     type = 'CBEAM'
     _field_map = {
-        1: 'eid', 2:'pid', 3:'ga', 4:'gb', #5:'x_g0', 6:'g1', 7:'g2',
-        #8:'offt',
-        9:'pa', 10:'pb',
-        17:'sa', 18:'sb',
+        1: 'eid', 2: 'pid', 3: 'ga', 4: 'gb',  # 5:'x_g0', 6:'g1', 7:'g2',
+        #8: 'offt',
+        9: 'pa', 10: 'pb',
+        17: 'sa', 18: 'sb',
     }
 
-    def _update_field_helper(self, n, value):
+    def _get_field_helper(self, n: int) -> int | float:
+        if n == 11:
+            value = self.wa[0]
+        elif n == 12:
+            value = self.wa[1]
+        elif n == 13:
+            value = self.wa[2]
+
+        elif n == 14:
+            value = self.wb[0]
+        elif n == 15:
+            value = self.wb[1]
+        elif n == 16:
+            value = self.wb[2]
+        elif n in {5, 6, 7}:
+            if self.g0 is not None:
+                if n == 5:
+                    value = self.g0
+                else:  # offt
+                    msg = f'Field {n!r} is an invalid {self.type} entry or is unsupported.'
+                    raise KeyError(msg)
+            else:
+                if n == 5:
+                    value = self.x[0]
+                elif n == 6:
+                    value = self.x[1]
+                elif n == 7:
+                    value = self.x[2]
+                else:
+                    msg = f'Field {n!r} is an invalid {self.type} entry or is unsupported.'
+                    raise KeyError(msg)
+        else:
+            msg = f'Field {n!r} is an invalid {self.type} entry or is unsupported.'
+            raise KeyError(msg)
+        return value
+
+    def _update_field_helper(self, n: int, value):
         if n == 11:
             self.wa[0] = value
         elif n == 12:
@@ -137,7 +179,6 @@ class CBEAM(LineElement):
                     offti = str(offti)
                 offt.append(offti.encode(encoding))
 
-
             pa.append(element.pa)
             pb.append(element.pb)
             sa.append(element.sa)
@@ -164,9 +205,11 @@ class CBEAM(LineElement):
         h5_file.create_dataset('wa', data=wa)
         h5_file.create_dataset('wb', data=wb)
 
-
-    def __init__(self, eid, pid, nids, x, g0, offt='GGG', bit=None,
-                 pa=0, pb=0, wa=None, wb=None, sa=0, sb=0, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 x: Optional[list[float]], g0: Optional[int],
+                 offt: str='GGG', bit: Optional[int]=None,
+                 pa: int=0, pb: int=0, wa=None, wb=None,
+                 sa: int=0, sb: int=0, comment=''):
         """
         Adds a CBEAM card
 
@@ -174,13 +217,11 @@ class CBEAM(LineElement):
         ----------
         pid : int
             property id
-        mid : int
-            material id
-        nids : List[int, int]
-            node ids; connected grid points at ends A and B
-        x : List[float, float, float]
+        nids : list[int]
+            2 node ids; connected grid points at ends A and B
+        x : list[float] | None
             Components of orientation vector, from GA, in the displacement
-            coordinate system at GA (default), or in the basic coordinate system
+            coordinate system at GA (default), or in the basic coordinate system; (3,) vector
         g0 : int
             Alternate method to supply the orientation vector using grid
             point G0. Direction of is from GA to G0. is then transferred
@@ -195,7 +236,7 @@ class CBEAM(LineElement):
             None : offt is active
         pa / pb : int; default=0
             Pin Flag at End A/B.  Releases the specified DOFs
-        wa / wb : List[float, float, float]
+        wa / wb : list[float, float, float]
             Components of offset vectors from the grid points to the end
             points of the axis of the shear center
         sa / sb : int; default=0
@@ -226,8 +267,7 @@ class CBEAM(LineElement):
             offt = int(offt) if offt.isdigit() else offt
         self.eid = eid
         self.pid = pid
-        self.ga = nids[0]
-        self.gb = nids[1]
+        self.nodes = nids
         self.x = x
         self.g0 = g0
         self.offt = offt
@@ -238,17 +278,51 @@ class CBEAM(LineElement):
         self.wb = wb
         self.sa = sa
         self.sb = sb
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.pid_ref = None
         self.g0_ref = None
         self.g0_vector = None
 
+    @property
+    def ga(self) -> int:
+        return self.nodes[0]
+
+    @property
+    def gb(self) -> int:
+        return self.nodes[1]
+
+    @property
+    def ga_ref(self) -> GRID:
+        return self.nodes_ref[0]
+
+    @property
+    def gb_ref(self) -> GRID:
+        return self.nodes_ref[1]
+
+    @ga.setter
+    def ga(self, ga: int) -> None:
+        self.nodes[0] = ga
+
+    @gb.setter
+    def gb(self, gb: int) -> None:
+        self.nodes[1] = gb
+
+    @ga_ref.setter
+    def ga_ref(self, ga_ref: GRID) -> None:
+        self.nodes_ref[0] = ga_ref
+
+    @gb_ref.setter
+    def gb_ref(self, gb_ref: GRID) -> None:
+        self.nodes_ref[1] = gb_ref
+
     def validate(self):
         msg = ''
+        #assert self.g0 is None or self.x is None, (self.g0, self.x)
+        #assert self.g0 is not None or self.x is not None, (self.g0, self.x)
+
         if self.x is None:
             if not isinstance(self.g0, integer_types):
-                msg += 'CBEAM eid=%s: x is None, so g0=%s must be an integer' % (self.eid, self.g0)
+                msg += f'CBEAM eid={self.eid}: x is None, so g0={self.g0} must be an integer'
         else:
             if not isinstance(self.x, (list, np.ndarray)):
                 msg += 'CBEAM eid=%s: x=%s and g0=%s, so x must be a list; type(x)=%s' % (
@@ -259,11 +333,19 @@ class CBEAM(LineElement):
         if self.g0 is not None:
             assert isinstance(self.g0, integer_types), 'g0=%s must be an integer' % self.g0
         if self.g0 in [self.ga, self.gb]:
-            msg = 'G0=%s cannot be GA=%s or GB=%s' % (self.g0, self.ga, self.gb)
+            msg = f'G0={self.g0} cannot be GA={self.ga} or GB={self.gb}'
             raise RuntimeError(msg)
 
+        if self.x is not None:
+            xlen = np.linalg.norm(self.x)
+            if xlen == 0.0:
+                msg = f'Eid={self.eid:d}; X={self.x} has no length'
+                raise RuntimeError(msg)
+
+        #print(f'CBEAM validate: eid={self.eid} g0={self.g0} x={self.x}')
+
         if self.bit is None and self.offt is None:
-            msg = 'OFFT/BIT must not be None; offt=%r bit=%s' % (self.offt, self.bit)
+            msg = f'OFFT/BIT must not be None; offt={self.offt!r} bit={self.bit}'
             raise RuntimeError(msg)
 
         if self.offt is not None:
@@ -312,21 +394,23 @@ class CBEAM(LineElement):
         gb = integer(card, 4, 'gb')
 
         x, g0 = init_x_g0(card, eid, x1_default, x2_default, x3_default)
-        offt, bit = _init_offt_bit(card, eid, offt_default)# offt doesn't exist in NX nastran
-        pa = integer_or_blank(card, 9, 'pa', 0)
-        pb = integer_or_blank(card, 10, 'pb', 0)
+        # offt doesn't exist in older NX nastran
+        # bit doesn't exist in NX nastran
+        offt, bit = _init_offt_bit(card, eid, offt_default)
+        pa = integer_or_blank(card, 9, 'pa', default=0)
+        pb = integer_or_blank(card, 10, 'pb', default=0)
 
-        wa = np.array([double_or_blank(card, 11, 'w1a', 0.0),
-                       double_or_blank(card, 12, 'w2a', 0.0),
-                       double_or_blank(card, 13, 'w3a', 0.0)], 'float64')
+        wa = np.array([double_or_blank(card, 11, 'w1a', default=0.0),
+                       double_or_blank(card, 12, 'w2a', default=0.0),
+                       double_or_blank(card, 13, 'w3a', default=0.0)], 'float64')
 
-        wb = np.array([double_or_blank(card, 14, 'w1b', 0.0),
-                       double_or_blank(card, 15, 'w2b', 0.0),
-                       double_or_blank(card, 16, 'w3b', 0.0)], 'float64')
+        wb = np.array([double_or_blank(card, 14, 'w1b', default=0.0),
+                       double_or_blank(card, 15, 'w2b', default=0.0),
+                       double_or_blank(card, 16, 'w3b', default=0.0)], 'float64')
 
-        sa = integer_or_blank(card, 17, 'sa', 0)
-        sb = integer_or_blank(card, 18, 'sb', 0)
-        assert len(card) <= 19, 'len(CBEAM card) = %i\ncard=%s' % (len(card), card)
+        sa = integer_or_blank(card, 17, 'sa', default=0)
+        sb = integer_or_blank(card, 18, 'sb', default=0)
+        assert len(card) <= 19, f'len(CBEAM card) = {len(card):d}\ncard={card}'
         return CBEAM(eid, pid, [ga, gb], x, g0, offt, bit,
                      pa=pa, pb=pb, wa=wa, wb=wb, sa=sa, sb=sb, comment=comment)
 
@@ -337,7 +421,7 @@ class CBEAM(LineElement):
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         f : int
             beam flag
@@ -395,7 +479,7 @@ class CBEAM(LineElement):
         sb = main[5]
 
         #offt = str(data[6]) # GGG
-        bit = None # ???
+        bit = None  # ???
         offt = 'GGG'  #: .. todo:: is this correct???
 
         pa = main[6]
@@ -406,47 +490,48 @@ class CBEAM(LineElement):
         return CBEAM(eid, pid, [ga, gb], x, g0, offt, bit,
                      pa=pa, pb=pb, wa=wa, wb=wb, sa=sa, sb=sb, comment=comment)
 
-    def Nodes(self):
+    def Nodes(self) -> list[int]:
         return [self.ga, self.gb]
 
-    def Centroid(self):
+    def Centroid(self) -> np.ndarray:
         """"""
-        node1 = self.ga_ref
-        node2 = self.gb_ref
+        if self.pid_ref is None:
+            raise RuntimeError('Element eid=%i has not been '
+                               'cross referenced.\n%s' % (self.eid, str(self)))
+        node1, node2 = self.nodes_ref
         xyz1 = node1.get_position()
         xyz2 = node2.get_position()
         centroid = (xyz1 + xyz2) / 2.
         return centroid
 
-    def center_of_mass(self):
+    def center_of_mass(self) -> np.ndarray:
         """the centroid formuala is way more complicated if you consider the nonstructural mass axis"""
         elem = self
         prop = self.pid_ref
-        node1 = self.ga_ref
-        node2 = self.gb_ref
+        node1, node2 = self.nodes_ref
         xyz1 = node1.get_position()
         xyz2 = node2.get_position()
         #centroid = ( + self.gb_ref.get_position()) / 2.
         centroid = (xyz1 + xyz2) / 2.
-        #length = norm(xyz2 - xyz1)
+        #length = np.linalg.norm(xyz2 - xyz1)
         #cda = model.nodes[n1].cid_ref
         #cdb = model.nodes[n2].cid_ref
 
         model = None
         log = None
-        is_failed, out = elem.get_axes_by_nodes(model, self.pid_ref, node1, node2, xyz1, xyz2, log)
+        is_failed, out = elem.get_axes_by_nodes(model, node1, node2, xyz1, xyz2, log)
         if is_failed:
             #model.log.error(out)
             raise RuntimeError(out)
 
-        wa, wb, _ihat, jhat, khat = out
+        _v, _ihat, jhat, khat, wa, wb = out
         p1 = xyz1 + wa
         p2 = xyz2 + wb
 
         if prop.type == 'PBEAM':
             rho = prop.Rho()
 
-            # we don't call the MassPerLength method so we can put the NSM centroid
+            # we don't call the MassPerLength method, so we can put the NSM centroid
             # on a different axis (the PBEAM is weird)
             mass_per_lengths = []
             nsm_per_lengths = []
@@ -494,7 +579,7 @@ class CBEAM(LineElement):
             #m = mass_per_length * length
             #nsm = prop.nsm
         elif prop.type == 'PBMSECT':
-            mass_per_length = 0.  ## TODO: fix me
+            mass_per_length = 0.  # TODO: fix me
             nsm_per_length = prop.nsm
             nsm_centroid = (p1 + p2) / 2.
         else:
@@ -528,14 +613,14 @@ class CBEAM(LineElement):
         +-----+
 
         """
-        cda = self.ga_ref.cid_ref
-        cdb = self.gb_ref.cid_ref
-        ga = self.ga_ref.get_position() + cda.transform_node_to_global_assuming_rectangular(self.wa)
-        gb = self.gb_ref.get_position() + cdb.transform_node_to_global_assuming_rectangular(self.wb)
-        #x = self.get_orientation_vector()
+        node1, node2 = self.nodes_ref
+        cda = node1.cid_ref
+        cdb = node2.cid_ref
+        ga = node1.get_position() + cda.transform_node_to_global_assuming_rectangular(self.wa)
+        gb = node2.get_position() + cdb.transform_node_to_global_assuming_rectangular(self.wb)
         return (ga + gb) / 2.
 
-    def get_axes(self, model):
+    def get_axes(self, model: BDF) -> tuple[bool, tuple[Any, Any, Any, Any, Any, Any]]:
         """
         Gets the axes of a CBAR/CBEAM, while respecting the OFFT flag.
 
@@ -544,39 +629,77 @@ class CBEAM(LineElement):
         :func:`pyNastran.bdf.cards.elements.bars.rotate_v_wa_wb` for a
         description of the OFFT flag.
 
+        Returns
+        -------
         is_passed: bool
-        out: (wa, wb, ihat, jhat, khat)
+            flag
+        out: (v, ihat, jhat, khat, wa, wb)
+            data
         """
         is_failed = True
         #TODO: not integrated with CBAR yet...
         if self.bit is not None:
             print(self.get_stats())
-            return is_failed, None
+            return is_failed, (None, None, None, None, None, None)
 
         check_offt(self)
-        is_failed = True
-        ihat = None
-        yhat = None
-        zhat = None
+        #is_failed = True
+        #ihat = None
+        #yhat = None
+        #zhat = None
 
-        eid = self.eid
+        #eid = self.eid
         (nid1, nid2) = self.node_ids
         node1 = model.nodes[nid1]
         node2 = model.nodes[nid2]
         xyz1 = node1.get_position()
         xyz2 = node2.get_position()
 
-        elem = model.elements[eid]
-        pid_ref = elem.pid_ref
-        if pid_ref is None:
-            pid_ref = model.Property(elem.pid)
-        assert not isinstance(pid_ref, integer_types), elem
+        #elem = model.elements[eid]
 
-        is_failed, (wa, wb, ihat, yhat, zhat) = self.get_axes_by_nodes(
-            model, pid_ref, node1, node2, xyz1, xyz2, model.log)
-        return is_failed, (wa, wb, ihat, yhat, zhat)
+        is_failed, (v, ihat, yhat, zhat, wa, wb) = self.get_axes_by_nodes(
+            model, node1, node2, xyz1, xyz2, model.log)
+        return is_failed, (v, ihat, yhat, zhat, wa, wb)
 
-    def get_axes_by_nodes(self, model, pid_ref, node1, node2, xyz1, xyz2, log):
+    def get_orientation_vector(self, model: BDF):
+        """
+        Gets the axes of a CBAR/CBEAM, while respecting the OFFT flag.
+
+        Notes
+        -----
+        :func:`pyNastran.bdf.cards.elements.bars.rotate_v_wa_wb` for a
+        description of the OFFT flag.
+
+        """
+        #TODO: not integrated with CBAR yet...
+
+        eid = self.eid
+
+        elem = self
+        node1 = self.nodes_ref[0]
+        node2 = self.nodes_ref[1]
+        xyz1 = node1.get_position()
+        xyz2 = node2.get_position()
+
+        # wa/wb are not considered in i_offset
+        # they are considered in ihat
+        i = xyz2 - xyz1
+        ihat_norm = np.linalg.norm(i)
+        if ihat_norm == 0.:
+            msg = 'xyz1=%s xyz2=%s\n%s' % (xyz1, xyz2, self)
+            raise ValueError(msg)
+        i_offset = i / ihat_norm
+
+        v, unused_wa, unused_wb, unused_xform = rotate_v_wa_wb(
+            model, elem,
+            xyz1, xyz2, node1, node2,
+            i_offset, i, eid, ihat_norm, model.log)
+        return v
+
+    def get_axes_by_nodes(self, model: BDF,
+                          node1: GRID, node2: GRID,
+                          xyz1: np.ndarray, xyz2: np.ndarray,
+                          log: SimpleLogger) -> tuple[bool, Any]:
         """
         Gets the axes of a CBAR/CBEAM, while respecting the OFFT flag.
 
@@ -592,7 +715,7 @@ class CBEAM(LineElement):
         eid = self.eid
         #centroid = (n1 + n2) / 2.
         #i = n2 - n1
-        #Li = norm(i)
+        #Li = np.linalg.norm(i)
         #ihat = i / Li
 
         elem = self
@@ -605,78 +728,60 @@ class CBEAM(LineElement):
         # wa/wb are not considered in i_offset
         # they are considered in ihat
         i = xyz2 - xyz1
-        Li = norm(i)
-        if Li == 0.:
+        ihat_norm = np.linalg.norm(i)
+        if ihat_norm == 0.:
             msg = 'xyz1=%s xyz2=%s\n%s' % (xyz1, xyz2, self)
             raise ValueError(msg)
-        i_offset = i / Li
+        i_offset = i / ihat_norm
 
-        unused_v, wa, wb, xform = rotate_v_wa_wb(
+        v, wa, wb, xform = rotate_v_wa_wb(
             model, elem,
             xyz1, xyz2, node1, node2,
-            i_offset, i, eid, Li, log)
+            i_offset, i, eid, ihat_norm, log)
+
         if wb is None:
             # one or more of v, wa, wb are bad
-
+            #
             # xform is xform_offset...assuming None
             ihat = None
             yhat = None
             zhat = None
-            return is_failed, (wa, wb, ihat, yhat, zhat)
+            return is_failed, (v, ihat, yhat, zhat, wa, wb)
 
         ihat = xform[0, :]
         yhat = xform[1, :]
         zhat = xform[2, :]
 
         is_failed = False
-        return is_failed, (wa, wb, ihat, yhat, zhat)
+        return is_failed, (v, ihat, yhat, zhat, wa, wb)
 
     @property
-    def node_ids(self):
+    def node_ids(self) -> list[int]:
         return [self.Ga(), self.Gb()]
 
-    def get_edge_ids(self):
+    def get_edge_ids(self) -> list[(int, int)]:
         return [tuple(sorted(self.node_ids))]
 
-    @property
-    def nodes(self):
-        return [self.ga, self.gb]
-
-    @nodes.setter
-    def nodes(self, values):
-        self.ga = values[0]
-        self.gb = values[1]
-
-    @property
-    def nodes_ref(self):
-        return [self.ga_ref, self.gb_ref]
-
-    @nodes_ref.setter
-    def nodes_ref(self, values):
-        assert values is not None, values
-        self.ga_ref = values[0]
-        self.gb_ref = values[1]
-
-    def Mid(self):
+    def Mid(self) -> int:
         if self.pid_ref is None:
             raise RuntimeError('Element eid=%i has not been '
                                'cross referenced.\n%s' % (self.eid, str(self)))
         return self.pid_ref.Mid()
 
-    def Area(self):
+    def Area(self) -> float:
         if self.pid_ref is None:
             raise RuntimeError('Element eid=%i has not been '
                                'cross referenced.\n%s' % (self.eid, str(self)))
         return self.pid_ref.Area()
 
-    def Nsm(self):
+    def Nsm(self) -> float:
         if self.pid_ref is None:
             raise RuntimeError('Element eid=%i has not been '
                                'cross referenced.\n%s' % (self.eid, str(self)))
         return self.pid_ref.Nsm()
 
     @property
-    def is_offt(self):
+    def is_offt(self) -> bool:
         """is the offt flag active?"""
         if self.bit is not None:
             assert isinstance(self.bit, float), 'bit=%r type=%s' % (self.bit, type(self.bit))
@@ -685,11 +790,11 @@ class CBEAM(LineElement):
         return True
 
     @property
-    def is_bit(self):
+    def is_bit(self) -> bool:
         """is the bit flag active?"""
         return not self.is_offt
 
-    def get_offt_bit_defaults(self):
+    def get_offt_bit_defaults(self) -> int | str:
         """
         offt doesn't exist in NX nastran
         """
@@ -709,30 +814,35 @@ class CBEAM(LineElement):
             the BDF object
 
         """
-        msg = ', which is required by CBEAM eid=%s' % (self.eid)
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        self.gb_ref = model.Node(self.gb, msg=msg)
-        self.nodes_ref = [self.ga_ref, self.gb_ref]
+        msg = f', which is required by CBEAM eid={self.eid:d}'
+        self.nodes_ref = [
+            model.Node(self.ga, msg=msg),
+            model.Node(self.gb, msg=msg),
+        ]
         self.pid_ref = model.Property(self.pid, msg=msg)
         if self.g0:
             self.g0_ref = model.nodes[self.g0]
-            self.g0_vector = self.g0_ref.get_position() - self.ga_ref.get_position()
+            ga_ref = self.nodes_ref[0]
+            self.g0_vector = self.g0_ref.get_position() - ga_ref.get_position()
         else:
             self.g0_vector = self.x
         if model.is_nx:
             assert self.offt == 'GGG', 'NX only support offt=GGG; offt=%r' % self.offt
 
-    def safe_cross_reference(self, model, xref_errors):
-        msg = ', which is required by CBEAM eid=%s' % (self.eid)
-        self.ga_ref = model.Node(self.ga, msg=msg)
-        self.gb_ref = model.Node(self.gb, msg=msg)
+    def safe_cross_reference(self, model: BDF, xref_errors):
+        msg = f', which is required by CBEAM eid={self.eid:d}'
+        self.nodes_ref = [
+            model.Node(self.ga, msg=msg),
+            model.Node(self.gb, msg=msg),
+        ]
         self.nodes_ref = [self.ga_ref, self.gb_ref]
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 
         if self.g0:
             try:
                 self.g0_ref = model.nodes[self.g0]
-                self.g0_vector = self.g0_ref.get_position() - self.ga_ref.get_position()
+                ga_ref = self.nodes_ref[0]
+                self.g0_vector = self.g0_ref.get_position() - ga_ref.get_position()
             except KeyError:
                 model.log.warning('Node=%s%s' % (self.g0, msg))
         else:
@@ -744,12 +854,11 @@ class CBEAM(LineElement):
         self.ga = self.Ga()
         self.gb = self.Gb()
         self.g0 = self.G0()
-        self.ga_ref = None
-        self.gb_ref = None
+        self.nodes_ref = None
         self.g0_ref = None
         self.pid_ref = None
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         unused_pid = self.Pid()
         unused_edges = self.get_edge_ids()
@@ -771,23 +880,21 @@ class CBEAM(LineElement):
             assert isinstance(mass, float), 'eid=%s mass=%r' % (eid, mass)
             assert L > 0.0, 'eid=%s L=%s' % (eid, L)
 
-    def Ga(self):
+    def Ga(self) -> int:
         """gets Ga/G1"""
-        if self.ga_ref is None:
+        if self.nodes_ref is None:
             return self.ga
         return self.ga_ref.nid
 
-    def Gb(self):
+    def Gb(self) -> int:
         """gets Gb/G2"""
-        if self.gb_ref is None:
+        if self.nodes_ref is None:
             return self.gb
         return self.gb_ref.nid
 
-    def G0(self):
+    def G0(self) -> int:
         """gets G0"""
-        if self.g0_ref is None:
-            return self.g0
-        return self.g0_ref.nid
+        return node_id(self.g0_ref, self.g0)
 
     def get_x_g0_defaults(self):
         """
@@ -797,8 +904,8 @@ class CBEAM(LineElement):
         Returns
         -------
         x_g0 : varies
-            g0 : List[int, None, None]
-            x : List[float, float, float]
+            g0 : list[int, None, None]
+            x : list[float, float, float]
 
         Notes
         -----
@@ -806,7 +913,7 @@ class CBEAM(LineElement):
 
         """
         if self.g0 is not None:
-            return (self.G0(), None, None)
+            return self.G0(), None, None
         else:
             return list(self.x)
 
@@ -841,6 +948,8 @@ class CBEAM(LineElement):
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
         if size == 8:
+            if max(self.eid, max(self.node_ids)) > MAX_INT:
+                return self.comment + print_card_16(card)
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
 
@@ -848,7 +957,8 @@ class CBEAM(LineElement):
         card = self.repr_fields()
         return self.comment + print_card_16(card)
 
-def _init_offt_bit(card, unused_eid, offt_default):
+
+def _init_offt_bit(card, unused_eid: int, offt_default):
     """
     offt doesn't exist in NX nastran
     """
@@ -888,6 +998,7 @@ class BEAMOR(BaseCard):
 
     """
     type = 'BEAMOR'
+
     def __init__(self, pid, is_g0, g0, x, offt='GGG', comment=''):
         BaseCard.__init__(self)
         if comment:
@@ -906,7 +1017,7 @@ class BEAMOR(BaseCard):
         return BEAMOR(pid, is_g0, g0, x, offt='GGG', comment='')
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         pid = integer_or_blank(card, 2, 'pid')
 
         # x / g0
@@ -925,7 +1036,7 @@ class BEAMOR(BaseCard):
         else:
             raise NotImplementedError('BEAMOR field5 = %r' % field5)
         offt = integer_string_or_blank(card, 8, 'offt', 'GGG')
-        assert len(card) <= 9, 'len(BEAMOR card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 9, f'len(BEAMOR card) = {len(card):d}\ncard={card}'
         return BEAMOR(pid, is_g0, g0, x, offt=offt, comment=comment)
 
     def raw_fields(self):

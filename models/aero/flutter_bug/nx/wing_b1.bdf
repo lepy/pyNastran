@@ -1,0 +1,85 @@
+$ NASTRAN input file created by M4 Structures Studio - FEM on Tue Oct 31 2023
+$
+$ FEM file generated from M4 Structures Studio - FEM
+
+ASSIGN OUTPUT4 = 'resp.op4', UNIT = 92, FORMATTED
+ASSIGN OUTPUT4 = 'sensitivities.op4', UNIT = 96, FORMATTED
+ASSIGN OUTPUT2 = 'dscmcol.op2', UNIT = 95, UNFORMATTED
+
+SOL 200
+COMPILE SUBDMAP = EXITOPT
+ALTER 62
+OUTPUT4 R1VALRG,,,,//-1/92///16
+OUTPUT4 ,,,,//-2/92
+OUTPUT4 DSCM2,,,,//-1/96///16
+OUTPUT4 ,,,,//-2/96
+OUTPUT2 DSCMCOL,,,,//-1/95/'DSCMCOL'
+OUTPUT2 ,,,,//-9/95
+$--------------------------------------------------------------------------------
+CEND
+DSAPRT(FORMATTED,EXPORT,END=SENS) = ALL $ AUTOMATICALLY ADDED
+TITLE = M4 Structures Studio - FEM job created Tue Oct 31 2023 at 10:45:03
+LINE 5000
+ECHO = NONE
+DESOBJ(MIN) = 1
+SUBCASE 1
+  SUBTITLE = FLUTTER 1
+  ANALYSIS = FLUTTER
+  DESSUB = 1
+  SPC = 1
+  METHOD = 1
+  FMETHOD = 1
+  DISPLACEMENT(PLOT)= ALL
+$
+BEGIN BULK
+PARAM       POST      -2
+PARAM    POSTEXT     YES
+PARAM   PRTMAXIM     YES
+PARAM     GRDPNT       0
+EIGRL          1                      20
+MKAERO1       .1
+            .001     .01     .05      .1     .25      .5      1.      5.
+$
+$--------------------------------------------------------------------------------
+$  Flutter Analysis Flight Conditions - Subcase 1
+$
+$ LOAD   F   PKNL
+FLUTTER        1    PKNL     101     102     103
+$
+$ Density
+FLFACT       1011.2269911.2269911.2269911.2269911.2269911.2269911.226991
+        1.2269911.2269911.2269911.226991
+$ Mach
+FLFACT       102.1176407.1235227.1294047.1352868.1411688.1470508.1529329
+        .1588149.1646969 .170579 .176461
+$ Velocity
+FLFACT       103     40.     42.     44.     46.     48.     50.     52.
+             54.     56.     58.     60.
+$
+$--------------------------------------------------------------------------------
+$  Objective
+DRESP1         1       W  WEIGHT
+$
+$--------------------------------------------------------------------------------
+$  Structural Response Identification and Constraints - Subcase 1
+$
+$DRESP1      RID   LABEL   RTYPE   PTYPE   N/A    ITEMCODE  IPLY    PROP1      +
+$+         PROP2    ...
+$DCONSTR    DCID     RID  LALLOW  UALLOW
+$
+$ CONSTRAINT   DAMP   PKNL   BLANK   BLANK   0.00200000   1   2   3   4
+DRESP1,2,FLUTTER1,FLUTTER,PKNL,1,,,61001
+,101,102,103
+DCONSTR        1       2            .002
+DRESP1,3,FLUTTER2,FLUTTER,PKNL,2,,,61002
+,101,102,103
+DCONSTR        1       3            .002
+DRESP1,4,FLUTTER3,FLUTTER,PKNL,3,,,61003
+,101,102,103
+DCONSTR        1       4            .002
+DRESP1,5,FLUTTER4,FLUTTER,PKNL,4,,,61004
+,101,102,103
+DCONSTR        1       5            .002
+$--------------------------------------------------------------------------------
+INCLUDE 'geom.blk'
+ENDDATA

@@ -6,224 +6,93 @@ Installation
 Installation From Release
 -------------------------
 
-pyNastran is an easy package to install once you have the required Python
-modules.  It's a pure Python package so you shouldn't have too many problems.
-Just type:
+pyNastran is an easy package to install once you have the required Python modules.  It's a pure Python package so you shouldn't have too many problems.  On the command line:
 
-``pip install pyNastran``
+``pip install pyNastran -U``
 
+That will install the minimum set of what you need to run pyNastran (so no GUI).  If you want the GUI, there are two options.  On the command line, type:
+
+    * ``pip install pyNastran[gui_pyside2] -U``
+    * ``pip install pyNastran[gui_pyqt5]   -U``
 
 Python
 ------
-The software is tested against:
- * Python 3.6 **(Linux)**
- * Python 3.7 **(Windows/Linux)**
+The software is tested on Windows and Linux against Python 3.9 - 3.12.
+
+The latest dev version supports Python 3.9 - 3.12.
 
 Packages
 --------
-The package requirements are slightly different depending on your version
-of Python, but the ones below will work on all supported versions.  The 
-set of packages include:
+pyNastran is tested against a range of package versions (lowest to highest based on availbility), so it should work.  The recommended set of packages are:
+
  * **Required**:
 
    * numpy >= 1.14
    * scipy >= 1.0
-   * cpylog >= 1.0.2
-   * docopt == 0.6.2    **(required for command line tools)**
+   * cpylog >= 1.4.0
+   * docopt-ng == 0.7.2   **(required for command line tools)**
 
  * **Optional**:
 
    * colorama >= 0.3.9    **(colored logging)**
-   * pandas ???
+   * pandas >= 0.25,<2.0
    * matplotlib >= 2.2.4  **(plotting)**
    * h5py >= 2.8.0        **(HDF5 support)**
 
  * **GUI**:
 
-   * vtk 7.1.1 or 8.1.1
+   * vtk >= 9.0, <9.4
    * qtpy >= 1.4.0
    * Qt **(pick one)**
 
-     * PyQt4 >= 4.x
      * PyQt5 >= 5.9.2
-     * PySide >= 1.2.1
      * PySide2 >= 5.11.2
-   * QScintilla >= ??? **(optional for fancy scripting)**
-   * pygments >= 2.2.0 **(optional for fancy scripting)**
-   * imageio >= 2.4.1 **(optional for animation support)**
+     * PyQt6   (currently disabled)
+     * PySide6 (currently disabled)
+   * QScintilla >= 2.13.0 **(optional for fancy scripting; PyQt5/6 only)**
+   * pygments >= 2.2.0 **(optional for fancy scripting; PyQt5/6 only)**
+   * imageio >= 2.4.1,<3  **(optional for animation support)**
 
-***********************************************
-Install Procedure - From Anaconda (recommended)
-***********************************************
+*****************************************************
+Install Procedure - From Source
+*****************************************************
 Base functionality:
- * `Anaconda Python <https://store.continuum.io/cshop/anaconda/>`_
- * ``conda install numpy``
- * ``conda install scipy``
- * ``conda install docopt``   **(required for command line tools)**
- * ``conda install pandas``   **(optional)**
- * ``conda install h5py``       **(optional for HDF5 support)**
- * ``conda install matplotlib`` **(optional for plotting)**
- * ``conda install colorama``   **(optional for colored logging)**
- * ``pip install cpylog``
- * ``pip install pyNastran``
 
-For **optional** GUI support:
+ * `64-bit Python <https://www.python.org/downloads/>`_
 
- * On the command line:
-    * ``conda install imageio`` **(optional for animation support)**
-    * ``conda install pyqt``
-    * ``pip install VTK*.whl``
-    * ``pip install qtpy``
+On the command line, navigate to the directory with ``models``.  Then type:
 
- * **Python 3.6, 3.7**:
+ * ``pip install .``
 
-   * On the command line:
-    * ``conda install imageio`` **(optional for animation support)**
-    * ``conda install pyqt``
-    * ``conda install vtk``
-    * ``pip install qtpy``
+If you would like to be able to modify the checked out source and have it have an effect, add ``-e`` before the ``.``:
 
- * Additional source for `Windows binaries <http://www.lfd.uci.edu/~gohlke/pythonlibs/>`_
+ * ``pip install -e .``
 
-
-************************************
-Install Procedure - From Base Python
-************************************
-Base functionality:
- * `Windows <https://www.python.org/downloads/windows/>`_
-   * Download Windows x86-64 MSI installer
- * Linux/Mac `Python <https://www.python.org/downloads/>`_
-   * Make sure to get 64-bit Python.
- * On the command line:
-
-   * ``pip install numpy``
-   * ``pip install scipy``
-   * ``pip install docopt``
-   * ``pip install colorama``
-   * ``pip install pandas``     **(optional)**
-   * ``pip install h5py``       **(optional for HDF5 support)**
-   * ``pip install matplotlib`` **(optional for plotting)**
-   * ``pip install cpylog``
-   * ``pip install pyNastran``
-
-
-For gui support (optional; required for GUI):
- * From `Windows binaries <http://www.lfd.uci.edu/~gohlke/pythonlibs/>`_:
-   * Download VTK:
-     * VTK-8.1.2-cp36-cp36m-win_amd64.whl **(Python 3.6)**
-     * VTK-8.1.2-cp37-cp37m-win_amd64.whl **(Python 3.7)**
+If you would like pandas and hdf5 support to the BDF/OP2, but no gui options.
 
  * On the command line:
-    * ``pip install imageio``   **(optional for animation support)**
-    * ``pip install VTK*.whl``
-    * ``pip install pyqt``
-    * ``pip install qtpy``
 
+    * ``pip install .[nogui]``
 
-Use Web docs
-------------
-See `docs <https://pynastran-git.readthedocs.io/en/latest/>`_
+For **optional** GUI support, there are two options:
 
--------------------------
-Installation From Source
--------------------------
+ * On the command line:
 
-pyNastran is an easy package to install once you have the required Python
-modules.  It's a pure Python package so you shouldn't have too many problems.
+    * ``pip install .[gui_pyside2]``
+    * ``pip install .[gui_pyqt5]``
 
-Installing from source is recommened if:
- - You want the most recent version (see installation.rst-master)
- - You want easier access to the source
- - You're on an air-gapped machine
+If you want to just install the dependencies yourself:
 
-Overview
-========
- * Install Python (see :doc:`installation_release`)
+ * On the command line:
 
-   * skip the ``pip install pyNastran`` step
- * Install Sphinx, GraphViz, alabaster **(for documentation)**
-
- * Install Git
- * Clone pyNastran-master from Github
- * Install pyNastran
-
-Install extra packages (for Doucmentation)
-==========================================
-
-Install `GraphViz  <https://www.graphviz.org/>`_
-
-Install additional python packages
-
-.. code-block:: console
-
-  pip install Sphinx
-  pip install alabaster
-  pip install numpydoc
-
-Install Git
-===========
-
- * Download & install `Git <http://git-scm.com/>`_
- * Download a GUI for Git (optional)
-    * `TortoiseGit <https://code.google.com/p/tortoisegit/>`_ (recommended for Windows)
-
-
-Install pyNastran
-=================
-There are two ways to install the 1.2 (master/dev) version of pyNastran
-
- 1. Download the most recent `zip version <https://github.com/SteveDoyle2/pyNastran/archive/master.zip>`_
-
- 2. Clone pyNastran (see below).  Using Git allows you to easily update to the
-    latest dev version when you want to as well as push any commits of your own.
-
-If you don't want the gui, use ``setup_no_gui.py`` instead of ``setup.py``.
-
-.. code-block:: console
-
-  >>> python setup.py install
-
-or:
-
-.. code-block:: console
-
-  >>> python setup_no_gui.py install
-
-
-Cloning pyNastran using TortoiseGit
-===================================
-Right-click in a folder and select ``Git Clone``.
-
-.. image:: clone.png
-
-Enter the above information.  If desired, click the branch box and and enter a branch name
-and click ``OK``.
-
-Cloning pyNastran Using Command Line
-====================================
-Checkout/clone the dev code by typing **(preferred)**:
-
-.. code-block:: console
-
-  >>> git clone https://github.com/SteveDoyle2/pynastran
-
-
-To checkout a branch
-
-.. code-block:: console
-
-  >>> git.exe clone --branch 1.2 --progress -v "https://github.com/SteveDoyle2/pyNastran.git" "C:\\work\\pyNastran_1.2"
-
+    * ``pip install . --no-dependencies``
 
 Documentation
 =============
-Two options for documentation exist.
+If you don't want to use build the docs, just use the docs on the web.
 
-Build Docs
-----------
-Navigate to ``pyNastran/docs_sphinx`` directory on the command line.
+See `docs <https://pynastran-git.readthedocs.io/en/latest/>`_
 
-.. code-block:: console
-
-  >>> make html
+If you want to build the docs yourslf:
+ - https://pynastran-git.readthedocs.io/en/latest/installation/building_docs.html
 

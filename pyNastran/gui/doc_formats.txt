@@ -12,8 +12,8 @@ Nastran
      - (nodal/centroidal) stress
      - (nodal) displacement, velocity, acceleration, spc_forces, mpc_forces, temperatures
      - displacement shown as displaced model
-   - Stress
-     - rod_stress, bar_stress, beam_stress, plate_stress, solid_stress
+   - Stress/Strain
+     - rod_stress, bar_stress, **beam_stress, plate_stress, solid_stress
      - composite_plate_stress (centroidal only)
    - Force
      - rod_force, bar_force
@@ -30,7 +30,7 @@ Nastran
 
  - CAERO panels
    - CAERO panel actor
-   - CAERO subpanel actor
+   - CAERO aerobox actor
    - AEFACT flap actor
    - SPLINE actor
    - SPLINE points actor
@@ -52,10 +52,10 @@ Cart3d
    - centroidal -> Rho, XVelocity, YVelocity, ZVelocity, Pressure
  - results
    - nodal -> Mach, Cp, rho, rhoU, rhoV, rhoW, rhoE, U, V, W, E
-   - NOTE: centroidal main results removed becase nodal & centroidal
+   - NOTE: centroidal main results removed because nodal & centroidal
            are now supported, so there's no need to see the results 
  - secondary actors
-   - box with inflow/outflow/symmetry/farfield boundary condtions as colors
+   - box with inflow/outflow/symmetry/farfield boundary conditions as colors
 
  - show/hide elements based on picking
 
@@ -141,14 +141,14 @@ UGrid
  - load geometry -> model.b8.ugrid
   - b8, l8, etc. required
   - nodes/elements of surface mesh
- - auto-loads a tags file to plot boundary conditons
+ - auto-loads a tags file to plot boundary conditions
 
 Surf
 ====
  - AFLR format
  - load geometry -> model.surf
   - nodes/elements of surface mesh
- - auto-loads a tags file to plot boundary conditons
+ - auto-loads a tags file to plot boundary conditions
 
 #--------------
 # BUGS

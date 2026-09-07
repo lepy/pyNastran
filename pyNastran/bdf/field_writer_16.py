@@ -2,12 +2,17 @@
 Defines functions for single precision 16 character field writing.
 """
 import sys
-from typing import List, Union, Optional, Any
+import math
+import warnings
+from typing import Optional, Any
+
+import numpy as np
 from numpy import float32, isnan  # type: ignore
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.cards.utils import wipe_empty_fields
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
+
 
 def set_string16_blank_if_default(value: Any, default: Any) -> str:
     """helper method for writing BDFs"""
@@ -16,41 +21,37 @@ def set_string16_blank_if_default(value: Any, default: Any) -> str:
         return '                '
     return '%16s' % val
 
+
 def print_scientific_16(value: float) -> str:
     """
     Prints a value in 16-character scientific notation.
-    This is a sub-method and shouldnt typically be called
+    This is a sub-method and shouldn't typically be called
 
     .. seealso:: print_float_16 for a better method
     """
     if value == 0.0:
         return '%16s' % '0.'
 
-    python_value = '%16.14e' % value  # -1.e-2
-    svalue, sexponent = python_value.strip().split('e')
-    exponent = int(sexponent)  # removes 0s
+    abs_val = abs(value)
+    exponent = int(math.floor(math.log10(abs_val)))
+    mantissa = value / 10.0 ** exponent
+    if abs(mantissa) >= 9.9999999999:
+        mantissa /= 10.0
+        exponent += 1
 
-    if abs(value) < 1.:
-        sign = '-'
-    else:
-        sign = '+'
+    sexp2 = str(abs(exponent))
+    sign = '-' if exponent < 0 else '+'
 
-    # the exponent will be added later...
-    sexp2 = str(exponent).strip('-+')
-    value2 = float(svalue)
-
-    # the plus 1 is for the sign
     len_sexp = len(sexp2) + 1
     leftover = 16 - len_sexp
-
     if value < 0:
-        fmt = "%%1.%sf" % (leftover - 3)
+        leftover -= 3
     else:
-        fmt = "%%1.%sf" % (leftover - 2)
+        leftover -= 2
 
-    svalue3 = fmt % value2
-    svalue4 = svalue3.strip('0')
-    field = "%16s" % (svalue4 + sign + sexp2)
+    svalue3 = ('%1.' + str(leftover) + 'f') % mantissa
+    svalue4 = svalue3.rstrip('0')
+    field = '%16s' % (svalue4 + sign + sexp2)
     return field
 
 
@@ -193,8 +194,7 @@ def print_float_16(value: float) -> str:
     return field
 
 
-def print_field_16(value):
-    # type: (Optional[Union[int, float, str]]) -> str
+def print_field_16(value: Optional[int | float | str]) -> str:
     """
     Prints a 16-character width field
 
@@ -222,14 +222,14 @@ def print_field_16(value):
     return field
 
 
-def print_card_16(fields, wipe_fields=True):
-    # type: (List[Optional[Union[int, float, str]]], bool) -> str
+def print_card_16(fields: list[Optional[int | float | str]],
+                  wipe_fields: bool=True) -> str:
     """
     Prints a nastran-style card with 16-character width fields.
 
     Parameters
     ----------
-    fields : List[varies]
+    fields : list[varies]
         all the fields in the BDF card (no trailing Nones)
     wipe_fields : bool; default=True
         some cards (e.g. PBEAM) have ending fields
@@ -246,16 +246,17 @@ def print_card_16(fields, wipe_fields=True):
               format where the first 8 is the card name or
               blank (continuation).  The last 8-character field indicates
               an optional continuation, but because it's a left-justified
-              unneccessary field, print_card doesnt use it.
+              unnecessary field, print_card doesn't use it.
 
     .. code-block:: python
 
-      >>> fields = ['DUMMY', 1, 2, 3, None, 4, 5, 6, 7, 8.]
-      >>> print_card_16(fields)
-      DUMMY*                 1               2               3
-      *                      4               5               6               7
-      *                     8.
-      *
+       >>> fields = ['DUMMY', 1, 2, 3, None, 4, 5, 6, 7, 8.]
+       >>> print_card_16(fields)
+       DUMMY*                 1               2               3
+       *                      4               5               6               7
+       *                     8.
+       *
+
     """
     if wipe_fields:
         fields = wipe_empty_fields(fields)
@@ -268,8 +269,8 @@ def print_card_16(fields, wipe_fields=True):
 
     try:
         out = '%-8s' % (fields[0] + '*')
-    except:
-        print("ERROR!  fields=%s" % fields)
+    except Exception:
+        warnings.warn("ERROR!  fields=%s" % fields)
         sys.stdout.flush()
         raise
 
@@ -277,8 +278,8 @@ def print_card_16(fields, wipe_fields=True):
         field = fields[i]
         try:
             out += print_field_16(field)
-        except:
-            print("bad fields = %s" % fields)
+        except Exception:
+            warnings.warn("bad fields = %s" % fields)
             raise
         if i % 4 == 0:  # allow 1+4 fields per line
             out = out.rstrip(' ')
@@ -289,3 +290,81 @@ def print_card_16(fields, wipe_fields=True):
     if not out.endswith('\n'):
         out += '\n'
     return out
+
+
+_POS_BINS_16 = [
+    (0.001, 1.0, '%16.15f'),
+    (1.0, 10.0, '%16.14f'),
+    (10.0, 100.0, '%16.13f'),
+    (100.0, 1000.0, '%16.12f'),
+    (1000.0, 10000.0, '%16.11f'),
+    (10000.0, 100000.0, '%16.10f'),
+    (100000.0, 1000000.0, '%16.9f'),
+    (1000000.0, 10000000.0, '%16.8f'),
+    (10000000.0, 100000000.0, '%16.7f'),
+    (100000000.0, 1000000000.0, '%16.6f'),
+    (1000000000.0, 10000000000.0, '%16.5f'),
+    (10000000000.0, 100000000000.0, '%16.4f'),
+    (100000000000.0, 1000000000000.0, '%16.3f'),
+    (1000000000000.0, 10000000000000.0, '%16.2f'),
+    (10000000000000.0, 100000000000000.0, '%16.1f'),
+]
+
+_NEG_BINS_16 = [
+    (0.01, 1.0, '%16.14f'),
+    (1.0, 10.0, '%16.13f'),
+    (10.0, 100.0, '%16.12f'),
+    (100.0, 1000.0, '%16.11f'),
+    (1000.0, 10000.0, '%16.10f'),
+    (10000.0, 100000.0, '%16.9f'),
+    (100000.0, 1000000.0, '%16.8f'),
+    (1000000.0, 10000000.0, '%16.7f'),
+    (10000000.0, 100000000.0, '%16.6f'),
+    (100000000.0, 1000000000.0, '%16.5f'),
+    (1000000000.0, 10000000000.0, '%16.4f'),
+    (10000000000.0, 100000000000.0, '%16.3f'),
+    (100000000000.0, 1000000000000.0, '%16.2f'),
+    (1000000000000.0, 10000000000000.0, '%16.1f'),
+]
+
+
+def array_float_16(ndarray: np.ndarray) -> np.ndarray:
+    """Vectorized print_float_16 for arrays — bins values by magnitude
+    and formats in batches to avoid per-element Python call overhead."""
+    shape = ndarray.shape
+    flat = ndarray.ravel()
+    n = len(flat)
+    result = np.empty(n, dtype='|U16')
+    abs_val = np.abs(flat)
+    processed = np.zeros(n, dtype=bool)
+
+    izero = flat == 0.0
+    result[izero] = '              0.'
+    processed |= izero
+
+    pos = flat > 0
+    neg = flat < 0
+
+    for lo, hi, fmt in _POS_BINS_16:
+        mask = pos & (flat >= lo) & (flat < hi)
+        if not np.any(mask):
+            continue
+        indices = np.where(mask)[0]
+        result[indices] = [((fmt % v).strip(' 0') or '0.').rjust(16)
+                           for v in flat[indices]]
+        processed[indices] = True
+
+    for lo, hi, fmt in _NEG_BINS_16:
+        mask = neg & (abs_val >= lo) & (abs_val < hi)
+        if not np.any(mask):
+            continue
+        indices = np.where(mask)[0]
+        result[indices] = [((fmt % v).replace('-0.', '-.').strip(' 0') or '-.').rjust(16)
+                           for v in flat[indices]]
+        processed[indices] = True
+
+    remaining = np.where(~processed)[0]
+    for idx in remaining:
+        result[idx] = print_float_16(flat[idx])
+
+    return result.reshape(shape)

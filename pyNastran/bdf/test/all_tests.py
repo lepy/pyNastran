@@ -1,5 +1,7 @@
 from pyNastran.bdf.test.test_field_writer import Testfield_writer_8
-from pyNastran.bdf.test.bdf_unit_tests import TestBDF
+from pyNastran.bdf.test.test_utils import TestBdfUtils
+from pyNastran.bdf.test.test_bdf_unit_tests import TestBDFUnit
+from pyNastran.bdf.bdf_interface.dev.test_mass import TestMassGeneration
 
 from pyNastran.bdf.cards.test.all_tests import *
 from pyNastran.bdf.mesh_utils.test.all_tests import *
@@ -25,4 +27,3 @@ if __name__ == "__main__":  # pragma: no cover
     on_rtd = os.environ.get('READTHEDOCS', None)
     if on_rtd is None:
         unittest.main()
-

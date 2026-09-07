@@ -1,0 +1,764 @@
+import os
+import copy
+import warnings
+from itertools import count
+from typing import Optional
+
+import numpy as np
+from cpylog import SimpleLogger
+from pyNastran.utils import PathLike, print_bad_path
+from pyNastran.op2.op2 import read_op2, OP2
+
+#--------------------------
+# multi-combinations
+
+# (imodel, subcases, factors)
+# (0, [1, 1], [1.2, 0.0])
+CombinationPair = tuple[int, list[int], list[float]]
+# [(0, [1, 1], [1.2, 0.0])]
+CombinationPairs = list[CombinationPair]
+
+# (subcase_out, subtitle, pairs)
+MultiCombination = tuple[int, str, CombinationPairs]
+
+#--------------------------
+# single combinations
+#SingleCombination = (subcase_out, subtitle, factors)
+SingleCombination = tuple[int, str, np.ndarray]
+
+
+def load_combinations(combination_filenames: list[PathLike],
+                      delimiter: str=',') -> list[tuple[np.ndarray, list[SingleCombination]]]:
+    """
+
+    Combination File
+    ----------------
+    # line 1 is the subcase ids  for the scale factors
+    # line 2 is a comment
+
+    # this is line 0. line 1 has the input subcase ids
+      Null    Subcases  1      2      3
+    # Subcase Name      Scale1 Scale2 Scale3
+    10        case10    1.0    2.0    3.0
+    20        case20    1.2    2.2    3.2
+    30        "case 30" 1.2    2.2    3.2
+    """
+    assert len(combination_filenames), combination_filenames
+    for combination_filename in combination_filenames:
+        assert os.path.exists(combination_filename), print_bad_path(combination_filename)
+
+    all_combinations = []
+    for combination_filename in combination_filenames:
+        subcases_input, combinations = _load_combination(
+            combination_filename, delimiter=delimiter)
+        all_combinations.append((subcases_input, combinations))
+    assert len(all_combinations)
+    return all_combinations
+
+
+def _load_combination(combination_filename: PathLike,
+                      delimiter: str=',') -> tuple[list[int], list[SingleCombination]]:
+    """
+    Parameters
+    ----------
+    combination_filename : PathLike
+        the path to the combination file
+    delimiter : str; default=','
+        the delimiter used to separate subcases
+
+    Returns
+    -------
+    subcases_input : list[int]
+        the subcases to use to combine
+    combination: tuple[subcase_out, subtitle, factors]
+        subcase_out: int
+            subcase id out
+        subtitle: str
+            subtitle for the new subcase
+        factors: list[float]
+            combination factors
+
+    """
+    lines = _get_combination_lines(combination_filename, delimiter)
+
+    log = SimpleLogger(level='debug')
+    log.debug(f'lines[0] = {lines[0]!r}')
+    subcases_sline = lines[0].split(delimiter)
+    log.debug(f'subcases_sline = {subcases_sline!r}')
+
+    # chop the output_subcase, subtitle columns
+    subcases_input = []
+    for i, subcase in enumerate(subcases_sline[2:]):
+        subcases_input.append(int(subcase))
+    nsubcases = len(subcases_input)
+    log.debug(f'subcases_input = {subcases_input}')
+
+    combinations = []
+    for line in lines[1:]:
+        sline = [val.strip() for val in line.split(delimiter)]
+        log.debug(f'split line: {sline}')
+        subcase_out = int(sline[0])
+        subtitle = sline[1].strip('"\'')
+        # assert len(subtitle) < 20, subtitle
+        factors = [float(factor) for factor in sline[2:]]
+        nfactors = len(factors)
+        assert len(factors) == nsubcases, f'{subtitle} values={factors} nfactors={nfactors} != nsubcases={nsubcases}'
+        combination = (subcase_out, subtitle, factors)
+        log.debug(str(combination))
+        combinations.append(combination)
+    assert len(combinations)
+    return subcases_input, combinations
+
+
+def load_multi_combinations(
+        combination_filenames: list[PathLike],
+        log: SimpleLogger,
+        delimiter: str=',') -> list[tuple[int, list[MultiCombination]]]:
+    """
+
+    Combination File
+    ----------------
+    # line 1 is the subcase ids  for the scale factors
+    # line 2 is a comment
+      Null,    iOP2,      1,      2,      3,   # op2 ids
+      Null,    SubcaseID, 1,      2,      3,   # subcase ids
+    # Subcase, Name,      Scale1, Scale2, Scale3
+    10,        case10,    1.0,    2.0,    3.0  # comment
+    20,        case20,    1.2,    2.2,    3.2
+    30,        "case 30", 1.2,    2.2,    3.2
+    """
+    assert len(combination_filenames), combination_filenames
+    for combination_filename in combination_filenames:
+        assert os.path.exists(combination_filename), print_bad_path(combination_filename)
+
+    all_combinations = []
+    for combination_filename in combination_filenames:
+        subcases_input, combinations = _load_multi_combination(
+            combination_filename, log, delimiter=delimiter)
+        all_combinations.append((subcases_input, combinations))
+    assert len(all_combinations)
+    return all_combinations
+
+
+def _get_combination_lines(combination_filename: PathLike,
+                           delimiter: str) -> list[str]:
+    """remove comments and blank lines"""
+    with open(combination_filename, 'r') as combination_file:
+        lines = combination_file.readlines()
+
+    lines2 = [line.split('#')[0].strip().rstrip(delimiter) for line in lines
+              if line.split('#')[0].strip().rstrip(delimiter)]
+    return lines2
+
+
+def string_where(op2s_input: list[str], op2_input: str) -> list[int]:
+    """
+    A string capable version for:
+    iop2 = np.where(op2s_input == op2_input)[0]
+    """
+    iop2 = []
+    for i, op2_inputi in enumerate(op2s_input):
+        if op2_inputi == op2_input:
+            iop2.append(i)
+    return iop2
+
+
+def _load_multi_combination(
+        combination_filename: PathLike,
+        log: SimpleLogger,
+        delimiter: str=',') -> tuple[np.ndarray,
+                                     tuple[list[int], list[MultiCombination]]]:
+    lines = _get_combination_lines(combination_filename, delimiter)
+    log.debug(f'lines[0] = {lines[0]!r}')
+
+    sline0 = lines[0].split(delimiter)
+    sline1 = lines[1].split(delimiter)
+    op2s_sline = sline0[2:]
+    subcases_sline = sline1[2:]
+    log.debug(f'op2s_sline     = {op2s_sline!r}')
+    log.debug(f'subcases_sline = {subcases_sline!r}')
+    assert len(op2s_sline) == len(subcases_sline)
+    assert len(subcases_sline) > 0, sline1
+    op2s_input = []
+    subcases_input_list = []
+    for iop2, subcase in zip(op2s_sline, subcases_sline):
+        # iop2 = int(iop2)
+        op2s_input.append(iop2.strip())
+        subcases_input_list.append(int(subcase))
+
+    subcases_input = np.array(subcases_input_list, dtype=int)
+    iop2s = []
+    uop2_input = np.unique(op2s_input)
+    for op2_input in uop2_input:
+        iop2 = string_where(op2s_input, op2_input)
+        # iop2 = np.where(op2s_input == op2_input)[0]
+        iop2s.append(iop2)
+    nsubcases = len(subcases_input)
+    log.debug(f'subcases_input = {subcases_input}')
+
+    combinations = []
+    for line in lines[2:]:
+        sline = [val.strip() for val in line.split(delimiter)]
+        log.debug(f'split line: {sline}')
+        subcase_out = int(sline[0])
+        subtitle = sline[1].strip('"\'')
+        assert len(subtitle) < 20, subtitle
+        factors = np.array([float(factor) for factor in sline[2:]])
+        nfactors = len(factors)
+        assert len(factors) == nsubcases, f'{subtitle} values={factors} nfactors={nfactors} != nsubcases={nsubcases}'
+        combination_pairs = []
+        for op2_input, iop2 in zip(uop2_input.tolist(), iop2s):
+            factorsi = factors[iop2].tolist()
+            subcasesi = subcases_input[iop2].tolist()
+            combination_pairs.append((op2_input, subcasesi, factorsi))
+        assert len(combination_pairs), combination_pairs
+        combination = (subcase_out, subtitle, combination_pairs)
+        log.debug(str(combination))
+        combinations.append(combination)
+    assert len(combinations)
+
+    return subcases_input, combinations
+
+
+def _check_op2_file(op2_filename: PathLike | OP2) -> None:
+    if isinstance(op2_filename, PathLike):
+        assert os.path.exists(op2_filename), print_bad_path(op2_filename)
+    elif isinstance(op2_filename, OP2):
+        pass
+    else:  # pragma: no cover
+        raise TypeError(op2_filename)
+
+
+def run_load_case_combinations(op2_filename: PathLike | OP2,
+                               combination_filenames: list[PathLike] | PathLike,
+                               exclude_results: Optional[list[str]]=None,
+                               include_results: Optional[list[str]]=None,
+                               mode: Optional[str]=None,
+                               revision: Optional[str]=None,
+                               log: Optional[SimpleLogger]=None) -> tuple[int, list[OP2], list[int]]:
+    """
+    Create a series of load case combinations based on a single op2
+
+    Parameters
+    ----------
+    op2_filename : PathLike
+        path to input file
+    combination_filenames : list[PathLike]
+        list of paths to input file
+    mode : Optional[str]
+        the nastran format (msc, nx)
+    log : Optional[SimpleLogger]
+        a logger object
+
+    """
+    _check_op2_file(op2_filename)
+    combination_filenames, all_combinations = setup_combinations_single(
+        combination_filenames)
+    op2_filenames_new = [os.path.splitext(filename)[0] + '.op2'
+                         for filename in combination_filenames]
+    print(f'op2_filenames_new = {op2_filenames_new}')
+
+    nbase_cases_all, op2s_list, ncases_list = run_load_case_combinations_from_data(
+        op2_filename, op2_filenames_new, all_combinations,
+        exclude_results=exclude_results,
+        include_results=include_results,
+        mode=mode, revision=revision, include_base_cases=False,
+        write_op2=True, log=log)
+    return nbase_cases_all, op2s_list, ncases_list
+
+def _check_for_missing_subcases_single(all_combinations: list,
+                                       base_subcase_ids: np.ndarray,
+                                       disp_keys: np.ndarray):
+    missing_subcases = np.setdiff1d(base_subcase_ids, disp_keys)
+    if len(missing_subcases):
+        missing_subcases.sort()
+        bad_subcases = []
+        for subcases_in, cases in all_combinations:
+            for (subcase_out, subtitle, factors) in cases:
+                subcases, factors = get_local_factors(
+                    subcase_out, subtitle, subcases_in, factors, require_cases=False)
+                common_missing_subcases = np.intersect1d(subcases, missing_subcases)
+                if len(common_missing_subcases):
+                    bad_subcases.append(subcase_out)
+        bad_subcases.sort()
+        msg = f'Cant find subcases={missing_subcases}\n'
+        msg += f'Allowed subcases={disp_keys}\n\n'
+        msg += f'Missing subcases required for subcase combinations={bad_subcases}\n'
+        raise RuntimeError(msg)
+
+def run_load_case_combinations_from_data(op2_filename: PathLike,
+                                         op2_filenames_new: list[PathLike],
+                                         all_combinations: list,
+                                         exclude_results: Optional[list[str]]=None,
+                                         include_results: Optional[list[str]]=None,
+                                         subcases: Optional[list[int]]=None,
+                                         mode: Optional[str]=None,
+                                         revision: str='',
+                                         log: Optional[SimpleLogger]=None,
+                                         require_cases: bool=True,
+                                         write_op2: bool=True,
+                                         include_base_cases: bool=False,
+                                         ) -> tuple[int, list[OP2], list[int]]:
+    base_subcase_ids = np.unique(np.hstack([ids for ids, cases in all_combinations])).tolist()
+    output_subcase_ids = np.unique(np.hstack([caseid
+                                              for ids, cases in all_combinations
+                                              for (caseid, subtitle, factors) in cases])).tolist()
+
+    # load_geometry: bool = False,
+    # combine: bool = True,
+    # debug: Optional[bool] = True,
+    # build_dataframe: Optional[bool] = False,
+    # skip_undefined_matrices: bool = True,
+    model = _read_op2(
+        op2_filename, mode=mode, log=log,
+        exclude_results=exclude_results,
+        include_results=include_results,
+        subcases=subcases)
+
+    mode_out = model._nastran_format
+    if revision:
+        model._nastran_revision = revision
+
+    # check all displacements exist
+    assert len(all_combinations) == len(op2_filenames_new)
+    disp_keys = get_subcase_ids(model)
+    common_cases = np.intersect1d(output_subcase_ids, disp_keys)
+    if len(common_cases) and include_base_cases:
+        raise RuntimeError(f'These cases are duplicated and would conflict with the source cases; cases={common_cases}\n'
+                           'Update the linear combination to not repeat subcase ids or set include_base_cases=False')
+
+    _check_for_missing_subcases_single(all_combinations, base_subcase_ids, disp_keys)
+
+    # do the combinations
+    op2s_list = []
+    nbase_cases_all = len(disp_keys)
+    nbase_cases = nbase_cases_all if include_base_cases else 0
+    ncases_list = [nbase_cases] * len(op2_filenames_new)
+    for i, op2_filename_new, (subcases_in, combinations) in zip(count(), op2_filenames_new, all_combinations):
+        op2 = combine(
+            model, op2_filename_new,
+            subcases_in, combinations, model.log, mode_out, revision,
+            require_cases=require_cases,
+            include_base_cases=include_base_cases,
+            write_op2=write_op2)
+        op2s_list.append(op2)
+        ncases_list[i] += len(combinations)
+    return nbase_cases_all, op2s_list, ncases_list
+
+def get_subcase_ids(model: OP2) -> list[int]:
+    # subcase_ids = list(model.displacements)
+    subcase_ids = list(model.isubcase_name_map.keys())
+    subcase_ids.sort()
+    if 0 in subcase_ids:
+        subcase_ids.remove(0)
+    model.log.info(f'op2 subcase_ids={subcase_ids}')
+    return subcase_ids
+
+def setup_combinations_single(combination_filenames: list[PathLike] | PathLike,
+                              ) -> tuple[list[PathLike], list]:
+    if not isinstance(combination_filenames, (list, tuple)):
+        combination_filenames = [combination_filenames]
+
+    all_combinations = load_combinations(combination_filenames)
+    return combination_filenames, all_combinations
+
+
+def _read_op2(op2_filename: PathLike | OP2,
+              mode: Optional[str],
+              log: SimpleLogger,
+              exclude_results: Optional[list[str]]=None,
+              include_results: Optional[list[str]]=None,
+              subcases: list[int]=None,
+              include_complex_modes: bool=True) -> OP2:
+    if isinstance(op2_filename, OP2):
+        return op2_filename
+    assert os.path.exists(op2_filename), print_bad_path(op2_filename)
+    assert mode is None or isinstance(mode, str), mode
+    model = OP2(log=log,  mode=mode)
+    model.set_subcases(subcases)
+
+    flag_dict = {
+        'eigenvectors_complex': include_complex_modes,
+    }
+    model.include_exclude_results(exclude_results=exclude_results,
+                                  include_results=include_results,
+                                  flag_dict=flag_dict)
+    model.read_op2(op2_filename=op2_filename, combine=True)
+    return model
+
+def run_load_case_multi_combinations(
+        op2_filenames: list[PathLike | OP2] | dict[int, PathLike | OP2],
+        combination_filenames: list[PathLike] | PathLike,
+        exclude_results: Optional[list[str]]=None,
+        include_results: Optional[list[str]]=None,
+        mode: Optional[str]=None,
+        revision: str='',
+        log: Optional[SimpleLogger]=None) -> None:
+    """
+
+    Parameters
+    ----------
+    op2_filenames : list[PathLike | OP2]; dict[int, PathLike | OP2]
+        path to input file or a loaded op2
+    combination_filenames : list[PathLike]
+        list of paths to input file
+    mode : Optional[str]
+        the nastran format (msc, nx)
+    log : Optional[SimpleLogger]
+        a logger object
+
+    """
+    log = log if log is not None else SimpleLogger(level='info')
+    if isinstance(op2_filenames, (list, tuple)):
+        op2_filenames = {i: op2_filename for i, op2_filename in enumerate(op2_filenames)}
+    elif isinstance(op2_filenames, dict):
+        pass
+    else:  # pragma: no cover
+        raise TypeError(op2_filenames)
+    # log.info(f'op2_filenames (dict) = {op2_filenames}')
+
+    if not isinstance(combination_filenames, (list, tuple)):
+        combination_filenames = [combination_filenames]
+
+    all_combinations = load_multi_combinations(combination_filenames, log)
+    ncombinations = sum([len(subcasesin_pairs[1])
+                         for subcasesin_pairs in all_combinations])
+    op2_filenames_new = [os.path.splitext(filename)[0] + '.op2'
+                         for filename in combination_filenames]
+    # log.info(f'op2_filenames_new = {op2_filenames_new}')
+    assert len(all_combinations) == len(op2_filenames_new)
+    #-------------------------------------------------------
+
+    models, imodel = _load_models(
+        op2_filenames, all_combinations, mode=mode, log=log,
+        exclude_results=exclude_results,
+        include_results=include_results,
+        # subcases=subcases,
+    )
+    log = models[imodel].log
+
+    # do the combinations
+    icombination = 0
+    for op2_filename_new, (subcases_in, combination_pairs) in zip(op2_filenames_new, all_combinations):
+        op2, icombination = multi_combine(
+            models, op2_filename_new,
+            combination_pairs, log, mode, revision,
+            icombination, ncombinations=ncombinations)
+
+
+def _load_models(op2_filenames: dict[int, PathLike | OP2],
+                 all_combinations: list[tuple[int, list[MultiCombination]]],
+                 exclude_results: Optional[list[str]]=None,
+                 include_results: Optional[list[str]]=None,
+                 subcases: Optional[list[int]]=None,
+                 log: Optional[SimpleLogger]=None,
+                 mode: Optional[str]=None) -> tuple[dict[int, OP2], int]:
+    models = {}
+    assert len(op2_filenames) > 0, op2_filenames
+    for imodel, op2_filename in op2_filenames.items():
+        model = _read_op2(
+            op2_filename, mode=mode, log=log,
+            exclude_results=exclude_results,
+            include_results=include_results,
+            subcases=subcases)
+        # model._nastran_revision = revision
+        models[imodel] = model
+
+        # check displacements exist
+        disp_keys = list(model.displacements)
+        for (subcases_in, combinations) in all_combinations:
+            for subcase in subcases_in:
+                try:
+                    model.displacements[subcase]
+                except KeyError:
+                    log.level = 'info'
+                    log.info(str(model.get_op2_stats(short=True)))
+                    raise KeyError(f'cant find subcase={subcase} in {subcases_in}; allowed={disp_keys}')
+    return models, imodel
+
+
+def get_local_factors(subcase_out: int,
+                      subtitle: str,
+                      subcases_in: list[int],
+                      factors_in: list[float],
+                      require_cases: bool=True) -> tuple[list[int], list[float]]:
+    factors_out = []
+    subcases_out = []
+    nsubcases_in = len(subcases_in)
+    nfactors_in = len(factors_in)
+    assert len(subcases_in) == len(factors_in), f'subtitle={subtitle!r} has a different number of subcases ({nsubcases_in}) than factors ({nfactors_in})'
+    for subcase, factor in zip(subcases_in, factors_in):
+        if factor == 0.0:
+            continue
+        factors_out.append(float(factor))
+        subcases_out.append(subcase)
+
+    if len(factors_out) == 0:
+        msg = f'subcase_out={subcase_out} subtitle={subtitle!r} has no factors != 0'
+        if require_cases:
+            assert len(factors_out) > 0, msg
+        else:
+            warnings.warn(msg)
+    assert len(subcases_out) == len(factors_out)
+    return subcases_out, factors_out
+
+
+def multi_combine(models: dict[int, OP2],
+                  op2_filename_new: PathLike,
+                  combinations: list[MultiCombination],
+                  log_op2: SimpleLogger,
+                  mode: str, revision: str,
+                  icombination: int=0, ncombinations: int=0,
+                  write_op2: bool=True,
+                  stop_on_failure: bool=True) -> tuple[OP2, int]:
+    assert isinstance(models, dict), models
+    models = {str(key).strip(): model for key, model in models.items()}
+    imodel0 = list(models)[0]
+    model0 = models[imodel0]
+
+    icombination0 = icombination
+    if ncombinations == 0:
+        ncombinations = len(combinations)
+
+    log = SimpleLogger(level='debug')
+    out_model = OP2(log=log_op2, mode=mode)
+    if revision:
+        out_model.set_revision_from_model(model0, revision)
+    # table_res_types = _results(out_model)
+
+    table_res_types0 = _results(model0)
+
+    # find all subcase associated with model0 (imodel0)
+    # (imodel, subcases_in, factors_in) in enumerate(imodel_subcases_factors)
+    # (10, 'case10', [(0, [1, 1], [1.0, 2.0])])
+    combination0 = combinations[0]
+    (subcase_out0, subtitle0, imodel_subcases_factors0) = combination0
+    subcases0 = [isf[1] for isf in imodel_subcases_factors0
+                 if isf[0] == imodel0]
+    assert len(subcases0), f'cant find imodel={imodel0}'
+    # now grab a single subcase
+    subcase0 = subcases0[0][0]
+    # print(f'imodel0 = {imodel0}')
+    # print(f'subcases0 = {subcases0}')
+    # print(f'subcase0 = {subcase0}')
+
+    # _add_base_cases(model, model2, table_res_types,
+    #                 include_base_cases=include_base_cases)
+
+    for table_type, res_type in table_res_types0:
+        if len(res_type) == 0:
+            continue
+        out_slot = out_model.get_result(table_type)
+
+        for icombinationi, combination in enumerate(combinations):
+            icombination = icombination0 + icombinationi
+            log.info(f'{table_type} {icombination}/{ncombinations} = {combination}')
+            (subcase_out, subtitle, imodel_subcases_factors) = combination
+
+            ires0 = 0
+
+            # imodel = imodel_subcases_factors[0]
+            # assert isinstance(imodel, int), imodel
+            assert isinstance(models, dict), models
+            slot = model0.get_result(table_type)
+
+            # pick a displacement case and 0 it out
+            # we only 0 out linear combinable data
+            # so not fiber_distance
+            case0 = slot[subcase0]
+            case_new = copy.deepcopy(case0)
+            case_new.subtitle = subtitle
+
+            # case.data *= 0
+            case_new.linear_combination(0.0, update=False)
+
+            for ires, (imodel, subcases_in, factors_in) in enumerate(imodel_subcases_factors):
+                assert len(subcases_in) == len(factors_in), f'subcases_in={subcases_in} factors_in={factors_in}'
+                subcases, factors = get_local_factors(
+                    imodel, subtitle, subcases_in, factors_in, require_cases=False)
+                assert len(subcases) == len(factors)
+                if len(subcases) == 0:
+                    log.debug(f'skipping ires={ires} subtitle={subtitle!r} imodel={imodel} subcases={subcases_in} factors={factors_in} '
+                              'because there are no factors not equal to 0')
+                    continue
+                subcase0 = subcases[0]
+
+                model = models[imodel]
+                slot = model.get_result(table_type)
+                if len(slot) == 0:
+                    raise RuntimeError(f'missing {table_type!r} for op2={model.op2_filename} (subcases={subcases_in})')
+                    # continue
+
+                # add data
+                for subcase, factor in zip(subcases, factors):
+                    try:
+                        casei = res_type[subcase]
+                    except KeyError:
+                        msg = f'cannot find base result_type={table_type!r} subcase={subcase0}'
+                        log.error(msg)
+                        if stop_on_failure:
+                            raise RuntimeError(msg)
+                        continue
+                    case_new.linear_combination(factor, casei.data, update=False)
+                    #casei = caseii * factor
+                    #case.data = casei.data
+                ires0 += 1
+
+            if hasattr(case_new, 'update_data_components'):
+                case_new.update_data_components()
+            else:
+                log.warning(f'skipping {str(type(case_new))}')
+            out_slot[subcase_out] = case_new
+            # break # end of first combination
+        # break # end of all displacement combinations
+
+    # print(f'op2_filename_new = {op2_filename_new}')
+    assert mode is not None, mode
+    out_model._nastran_format = mode
+    if write_op2:
+        out_model.log.info(f'writing {os.path.abspath(op2_filename_new)}')
+        out_model.write_op2(op2_filename_new)
+    return out_model, icombination
+
+
+def _add_base_cases(model: OP2, model2: OP2,
+                    table_res_types,
+                    include_base_cases: bool=False) -> None:
+    if not include_base_cases:
+        return
+    # model2.log.warning(f'subcases_in = {subcases_in}')
+    for table_type, res_type in table_res_types:
+        slot = model2.get_result(table_type)
+        inslot = model.get_result(table_type)
+        if len(inslot) == 0:
+            # model2.log.warning(f'skipping slot = {table_type}')
+            continue
+        for key, value in inslot.items():
+            slot[key] = value
+    return
+
+def combine(model: OP2,
+            op2_filename_new: PathLike,
+            subcases_in: list[int],
+            combinations: list[tuple],
+            log: SimpleLogger,
+            mode: str, revision: Optional[str],
+            require_cases: bool=True,
+            include_base_cases: bool=False,
+            write_op2: bool=True,
+            stop_on_failure: bool=True) -> OP2:
+    # stop_on_failure = False
+    # assert len(subcases_in) == len(combinations), f'subcases_in={subcases_in} combinations={combinations}'
+
+    table_res_types = _results(model)
+
+    assert mode is not None, mode
+    model2 = OP2(log=log, mode=mode)
+    model2._nastran_format = mode
+    if revision:
+        model2._nastran_revision = revision
+    else:
+        model2._nastran_revision = model._nastran_revision
+
+    _add_base_cases(model, model2, table_res_types,
+                    include_base_cases=include_base_cases)
+
+    ncase = len(combinations)
+    for icase, combination in enumerate(combinations):
+        (subcase_out, subtitle, factors_in) = combination
+        log.info(f'{icase}/{ncase}: subcase_out={subcase_out} subtitle={subtitle!r}')
+        assert len(subcases_in) == len(factors_in), f'subcases_in={subcases_in} factors_in={factors_in}'
+        subcases, factors = get_local_factors(
+            subcase_out, subtitle, subcases_in, factors_in, require_cases=require_cases)
+        assert len(subcases) == len(factors)
+        if len(factors) == 0:
+            log.warning(f'skipping subcase={subcase_out} subtitle={subtitle!r}; subcases={subcases_in}'
+                        f' factors={factors_in} because there are no factors not equal to 0')
+            continue
+        #print(f'  subcases={subcases} factors={factors}')
+        subcase0 = subcases[0]
+
+        for table_type, res_type in table_res_types:
+            slot = model2.get_result(table_type)
+            if len(res_type) == 0:
+                # print(f'skipping slot={table_type}')
+                continue
+            # print(res_type)
+
+            # model.displacements[subcase0] = RealDisplacementArray(...)
+            # restype = model.displacements
+            try:
+                case0 = res_type[subcase0]
+            except KeyError:
+                msg = f'cannot find base result_type={table_type!r} subcase={subcase0}'
+                log.error(msg)
+                if stop_on_failure:
+                    raise RuntimeError(msg)
+                continue
+
+            case_new = copy.deepcopy(case0)
+            case_new.subtitle = subtitle
+            # log.info(f'working on subcase={subcase_out}: {subtitle!r} {table_type!r}; subcases={subcases} factors={factors}')
+            assert len(subcases) == len(factors)
+
+            case_new.linear_combination(0.0, update=False)
+            try:
+                for subcase, factor in zip(subcases, factors):
+                    # assert isinstance(factor, integer_float_types), f'bad factor type (expected float); subcase={subcase} factor={factor}'
+                    try:
+                        casei = res_type[subcase]
+                    except KeyError:
+                        msg = f'cannot find result_type={table_type!r} subcase={subcase}'
+                        log.error(msg)
+                        if stop_on_failure:
+                            raise RuntimeError(msg)
+                        continue
+
+                    assert case_new.data.shape == casei.data.shape, f'bad shapes; case_new.data.shape={case_new.data.shape}; casei.data.shape={casei.data.shape}'
+                    case_new.linear_combination(factor, casei.data, update=False)
+            except AssertionError as error:
+                # ('bad shapes; case_new.data.shape=(1, 124011, 6); casei.data.shape=(1, 124130, 6)',)
+                # bad shapes; case_new.data.shape
+                if case_new.class_name == 'RealGridPointForcesArray' and 'bad shapes; case_new.data.shape' in error.args[0]:
+                    log.error('skipping grid point forces')
+                    continue
+                raise
+            if hasattr(case_new, 'update_data_components'):
+                case_new.update_data_components()
+            else:
+                print(type(case_new))
+
+            slot[subcase_out] = case_new
+        # break # end of first combination
+
+    if write_op2:
+        model2.log.info(f'writing {os.path.abspath(op2_filename_new)}')
+        model2.write_op2(op2_filename_new)
+    return model2
+
+
+def _results(model: OP2) -> list[dict]:
+    unallowed_results = [
+        'eigenvectors', 'eigenvalues', 'params', 'gpdt', 'bgpdt', 'eqexin',
+        'grid_point_weight', 'psds', 'monitor1', 'monitor3',
+        'cstm',
+    ]
+    table_res_types = list((table_type, model.get_result(table_type))for table_type in sorted(model.get_table_types())
+                            if table_type not in unallowed_results and not table_type.startswith('responses.'))
+    return table_res_types
+
+
+def main():  # pragma: no cover
+    from pathlib import Path
+    dirname = Path(__file__).parent
+    op2_filename = dirname / 'test load combo-000.op2'
+    combination_filename = dirname / 'combination_file_real.txt'
+
+    assert os.path.exists(op2_filename), print_bad_path(op2_filename)
+    combinations = load_combinations([combination_filename], delimiter=',')
+
+    run_load_case_combinations(op2_filename, combination_filename, mode='nx', revision='2306')
+
+
+if __name__ == '__main__':  # pragma: no cover
+    main()

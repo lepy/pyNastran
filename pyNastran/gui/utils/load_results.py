@@ -13,24 +13,27 @@ defines:
 import os
 import sys
 import traceback
-from typing import List, Tuple, Any
+from typing import Any
 
 import numpy as np
-import pyNastran
-from pyNastran.utils import _filename
+#import pyNastran
 
+from pyNastran.utils import PathLike
 from pyNastran.femutils.io import loadtxt_nice
 from pyNastran.gui.gui_objects.gui_result import GuiResult
 from pyNastran.gui.gui_objects.displacements import DisplacementResults, ForceTableResults
+from pyNastran.gui.gui_objects.displacement_results import DisplacementResults2
+from pyNastran.gui.gui_objects.force_results import ForceResults2
 from pyNastran.converters.stl.stl import read_stl
 
 
 def create_res_obj(islot: int,
-                   headers: List[str], # str too?
-                   header: str,  # List[str] too?
-                   A, fmt_dict, result_type,
+                   headers: list[str], # str too?
+                   header: str,  # list[str] too?
+                   A: dict[str, np.ndarray],
+                   fmt_dict, result_type,
                    is_deflection: bool=False, is_force: bool=False,
-                   dim_max=None, xyz_cid0=None, colormap: str='jet') -> Tuple[Any, str]:
+                   dim_max=None, xyz_cid0=None, colormap: str='jet') -> tuple[Any, str]:
     """
     Parameters
     ----------
@@ -46,7 +49,7 @@ def create_res_obj(islot: int,
             secondary dimension
             N/A : 1D array
             3 : deflection
-    headers : List[str]
+    headers : list[str]
         the titles???
     fmt_dict : dict[header] = fmt
         the format of the arrays
@@ -60,6 +63,7 @@ def create_res_obj(islot: int,
         required for forces/displacements
     xyz_cid0 : (nnodes, 3)
         the points
+
     """
     #print('create_res_object, header=%r' % header)
     datai = A[header]
@@ -73,7 +77,7 @@ def create_res_obj(islot: int,
     elif dimension == 2:
         vector_size = datai.shape[1]
     else:  # pramga: no cover
-        raise RuntimeError('dimension=%s' % (dimension))
+        raise RuntimeError(f'dimension={dimension}')
 
     if vector_size == 1:
         res_obj = GuiResult(
@@ -95,6 +99,16 @@ def create_res_obj(islot: int,
         dxyz = datai
         if is_deflection:
             xyz = xyz_cid0
+            #disp_scalar = None
+            #disp_scales = None
+            #res_obj = DisplacementResults2(
+            #    islot, xyz, dxyz, disp_scalar, disp_scales,
+            #    dim_max=dim_max, data_format='%e',
+            #    nlabels=None, labelsize=None, ncolors=None,
+            #    colormap='',
+            #    #set_max_min=False, uname='DisplacementResults',
+            #)
+
             res_obj = DisplacementResults(
                 #subcase_id, titles, headers, xyz, dxyz, unused_scalar
                 islot, titles, headers,
@@ -113,10 +127,12 @@ def create_res_obj(islot: int,
         else:  # pramga: no cover
             raise RuntimeError('is_deflection=%s is_force=%s' % (is_deflection, is_force))
     else:  # pramga: no cover
-        raise RuntimeError('vector_size=%s' % (vector_size))
+        raise RuntimeError(f'vector_size={vector_size}')
     return res_obj, title
 
-def load_deflection_csv(out_filename: str, encoding: str='latin1'):
+def load_deflection_csv(out_filename: str,
+                        encoding: str='latin1') -> tuple[dict[str, np.ndarray],
+                                                         Any, Any, Any]:
     """
     The GUI deflection CSV loading function.
 
@@ -129,18 +145,20 @@ def load_deflection_csv(out_filename: str, encoding: str='latin1'):
     if ext not in ['.csv', '.dat', '.txt']:
         raise NotImplementedError('extension=%r is not supported (use .dat, .txt, or .csv)' % ext)
 
-    with open(_filename(out_filename), 'r', encoding=encoding) as file_obj:
+    with open(out_filename, 'r', encoding=encoding) as file_obj:
         names, fmt_dict, dtype, delimiter = _load_format_header(file_obj, ext, force_float=False)
 
         try:
             #A = np.loadtxt(file_obj, dtype=dtype, delimiter=delimiter)
             A = loadtxt_nice(file_obj, comments='#', delimiter=delimiter)
-        except:
+        except Exception:
             traceback.print_exc(file=sys.stdout)
             msg = 'extension=%r nheaders=%s delimiter=%r dtype=%s' % (
                 ext, len(names), delimiter, dtype)
             raise RuntimeError(msg)
 
+    # names_without_index = [x, y, z]
+    # fmt_dict_without_index = {'x': '%.3f', 'y': '%.3f', 'z': '%.3f'}
     names_without_index = names[1:]
     fmt_dict_without_index = {key:fmt_dict[key] for key in names_without_index}
 
@@ -181,12 +199,12 @@ def load_csv(out_filename, encoding='latin1'):
     if ext not in ['.csv', '.dat', '.txt']:
         raise NotImplementedError('extension=%r is not supported (use .dat, .txt, or .csv)' % ext)
 
-    with open(_filename(out_filename), 'r', encoding=encoding) as file_obj:
+    with open(out_filename, 'r', encoding=encoding) as file_obj:
         names, fmt_dict, dtype, delimiter = _load_format_header(file_obj, ext, force_float=False)
         try:
             #A = loadtxt(file_obj, dtype=dtype, delimiter=delimiter)
             A = loadtxt_nice(file_obj, dtype=dtype, comments='#', delimiter=delimiter)
-        except:
+        except Exception:
             traceback.print_exc(file=sys.stdout)
             msg = 'extension=%r nheaders=%s delimiter=%r dtype=%s' % (
                 ext, len(names), delimiter, dtype)
@@ -301,7 +319,28 @@ def _load_format_header(file_obj, ext, force_float=False):
     }
     return names, fmt_dict, dtype, delimiter
 
-def load_user_geom(fname, log=None, encoding='latin1'):
+def _load_user_geom_stl(stl_filename: PathLike,
+                        log=None,
+                        encoding: str='latin1',
+                        ) -> tuple[np.ndarray, np.ndarray, np.ndarray,
+                                   np.ndarray, np.ndarray]:
+    stl = read_stl(stl_filename, log=log)
+    nnodes = stl.nodes.shape[0]
+    ntris = stl.elements.shape[0]
+    grid_ids = np.arange(1, nnodes + 1, dtype='int32')
+    xyz = stl.nodes
+    eids = np.arange(1, ntris + 1, dtype='int32')
+    tris = np.vstack([eids, stl.elements.T + 1]).T
+    # tris = stl.elements + 1
+    # print(tris)
+    quads = np.array([], dtype='int32')
+    bars = np.array([], dtype='int32')
+    return grid_ids, xyz, bars, tris, quads
+
+
+def load_user_geom(fname: PathLike, log=None,
+                   encoding: str='latin1') -> tuple[np.ndarray, np.ndarray, np.ndarray,
+                                                    np.ndarray, np.ndarray]:
     """
     Loads a file of the form:
 
@@ -338,70 +377,61 @@ def load_user_geom(fname, log=None, encoding='latin1'):
     QUAD, 3, 1, 5, 3, 4
     QUAD, 4, 1, 2, 3, 4  # this is after a blank line
     """
-    if fname.lower().endswith('.stl'):
-        stl_filename = fname
-        stl = read_stl(stl_filename, log=log)
-        nnodes = stl.nodes.shape[0]
-        ntris = stl.elements.shape[0]
-        grid_ids = np.arange(1, nnodes+1, dtype='int32')
-        xyz = stl.nodes
-        eids = np.arange(1, ntris+1, dtype='int32')
-        tris = np.vstack([eids, stl.elements.T + 1]).T
-        #tris = stl.elements + 1
-        #print(tris)
-        quads = np.array([], dtype='int32')
-        bars = np.array([], dtype='int32')
+    ext = os.path.splitext(fname)[1].lower()
+    if ext == '.stl':
+        grid_ids, xyz, bars, tris, quads = _load_user_geom_stl(
+            fname, log=log, encoding='latin1')
         return grid_ids, xyz, bars, tris, quads
 
-    with open(_filename(fname), 'r', encoding=encoding) as user_geom:
+    with open(fname, 'r', encoding=encoding) as user_geom:
         lines = user_geom.readlines()
 
-    grid_ids = []
-    xyz = []
-    bars = []
-    tris = []
-    quads = []
-    #lines2 = []
+    grid_list = []
+    xyz_list = []
+    bar_list = []
+    tri_list = []
+    quad_list = []
     for line in lines:
         line2 = line.strip().split('#')[0].upper()
-        if line2:
-            sline = line2.split(',')
-            if line2.startswith('GRID'):
-                assert len(sline) == 5, sline
-                grid_ids.append(sline[1])
-                xyz.append(sline[2:])
-            elif line2.startswith('BAR'):
-                assert len(sline) == 4, sline
-                bars.append(sline[1:])
-            elif line2.startswith('TRI'):
-                assert len(sline) == 5, sline
-                tris.append(sline[1:])
-            elif line2.startswith('QUAD'):
-                assert len(sline) == 6, sline
-                quads.append(sline[1:])
-            else:
-                log.warning(sline)
+        if not line2:
+            continue
+        sline = line2.split(',')
+        if line2.startswith('GRID'):
+            assert len(sline) == 5, sline
+            grid_list.append(sline[1])
+            xyz_list.append(sline[2:])
+        elif line2.startswith('BAR'):
+            assert len(sline) == 4, sline
+            bar_list.append(sline[1:])
+        elif line2.startswith('TRI'):
+            assert len(sline) == 5, sline
+            tri_list.append(sline[1:])
+        elif line2.startswith('QUAD'):
+            assert len(sline) == 6, sline
+            quad_list.append(sline[1:])
+        else:
+            log.warning(str(sline))
 
-    grid_ids = np.array(grid_ids, dtype='int32')
-    xyz = np.array(xyz, dtype='float32')
-    tris = np.array(tris, dtype='int32')
-    quads = np.array(quads, dtype='int32')
-    bars = np.array(bars, dtype='int32')
+    grid_ids = np.array(grid_list, dtype='int32')
+    xyz = np.array(xyz_list, dtype='float32')
+    tris = np.array(tri_list, dtype='int32')
+    quads = np.array(quad_list, dtype='int32')
+    bars = np.array(bar_list, dtype='int32')
     return grid_ids, xyz, bars, tris, quads
 
-#def natural_sort(l):
-    #convert = lambda text: int(text) if text.isdigit() else text.lower()
-    #alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
-    #return sorted(l, key=alphanum_key)
-
-#def num_sort():
-    #"""
-    #in_values  = ['anti_main', 'main', 'Family 4', 'Family 3', 'Family 1',
-                  #'Patch 119', 'Patch 118', 'Patch 19', 'Patch 18']
-    #out_values = ['anti_main', 'main', 'Family 1', 'Family 3', 'Family 4',
-                  #'Patch 118', 'Patch 119', 'Patch 18', 'Patch 19']
-
-    #'Patch 19 cat 20' not handled
-    #"""
-    #convert = lambda text: int(text) if text.isdigit() else text.lower()
-    #alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
+# def natural_sort(l):
+#     convert = lambda text: int(text) if text.isdigit() else text.lower()
+#     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
+#     return sorted(l, key=alphanum_key)
+#
+# def num_sort():
+#     """
+#     in_values  = ['anti_main', 'main', 'Family 4', 'Family 3', 'Family 1',
+#                   'Patch 119', 'Patch 118', 'Patch 19', 'Patch 18']
+#     out_values = ['anti_main', 'main', 'Family 1', 'Family 3', 'Family 4',
+#                   'Patch 118', 'Patch 119', 'Patch 18', 'Patch 19']
+#
+#     'Patch 19 cat 20' not handled
+#     """
+#     convert = lambda text: int(text) if text.isdigit() else text.lower()
+#     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]

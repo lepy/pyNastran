@@ -1,8 +1,27 @@
 from collections import Counter
-from typing import List, Dict
 import numpy as np
 
-NX_ELEMENTS = {
+NX_VERSIONS: list[str] = [
+    '7.0', '7.1',
+    '8.0', '8.1', '8.2', '8.3', '8.4', '8.5',
+    '9.0', '9.1',
+    '10.0', '10.1',
+    '11.0', '11.0.1', '11.0.2',
+    '12.0', '12.0.1', '12.0.2',
+    '2019.0', '2019.1', '2019.2',
+    '2020.0', '2020.1', '2020.2',
+    '2021.0', '2021.1', '2021.2',
+    '2022.0', '2022.1', '2022.2',
+    #'2023.0', '2023.1', '2023.2',  #  not checked
+    #'2024.0', '2024.1', '2024.2',  #  not checked
+    '2206', '2206.5', '2212',
+    '2306', '2306.5', '2312',
+    '2406',           '2412',
+    '2412.5',  # ???
+    '2506',           '2512',  # # whole row ???
+]
+
+NX_ELEMENTS: dict[int, str] = {
     0 : 'GRID',
     1 : 'CROD',
     2 : 'CBEAM',
@@ -383,7 +402,7 @@ NX_ELEMENTS = {
     406 : 'CVISC - Basic System',
 }
 
-NX_GEOM_TABLES = [
+NX_GEOM_TABLES: list[bytes] = [
     b'CASECC',
     b'PVT', b'PVT0', b'PVTS',
     #b'GPLS',
@@ -399,12 +418,20 @@ NX_GEOM_TABLES = [
     b'VIEWTB',
     b'R1TABRG',
     b'ERRORN',
-    b'BGPDTVU', # basic grid point defintion table for a superelement and related to geometry with view-grids added
-]  # type: List[bytes]
+    b'BGPDTVU', # basic grid point definition table for a superelement and related to geometry with view-grids added
 
-NX_MATRIX_TABLES = [
+    # ???
+    b'GEOM1ATV', b'GEOM2ATV', b'EPTATV', b'PTMIC', b'ATVMAP',
+]
+
+NX_MATRIX_TABLES: list[bytes] = [
+    b'ATV',
     b'XSOP2DIR',
     b'RADEFMP', # Modal Effective Inertia Matrix - Modal Matrix (per Vibrata)
+    b'K4HH', # K4HH - Modal Structural Damping Matrix
+    b'RAFGEN',  # RAFGEN - Generalized Forces
+    b'RADAMPZ', # Matrix N x N equivalent viscous damping ratios
+    b'RADAMPG', # Matrix N X N equivalent structural damping ratio
 
     # hasn't been validated
     #b'RAFGEN', # Load Set Modal Forces  - Modal generalized force vectors  (per Vibrata)
@@ -418,11 +445,12 @@ NX_MATRIX_TABLES = [
 
     # not-MATPOOL
     # hasn't been validated
-    #b'DELTAK', b'DELTAM', b'RBM0', b'DELTAM0',
+    b'DELTAK', b'DELTAM', b'RBM0', b'DELTAM0',
 
     # MATPOOL
     # hasn't been validated
-    #b'MRGGT', b'UEXPT',
+    b'MRGGT', b'UEXPT', # b'DELTAK',
+    #b'MRGGT',
 
     # MATRIX/MATPOOL - testing-remove this
     # hasn't been validated
@@ -437,9 +465,11 @@ NX_MATRIX_TABLES = [
 
     b'BHH', b'KHH',
     b'DSCM2',
-]  # type: List[bytes]
+    b'MEF1', b'MUG1B',
+    b'MATK', b'MATM', b'MATV',
+]
 
-NX_EXTRA_TABLES = [
+NX_EXTRA_TABLES: list[bytes] = [
     # geometry, but buggy in the geometry block...
     b'ICASE',
 
@@ -451,6 +481,9 @@ NX_EXTRA_TABLES = [
 
     # RADx...
     b'RADCONS', b'RADEFFM', b'RADEATC',
+
+    # shock (103) stress
+    b'DOES1',  # scaled response spectra
 
     # stress
     b'OES1', b'OES1X', b'OES1X1', b'OES1C',
@@ -467,7 +500,7 @@ NX_EXTRA_TABLES = [
     b'OESTRCP', # ???
 
     # contact
-    b'OSPDSI1', b'OSPDSI2', # intial separation distance
+    b'OSPDSI1', b'OSPDSI2', # initial separation distance
     b'OSPDS1', b'OSPDS2',   # final separation distance
     b'OBC1', b'OBC2',       # contact pressures and tractions at grid points
 
@@ -485,10 +518,11 @@ NX_EXTRA_TABLES = [
     b'OPMPF2M',
     b'OLMPF2M',
     b'OEKE1',
-]  # type: List[bytes]
+]
 
-NX_RESULT_TABLES = [
+NX_RESULT_TABLES: list[bytes] = [
     # ???
+    b'XSOP',
     b'OSTR1THC',
     b'OSTR1PLC',
     b'OSTR1CRC',
@@ -503,6 +537,13 @@ NX_RESULT_TABLES = [
     b'ODAMGCZD',
     b'XCASECC',
     b'RST',
+    b'OVG',  # flutter velocity
+    b'OAEROTV', # trim variables
+    b'OAEROP',  # aero pressure
+    b'OAEROF',  # aero forces
+    b'OAERCSHM', # control surface position & hinge moment
+    b'OAEROHMD', # hinge moment derivatives
+    b'OAEROSCD', # stability and control derivatives
 
     # displacements, velocity, acceleration
     # BOUGV1 - G-set results (displacement, velocity, acceleration, eigenvector)
@@ -568,6 +609,7 @@ NX_RESULT_TABLES = [
     b'OSTRVM2',
 
     b'OES2C', b'OSTR2C',
+    b'OSTR1ELC',  # laminate ??? STRAIN, PLSTRN, THSTRN???
 
     # hasn't been validated
     b'OESPSD2C', b'OSTPSD2C',
@@ -673,11 +715,17 @@ NX_RESULT_TABLES = [
     b'OEDE1', # Elemental energy loss.
 
     # grid point pressure
+    b'OPRATO1',
+    b'OPRCRM1',
     b'OPRNO1',   # SORT1 - NO
+    b'OPRPSD1',  # SORT1 - PSD
     b'OPRRMS1',  # SORT1 - RMS
+
     b'OPRPSD2',  # SORT2 - PSD
     b'OPRATO2',  # SORT2 - AUTO
     b'OPRCRM2',  # SORT2 - CRMS
+    b'OESCRM2C', # SORT2 - CRMS composite?
+    b'OSTCRM2C', # SORT2 - CRMS composite?
 
     # modal contribution
     b'OUGMC1',  # Modal contributions for displacements, velocities, accelerations.
@@ -732,10 +780,18 @@ NX_RESULT_TABLES = [
     b'OACPWRT2', # Transmitted acoustic power for AML regions and GROUPs of 2D elements - SORT2
     b'OACTRLS2', # Acoustic transmission loss - SORT2
 
+
     # random acoustic
     b'OAPPSD2', # Acoustic power for the PSD function - SORT2
 
     b'OGK1', # gasket
+
+    # random vibe reference
+    #https://community.sw.siemens.com/s/question/0D54O000061xng3SAA/method-used-in-nx-to-calculate-vm-stress-in-dynamic
+
+    # SATK
+    b'OEFPK1',
+    b'OUGPK1',
 ]
 
 if len(NX_RESULT_TABLES) != len(np.unique(NX_RESULT_TABLES)):  # pragma: no cover
@@ -748,7 +804,7 @@ if len(NX_RESULT_TABLES) != len(np.unique(NX_RESULT_TABLES)):  # pragma: no cove
 
 NX_RESULT_TABLES += NX_EXTRA_TABLES
 
-NX_TABLE_CONTENT = {
+NX_TABLE_CONTENT: dict[int, str] = {
     # nx 8.5
     0: '',
     1: 'OUG - Displacement vector',
@@ -789,70 +845,87 @@ NX_TABLE_CONTENT = {
     36: 'OEE - Element kinetic energy',
     37: 'OEE - Element energy loss',
 
-    38 : 'OMSEC - Constant modal strain energy',
-    39 : 'OMSED - Oscillating modal strain energy',
-    40 : 'OMKEC - Constant modal kinetic energy',
-    41 : 'OMKED - Oscillating modal kinetic energy',
-    42 : 'OMECON - Constant total modal energy',
-    43 : 'OMEOSC - Oscillating total modal energy',
-    44 : 'OUGMC - Displacement/velocity/acceleration modal contributions',
-    45 : 'OEFMC - Element force modal contributions',
-    46 : 'OESMC - Element stress modal contributions',
-    47 : 'OSTRMC - Element strain modal contributions',
-    48 : 'OQGMC - SPC force modal contributions',
-    49 : 'OUGPC - Panel contributions',
-    50 : 'OUGGC - Grid contributions',
-    51 : 'OUGRC - Reciprocal panel contributions',
+    38: 'OMSEC - Constant modal strain energy',
+    39: 'OMSED - Oscillating modal strain energy',
+    40: 'OMKEC - Constant modal kinetic energy',
+    41: 'OMKED - Oscillating modal kinetic energy',
+    42: 'OMECON - Constant total modal energy',
+    43: 'OMEOSC - Oscillating total modal energy',
+    44: 'OUGMC - Displacement/velocity/acceleration modal contributions',
+    45: 'OEFMC - Element force modal contributions',
+    46: 'OESMC - Element stress modal contributions',
+    47: 'OSTRMC - Element strain modal contributions',
+    48: 'OQGMC - SPC force modal contributions',
+    49: 'OUGPC - Panel contributions',
+    50: 'OUGGC - Grid contributions',
+    51: 'OUGRC - Reciprocal panel contributions',
     #
-    53 : 'OACVELO - Acoustic velocity',
-    54 : 'OACINT - Acoustic intensity',
-    55 : 'OACPWR - Acoustic power',
-    56 : 'OACPWRI - Acoustic incident power',
-    57 : 'OACPWRT - Acoustic transmitted power',
-    58 : 'OACTRLS - Acoustic transmission loss',
+    53: 'OACVELO - Acoustic velocity',
+    54: 'OACINT - Acoustic intensity',
+    55: 'OACPWR - Acoustic power',
+    56: 'OACPWRI - Acoustic incident power',
+    57: 'OACPWRT - Acoustic transmitted power',
+    58: 'OACTRLS - Acoustic transmission loss',
     #
-    61 : 'OGK - Gasket Element Results',
-    62 : 'OBC - Contact Pressure and Traction Results',
-    63 : 'OQG - Contact Force Results',
-    64 : 'OSPDSI - Contact Separation Distance - Initial',
-    65 : 'OSPDS - Contact Separation Distance',
-    66 : 'OBG - Glue force results (normal and in-plane tractions)',
-    #67 : 'OQG - Glue force results',
-    68 : 'ELRSCALV - Tosca normalized material properties',
-    69 : 'OERP - Element equivalent radiated power (panel output)',
-    70 : 'OERPEL - Element equivalent radiated power (element output)',
-    71 : 'Reserved for FE-Design',
-    72 : 'OTEMP - Grid point temperature output',
-    73 : 'JINT - Crack front J-integral output',
-    74 : 'SLIDE - Contact/Glue slide output',
-    75 : 'CONSTAT - Contact status output',
-    76 : 'OERR - Error estimator output',
-    77 : 'OPRESS - Grid point pressure output',
-    78 : 'STATE - Variables output',
-    79 : 'INITSTR - Initial strain output',
-    80 : 'OBOLT - Bolt preload output',
+    61: 'OGK - Gasket Element Results',
+    62: 'OBC - Contact Pressure and Traction Results',
+    63: 'OQG - Contact Force Results',
+    64: 'OSPDSI - Contact Separation Distance - Initial',
+    65: 'OSPDS - Contact Separation Distance',
+    66: 'OBG - Glue force results (normal and in-plane tractions)',
+    67: 'OQG - Glue force results ???',
+    68: 'ELRSCALV - Tosca normalized material properties',
+    69: 'OERP - Element equivalent radiated power (panel output)',
+    70: 'OERPEL - Element equivalent radiated power (element output)',
+    71: 'Reserved for FE-Design',
+    72: 'OTEMP - Grid point temperature output',
+    73: 'JINT - Crack front J-integral output',
+    74: 'SLIDE - Contact/Glue slide output',
+    75: 'CONSTAT - Contact status output',
+    76: 'OERR - Error estimator output',
+    77: 'OPRESS - Grid point pressure output',
+    78: 'STATE - Variables output',
+    79: 'INITSTR - Initial strain output',
+    80: 'OBOLT - Bolt preload output',
 
-    81 : 'OCKGAP1 - Opening gap values for chocking elements',
-    82 : 'ODAMGCZD - Damage values for cohesive elements',
-    83 : 'ODAMGCZR - Relative displacements for cohesive elements',
-    84 : 'ODAMGCZT - Tractions for cohesive elements',
-    85 : 'ODAMGPFD - Damage values for PFA',
-    86 : 'ODAMGPFE - Damage energy for PFA',
-    87 : 'ODAMGPFS - Damage status for PFA',
-    88 : 'ODAMGPFR - Damage crack density for PFA / EUD',
-    89 : '??? - Composite strength ratios',
-    90 : 'TRMBD - Transformation matrices from deformed to basic',
-    91 : 'TRMBU - Transfomration matrices from undeformed to basic',
-    92 : 'ONMD - Normalized material density for topology optimization output',
-    93 : 'OBCKL - SORT2 output for Load Factor versus Cummulative Arc-length from a SOL 401 arc-length solution',
+    81: 'OCKGAP1 - Opening gap values for chocking elements',
+    82: 'ODAMGCZD - Damage values for cohesive elements',
+    83: 'ODAMGCZR - Relative displacements for cohesive elements',
+    84: 'ODAMGCZT - Tractions for cohesive elements',
+    85: 'ODAMGPFD - Damage values for PFA',
+    86: 'ODAMGPFE - Damage energy for PFA',
+    87: 'ODAMGPFS - Damage status for PFA',
+    88: 'ODAMGPFR - Damage crack density for PFA / EUD',
+    89: '??? - Composite strength ratios',
+    90: 'TRMBD - Transformation matrices from deformed to basic',
+    91: 'TRMBU - Transfomration matrices from undeformed to basic',
+    92: 'ONMD - Normalized material density for topology optimization output',
+    93: 'OBCKL - SORT2 output for Load Factor versus Cumulative Arc-length from a SOL 401 arc-length solution',
+
+    401: 'OUGPK1 - Peak to Peak Random Displacement',  # SATK
+    410: 'OUGPK1 - Peak to Peak Random Velocity',  # SATK
+    411: 'OUGPK1 - Peak to Peak Random Acceleration',  # SATK
+
+    404: 'OEFPK1 - Peak to Peak Random Element Force',  # SATK
+
     #
     # nx 2019.2
     #
-    804 : 'OEFRMS1 - ???',
-    805 : 'OESXRMS1 - element RMS stresses for random analysis that includes von Mises stress output.',
-    905 : 'OESXNO1C - Cumulative Root Mean Square output',
-}  # type: Dict[int, str]
+    502: 'OPGCRM1 - Cumulative Root Mean Square output',
+    503: '???',
+    504: 'OEFCRM1 - Cumulative Root Mean Square output',
+    505: 'OSTRCRM1 - Cumulative Root Mean Square output',
+    602: 'OPGPSD1 - Applied Load Power Spectral Density',
+    603: 'OQMPSD1 - MPC Force Power Spectral Density',
+    604: 'OEFPSD2 - Element Force Power Spectral Density',
+    605: 'OSTPSD2C - Composite Strain Power Spectral Density',
+    802: 'OPGRMS1 - RMS Load',
+    804: 'OEFRMS1 - RMS Element Force',
+    805: 'OESXRMS1 - element RMS stresses for random analysis that includes von Mises stress output.',
 
+    904: 'OEFNO1 - Cumulative Root Mean Square output',
+    905: 'OESXNO1C - Cumulative Root Mean Square output',
+}
 NX_OEF_REAL_MAPPER = {
     1: 3,    # CROD
     2: 1 + (10 - 1) * 11,  # CBEAM

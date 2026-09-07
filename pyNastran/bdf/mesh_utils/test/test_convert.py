@@ -1,23 +1,20 @@
 import os
+from pathlib import Path
 import unittest
 
 import numpy as np
-from numpy import allclose
 from cpylog import SimpleLogger
 
-#import pyNastran
-#from pyNastran.bdf.bdf import BDF
-
-#root_path = pyNastran.__path__[0]
-#test_path = os.path.join(root_path, 'bdf', 'test', 'unit')
 from pyNastran.bdf.cards.elements.mass import CONM2
 
 import pyNastran
 from pyNastran.bdf.bdf import BDF, read_bdf, CaseControlDeck, PARAM
 from pyNastran.bdf.mesh_utils.convert import convert, get_scale_factors, scale_by_terms
-from pyNastran.bdf.mesh_utils.export_caero_mesh import export_caero_mesh
+from pyNastran.bdf.mesh_utils.aero.export_caero_mesh import export_caero_mesh
+from pyNastran.bdf.cards.aero.zaero_interface.nastran_to_zaero import nastran_to_zaero
 
-pkg_path = pyNastran.__path__[0]
+
+pkg_path = Path(pyNastran.__path__[0])
 
 np.set_printoptions(edgeitems=3, infstr='inf',
                     linewidth=75, nanstr='nan', precision=3,
@@ -29,10 +26,10 @@ class TestConvert(unittest.TestCase):
     def test_convert_bar(self):
         """converts a bar model"""
         log = SimpleLogger(level='warning')
-        model_path = os.path.join(pkg_path, '..', 'models', 'beam_modes')
-        bdf_filename = os.path.join(model_path, 'beam_modes.dat')
-        bdf_filename_out = os.path.join(model_path, 'beam_modes_temp.bdf')
-        bdf_filename_out2 = os.path.join(model_path, 'beam_modes_converted.bdf')
+        model_path = pkg_path / '..' / 'models' / 'beam_modes'
+        bdf_filename = model_path / 'beam_modes.dat'
+        bdf_filename_out = model_path / 'beam_modes_temp.bdf'
+        bdf_filename_out2 = model_path / 'beam_modes_converted.bdf'
         model = read_bdf(bdf_filename, log=log, validate=False)
         #card_lines = ['EIGRL', 42, None, None, 20]
         #model.add_card(card_lines, 'EIGRL')
@@ -55,10 +52,10 @@ class TestConvert(unittest.TestCase):
     def test_convert_isat(self):
         """converts a isat model"""
         log = SimpleLogger(level='error')
-        model_path = os.path.join(pkg_path, '..', 'models', 'iSat')
-        bdf_filename = os.path.join(model_path, 'ISat_Dploy_Sm.dat')
-        bdf_filename_out = os.path.join(model_path, 'isat.bdf')
-        bdf_filename_out2 = os.path.join(model_path, 'isat_converted.bdf')
+        model_path = pkg_path / '..' / 'models' / 'iSat'
+        bdf_filename = model_path / 'ISat_Dploy_Sm.dat'
+        bdf_filename_out = model_path / 'isat.bdf'
+        bdf_filename_out2 = model_path / 'isat_converted.bdf'
         model = read_bdf(bdf_filename, log=log, validate=False)
         #card_lines = ['EIGRL', 42, None, None, 20]
         #model.add_card(card_lines, 'EIGRL')
@@ -73,12 +70,30 @@ class TestConvert(unittest.TestCase):
         os.remove(bdf_filename_out)
         os.remove(bdf_filename_out2)
 
+    def test_convert_nastran_to_zaero(self):
+        """converts a bwb model"""
+        log = SimpleLogger(level='error')
+        dirname = pkg_path / '..' / 'models' / 'bwb'
+        bdf_filename = dirname / 'bwb_saero.bdf'
+        zaero_filename = dirname / 'bwb_saero_zaero.inp'
+        model = read_bdf(bdf_filename, log=log, validate=False)
+        zaero_model = nastran_to_zaero(model, zaero_filename)
+        zaero = zaero_model.zaero
+        # print(zaero_model.get_bdf_stats())
+        assert len(zaero_model.trims) > 0
+        assert len(zaero.mkaeroz) > 0
+        assert len(zaero.trimvar) > 0
+        # assert len(zaero.trimlnk) > 0
+        #model = read_bdf(zaero_filename, xref=False)
+        #model.safe_cross_reference()
+
     def test_convert_bwb(self):
         """converts a bwb model"""
         log = SimpleLogger(level='error')
-        bdf_filename = os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero.bdf')
-        bdf_filename_out = os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_modes.bdf')
-        bdf_filename_out2 = os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_modes_converted.bdf')
+        dirname = pkg_path / '..' / 'models' / 'bwb'
+        bdf_filename = dirname / 'bwb_saero.bdf'
+        bdf_filename_out = dirname / 'bwb_modes.bdf'
+        bdf_filename_out2 = dirname / 'bwb_modes_converted.bdf'
         model = read_bdf(bdf_filename, log=log, validate=False)
         model.sol = 103
 
@@ -107,10 +122,10 @@ class TestConvert(unittest.TestCase):
     def test_convert_sine(self):
         """converts a sine model"""
         log = SimpleLogger(level='error')
-        model_path = os.path.join(pkg_path, '..', 'models', 'freq_sine')
-        bdf_filename = os.path.join(model_path, 'good_sine.dat')
-        bdf_filename_out = os.path.join(model_path, 'sine_modes.bdf')
-        bdf_filename_out2 = os.path.join(model_path, 'sine_converted.bdf')
+        model_path = pkg_path / '..' / 'models' / 'freq_sine'
+        bdf_filename = model_path / 'good_sine.dat'
+        bdf_filename_out = model_path / 'sine_modes.bdf'
+        bdf_filename_out2 = model_path / 'sine_converted.bdf'
         model = read_bdf(bdf_filename, log=log, validate=False)
         model.sol = 103
 
@@ -182,8 +197,8 @@ class TestConvert(unittest.TestCase):
         assert weight_scale == 1., weight_scale
         assert gravity_scale == 1./12., gravity_scale
         wtmass = 1. / (32.174 * 12.)
-        wtmass_expected = 1. / (32.174)
-        assert allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass, wtmass_expected)
+        wtmass_expected = 1. / 32.174
+        assert np.allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass, wtmass_expected)
 
         xyz_scale, mass_scale, time_scale, weight_scale, gravity_scale = get_scale_factors(
             ['mm', 'Mg', 's'], ['m', 'kg', 's'], log)
@@ -198,11 +213,11 @@ class TestConvert(unittest.TestCase):
         assert xyz_scale == 0.3048
         assert mass_scale == 0.45359237, mass_scale
         assert time_scale == 1.
-        assert allclose(weight_scale, 4.4482216526), weight_scale
-        assert allclose(gravity_scale, 1/32.174), 'gravity_scale=%s 1/expected=%s' % (gravity_scale, 1/(32.2))
-        wtmass = 1. / (32.174)
+        assert np.allclose(weight_scale, 4.4482216526), weight_scale
+        assert np.allclose(gravity_scale, 1/32.174), 'gravity_scale=%s 1/expected=%s' % (gravity_scale, 1/32.2)
+        wtmass = 1. / 32.174
         wtmass_expected = 1.
-        assert allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass/gravity_scale, wtmass_expected)
+        assert np.allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass/gravity_scale, wtmass_expected)
 
         # both are consistent systems, so wtmass=1.0
         xyz_scale, mass_scale, time_scale, weight_scale, gravity_scale = get_scale_factors(
@@ -214,7 +229,7 @@ class TestConvert(unittest.TestCase):
         assert gravity_scale == 1., gravity_scale
         wtmass = 1.
         wtmass_expected = 1.
-        assert allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass, wtmass_expected)
+        assert np.allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass, wtmass_expected)
 
         # both are consistent systems, so wtmass=1.0
         xyz_scale, mass_scale, time_scale, weight_scale, gravity_scale = get_scale_factors(
@@ -226,7 +241,7 @@ class TestConvert(unittest.TestCase):
         assert gravity_scale == 1/32.174, 'gravity_scale=%s expected=%s' % (gravity_scale, 1./32.174)
         wtmass = 1. / 32.174
         wtmass_expected = 1.
-        assert allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass, wtmass_expected)
+        assert np.allclose(wtmass/gravity_scale, wtmass_expected), 'wtmass=%s wtmass_expected=%s' % (wtmass, wtmass_expected)
 
     def test_convert_01(self):
         """converts the CONM2s units"""
@@ -253,10 +268,9 @@ class TestConvert(unittest.TestCase):
     def test_convert_02(self):
         """converts a full model units"""
         log = SimpleLogger(level='error')
-        bdf_filename = os.path.abspath(
-            os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero.bdf'))
-        bdf_filename_out = os.path.abspath(
-            os.path.join(pkg_path, '..', 'models', 'bwb', 'bwb_saero.out'))
+        dirname = pkg_path / '..' / 'models' / 'bwb'
+        bdf_filename = os.path.abspath(dirname / 'bwb_saero.bdf')
+        bdf_filename_out = os.path.abspath(dirname / 'bwb_saero.out')
 
         model = read_bdf(bdf_filename, log=log)
         units_to = ['m', 'kg', 's']

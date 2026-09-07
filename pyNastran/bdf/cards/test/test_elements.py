@@ -2,33 +2,214 @@
 import unittest
 import numpy as np
 
-from cpylog import get_logger
+from cpylog import get_logger, SimpleLogger
 from pyNastran.bdf.bdf import BDF, BDFCard
 from pyNastran.bdf.bdf import CGAP, PGAP, CBUSH, CFAST
-from pyNastran.bdf.cards.test.utils import save_load_deck
+from pyNastran.bdf.cards.test.utils import save_load_deck, read_write_op2_geom
+from pyNastran.bdf.mesh_utils.mass_properties import mass_properties
 
 
-
-class TestElements(unittest.TestCase):
+class TestPlotElements(unittest.TestCase):
 
     def test_plotel_01(self):
         """tests a PLOTEL"""
         log = get_logger(level='warning')
         model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
         eid = 9
         nodes = [10, 11]
         model.add_grid(10, [0., 0., 0.])
         model.add_grid(11, [1., 0., 0.])
         plotel = model.add_plotel(eid, nodes, comment='plotel')
+        plotel.raw_fields()
         plotel.write_card(size=8, is_double=False)
         plotel.write_card(size=16, is_double=False)
         plotel.write_card(size=16, is_double=True)
         model.cross_reference()
         model.uncross_reference()
         model.safe_cross_reference()
-        save_load_deck(model, xref='standard', punch=True,
-                       run_renumber=False)  # PLOTEL xref
+        save_load_deck(model, xref='standard', punch=True)
 
+    def test_plotel_02(self):
+        """tests a PLOTEL3/PLOTEL4"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
+        eid = 9
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [1., 0., 0.])
+        model.add_grid(12, [1., 1., 0.])
+        model.add_grid(13, [0., 1., 0.])
+        plotel3 = model.add_plotel3(eid, [10, 11, 12], comment='plotel')
+        plotel4 = model.add_plotel4(eid+1, [10, 11, 12, 13], comment='plotel')
+        plotel3.raw_fields()
+        plotel3.write_card(size=8, is_double=False)
+        plotel3.write_card(size=16, is_double=False)
+        plotel3.write_card(size=16, is_double=True)
+
+        plotel4.raw_fields()
+        plotel4.write_card(size=8, is_double=False)
+        plotel4.write_card(size=16, is_double=False)
+        plotel4.write_card(size=16, is_double=True)
+        model.cross_reference()
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(
+            model, xref='standard', punch=True,
+            run_op2_writer=False)
+
+    def test_plotel_03(self):
+        """tests a PLOTEL6/PLOTEL8"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
+        eid = 9
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [1., 0., 0.])
+        model.add_grid(12, [1., 1., 0.])
+        model.add_grid(13, [0., 1., 0.])
+
+        model.add_grid(20, [0.5, 0., 0.])
+        model.add_grid(21, [1., 0.5, 0.])
+        model.add_grid(22, [0.5, 1., 0.])
+        model.add_grid(23, [0., 0.5, 0.])
+        plotel6 = model.add_plotel6(eid, [10, 11, 12, 20,21, 22], comment='plotel')
+        plotel8 = model.add_plotel8(eid+1, [10, 11, 12, 13,
+                                            20, 21, 22, 23], comment='plotel')
+        plotel6.raw_fields()
+        plotel6.write_card(size=8, is_double=False)
+        plotel6.write_card(size=16, is_double=False)
+        plotel6.write_card(size=16, is_double=True)
+
+        plotel8.raw_fields()
+        plotel8.write_card(size=8, is_double=False)
+        plotel8.write_card(size=16, is_double=False)
+        plotel8.write_card(size=16, is_double=True)
+        model.cross_reference()
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(
+            model, xref='standard', punch=True,
+            run_op2_writer=False)
+
+    def test_plottet(self):
+        """tests a PLOTTET"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
+        eid = 9
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [1., 0., 0.])
+        model.add_grid(12, [1., 1., 0.])
+        model.add_grid(13, [0.5, 0.5, 1.])
+        plottet = model.add_plottet(eid, [10, 11, 12, 13], comment='plotel')
+        plottet.raw_fields()
+        plottet.write_card(size=8, is_double=False)
+        plottet.write_card(size=16, is_double=False)
+        plottet.write_card(size=16, is_double=True)
+        elem = plottet
+        assert len(model._type_to_id_map[elem.type]) == 1, model._type_to_id_map
+
+        model.cross_reference()
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(
+            model, xref='standard', punch=True,
+            run_op2_writer=False)
+
+    def test_plotpyr(self):
+        """tests a PLOTPYR"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
+        eid = 9
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [1., 0., 0.])
+        model.add_grid(12, [1., 1., 0.])
+        model.add_grid(13, [1., 0., 0.])
+        model.add_grid(20, [0., 0., 1.])
+        plotpyr = model.add_plotpyr(eid, [10, 11, 12, 13, 20], comment='plotel')
+        plotpyr.raw_fields()
+        plotpyr.write_card(size=8, is_double=False)
+        plotpyr.write_card(size=16, is_double=False)
+        plotpyr.write_card(size=16, is_double=True)
+
+        model.cross_reference()
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(
+            model, xref='standard', punch=True,
+            run_op2_writer=False)
+
+    def test_plotpen(self):
+        """tests a PLOTPEN"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
+        eid = 9
+        model.add_grid(11, [0., 0., 0.])
+        model.add_grid(12, [1., 0., 0.])
+        model.add_grid(13, [1., 1., 0.])
+
+        model.add_grid(21, [0., 0., 1.])
+        model.add_grid(22, [1., 0., 1.])
+        model.add_grid(23, [1., 1., 1.])
+        plotpen = model.add_plotpen(eid, [11, 12, 13, 21, 22, 23], comment='plotel')
+        plotpen.raw_fields()
+        plotpen.write_card(size=8, is_double=False)
+        plotpen.write_card(size=16, is_double=False)
+        plotpen.write_card(size=16, is_double=True)
+
+        model.cross_reference()
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(
+            model, xref='standard', punch=True,
+            run_op2_writer=False)
+
+    def test_plothex(self):
+        """tests a PLOTHEX"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        model.set_error_storage(
+            nparse_errors=0, stop_on_parsing_error=True,
+            nxref_errors=0, stop_on_xref_error=True)
+        eid = 9
+        model.add_grid(11, [0., 0., 0.])
+        model.add_grid(12, [1., 0., 0.])
+        model.add_grid(13, [1., 1., 0.])
+        model.add_grid(14, [0., 1., 0.])
+
+        model.add_grid(21, [0., 0., 1.])
+        model.add_grid(22, [1., 0., 1.])
+        model.add_grid(23, [1., 1., 1.])
+        model.add_grid(24, [0., 1., 1.])
+        plothex = model.add_plothex(eid, [11, 12, 13, 14, 21, 22, 23, 24], comment='plotel')
+        plothex.raw_fields()
+        plothex.write_card(size=8, is_double=False)
+        plothex.write_card(size=16, is_double=False)
+        plothex.write_card(size=16, is_double=True)
+
+        model.cross_reference()
+        model.uncross_reference()
+        model.safe_cross_reference()
+        save_load_deck(
+            model, xref='standard', punch=True,
+            run_op2_writer=False)
+
+class TestBushingElements(unittest.TestCase):
     def test_cbush_01(self):
         """tests a CBUSH"""
         log = get_logger(level='warning')
@@ -52,7 +233,147 @@ class TestElements(unittest.TestCase):
         model.add_pbusht(pid, k_tables, b_tables, ge_tables, kn_tables, comment='pbusht')
         save_load_deck(model)
 
-    def test_gap_01(self):
+    def test_cbush_02(self):
+        """tests a CGAP/PGAP"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 10
+        pid = 11
+        nodes = [1, None]
+        g0 = None
+        x = [1., 2., 3.]
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [0., 0., 0.])
+        # assert cbush.ga == 1
+        # assert cbush.gb is None
+        model.add_cord2r(1, [0., 0., 0.], [0., 0., 1.], [1., 0., 0.])
+        cbush1 = model.add_cbush(
+            eid, pid, nodes, x, g0,
+            cid=1, s=0.5, ocid=1,
+            si=[1., 2., 3.])
+        cbush2 = model.add_cbush(eid + 1, pid, [1, 2], x, g0, cid=0)
+        model.add_pbush(pid, k=[1., ], b=[2.])
+        model.cross_reference()
+        cbush1.Centroid()
+        cbush2.Centroid()
+        assert np.isclose(cbush1.Mass(), 0.0)
+        assert np.isclose(cbush2.Mass(), 0.0)
+        coord = cbush1.element_coordinate_system()
+        coord = cbush2.element_coordinate_system()
+        save_load_deck(model)
+
+    def test_cbush_optistruct(self):
+        """tests a CGAP/PGAP in optistruct"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 10
+        pid = 11
+        nodes = [1, None]
+        g0 = None
+        x = [1., 2., 3.]
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [0., 0., 0.])
+        # assert cbush.ga == 1
+        # assert cbush.gb is None
+        model.add_cord2r(1, [0., 0., 0.], [0., 0., 1.], [1., 0., 0.])
+        cbush1 = model.add_cbush(
+            eid, pid, nodes, x, g0,
+            cid=1, s=0.5, ocid=1,
+            si=[1., 2., 3.])
+        cbush2 = model.add_cbush(eid + 1, pid, [1, 2], x, g0, cid=0)
+        pbush = model.add_pbush_optistruct(pid, k=[1., ], b=[2.])
+        cbush1.raw_fields()
+        cbush2.raw_fields()
+        pbush.raw_fields()
+        str(cbush1)
+        str(cbush2)
+        str(pbush)
+        model.cross_reference()
+        cbush1.Centroid()
+        cbush2.Centroid()
+        assert np.allclose(cbush1.Mass(), 0.0)
+        assert np.allclose(cbush2.Mass(), 0.0)
+        coord = cbush1.element_coordinate_system()
+        coord = cbush2.element_coordinate_system()
+        save_load_deck(model, run_op2_writer=False)
+
+    def test_cbush1d(self):
+        log = SimpleLogger(level='warning')
+        model = BDF(log=log)
+
+        model.add_grid(2, [0., 0., 0.])
+        model.add_grid(3, [1., 0., 0.])
+        nids = [2, 3]
+        eid = 10
+        pid = 100
+        cbush1d = model.add_cbush1d(eid, pid, nids, cid=None, comment='cbush1d')
+        pbush1d = model.add_pbush1d(pid, k=0., c=0., mass=0., sa=0., se=0., optional_vars=None,
+                          comment='pbush1d')
+        cbush1d.raw_fields()
+        pbush1d.raw_fields()
+        str(cbush1d)
+        str(pbush1d)
+
+        model.pop_parse_errors()
+        model.cross_reference()
+
+        assert np.isclose(cbush1d.Mass(), 0.0)
+        coord = cbush1d.element_coordinate_system()
+        save_load_deck(model, run_op2_reader=False)
+
+    def test_cbush2d(self):
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+
+        model.add_grid(2, [0., 0., 0.])
+        model.add_grid(3, [1., 0., 0.])
+        nids = [2, 3]
+        eid = 10
+        pid = 100
+        unused_cbush2d = model.add_cbush2d(eid, pid, nids, cid=0, plane='XY', sptid=None,
+                                           comment='cbush2d')
+        #model.add_pbush2d()
+
+        #model.pop_parse_errors()
+        #model.cross_reference()
+        save_load_deck(model, run_convert=False, xref=False, run_renumber=False, run_test_bdf=False)
+
+
+    def test_cbush2d_pbush2d(self):
+        """PDAMP"""
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 37
+
+        pid = 10
+        k1 = 20.
+        k2 = 30.
+        b1 = 40.
+        b2 = 1.0
+        m1 = 2.0
+        m2 = 3.0
+        k12 = 1.0
+        k21 = 2.0
+        b12 = 0.0
+        b21 = 0.0
+        m12 = 0.0
+        m21 = 0.0
+        #nodes1 = [10, 20]
+        #nodes2 = [20, 30]
+        nids = [1, 2]
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+        model.add_pbush2d_cross(pid, k1, k2, b1, b2, m1, m2,
+                                k12, k21, b12, b21, m12, m21, comment='cross')
+        model.add_cbush2d(eid, pid, nids, cid=0, plane='XY', sptid=None, comment='cbush2d')
+        model.validate()
+        model._verify_bdf()
+        save_load_deck(model)
+
+
+
+class TestElements(unittest.TestCase):
+    def test_elements_cgap_01(self):
         """tests a CGAP/PGAP"""
         log = get_logger(level='warning')
         model = BDF(log=log)
@@ -101,6 +422,107 @@ class TestElements(unittest.TestCase):
         model.cross_reference()
         save_load_deck(model)
 
+    def test_cweld_elemid_x(self):
+        connectype = 'ELEMID'
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 10
+        pid = 20
+        gs = None
+        ga = 32
+        gb = 33
+        mcid = 0
+        shida = 101
+        shidb = 102
+        x = [1., 2., 3.]
+        model.add_cweld(eid, pid, gs, connectype, ga, gb,
+                        mcid=mcid, shida=shida, shidb=shidb,
+                        x=x, comment='weld')
+        mid = 201
+        d = 0.1
+        model.add_pweld(pid, mid, d, comment='pweld')
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        model.add_mat1(mid, E, G, nu)
+        model.add_grid(31, [0., 0., 0.])
+        model.add_grid(32, [1., 0., 0.])
+        model.add_grid(33, [2., 0., 0.])
+        save_load_deck(model)
+
+    def test_cweld_elpat(self):
+        connectype = 'ELPAT'
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 10
+        pid = 20
+        gs = None
+        ga = 32
+        gb = 33
+        mcid = 0
+        shida = 101
+        shidb = 102
+        x = [1., 2., 3.]
+        model.add_cweld(eid, pid, gs, connectype, ga, gb,
+                        mcid=mcid, shida=shida, shidb=shidb,
+                        x=x, comment='weld')
+        mid = 201
+        d = 0.1
+        model.add_pweld(pid, mid, d, comment='pweld')
+        model.add_mat1(mid, 3.0e7, None, 0.3)
+        model.add_grid(31, [0., 0., 0.])
+        model.add_grid(32, [1., 0., 0.])
+        model.add_grid(33, [2., 0., 0.])
+        save_load_deck(model)
+
+    def test_cweld_partpat(self):
+        connectype = 'ELEMID'
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 10
+        pid = 20
+        gs = None
+        ga = 32
+        gb = 33
+        mcid = 0
+        shida = 101
+        shidb = 102
+        model.add_cweld(eid, pid, gs, connectype, ga, gb,
+                        mcid=mcid, shida=shida, shidb=shidb,
+                        x=None, comment='weld')
+        mid = 201
+        d = 0.1
+        model.add_pweld(pid, mid, d, comment='pweld')
+        model.add_mat1(mid, 3.0e7, None, 0.3)
+        model.add_grid(31, [0., 0., 0.])
+        model.add_grid(32, [1., 0., 0.])
+        model.add_grid(33, [2., 0., 0.])
+        save_load_deck(model)
+
+    def test_cweld_elemid_x_none(self):
+        log = get_logger(level='warning')
+        model = BDF(log=log)
+        eid = 10
+        pid = 20
+        gs = None
+        ga = 32
+        gb = 33
+        mcid = 0
+        shida = 101
+        shidb = 102
+        connectype = 'ELEMID'
+        model.add_cweld(eid, pid, gs, connectype, ga, gb,
+                        mcid, shida, shidb,
+                        x=None, comment='weld')
+        mid = 201
+        d = 0.1
+        model.add_pweld(pid, mid, d, comment='pweld')
+        model.add_mat1(mid, 3.0e7, None, 0.3)
+        model.add_grid(31, [0., 0., 0.])
+        model.add_grid(32, [1., 0., 0.])
+        model.add_grid(33, [2., 0., 0.])
+        save_load_deck(model)
+
     def test_cfast(self):
         """tests a CFAST/PFAST"""
         log = get_logger(level='warning')
@@ -139,7 +561,6 @@ class TestElements(unittest.TestCase):
                                 gs=1, ga=None, gb=None,
                                 xs=None, ys=None, zs=None, comment='cfast')
 
-
         Type = 'fake'
         pid2 = None
         cfast2 = CFAST(eid, pid2, Type, ida, idb,
@@ -163,7 +584,10 @@ class TestElements(unittest.TestCase):
         kt3 = 0.1
         pfast = model.add_pfast(pid, d, kt1, kt2, kt3, mcid=-1, mflag=0, kr1=0.,
                                 kr2=0., kr3=0., mass=0., ge=0.,
-                                comment='')
+                                comment='pfast')
+        pfastb = model.add_pfast(
+            pid+1, d, kt1, kt2, kt3, mcid=0, mflag=0, kr1=0.,
+            kr2=0., kr3=0., mass=0., ge=0.)
         model.validate()
 
         cfast.raw_fields()
@@ -181,41 +605,12 @@ class TestElements(unittest.TestCase):
 
         model.uncross_reference()
         model.safe_cross_reference()
-        model.mass_properties()
-        save_load_deck(model, run_convert=False)
-
-    def test_cbush1d(self):
-        model = BDF(debug=False)
-
-        model.add_grid(2, [0., 0., 0.])
-        model.add_grid(3, [1., 0., 0.])
-        nids = [2, 3]
-        eid = 10
-        pid = 100
-        model.add_cbush1d(eid, pid, nids, cid=None, comment='cbush1d')
-        model.add_pbush1d(pid, k=0., c=0., m=0., sa=0., se=0., optional_vars=None,
-                          comment='pbush1d')
-
-        model.pop_parse_errors()
-        model.cross_reference()
-        save_load_deck(model, run_op2_reader=False)
-
-    def test_cbush2d(self):
-        log = get_logger(level='warning')
-        model = BDF(log=log)
-
-        model.add_grid(2, [0., 0., 0.])
-        model.add_grid(3, [1., 0., 0.])
-        nids = [2, 3]
-        eid = 10
-        pid = 100
-        unused_cbush2d = model.add_cbush2d(eid, pid, nids, cid=0, plane='XY', sptid=None,
-                                           comment='cbush2d')
-        #model.add_pbush2d()
-
-        #model.pop_parse_errors()
-        #model.cross_reference()
-        save_load_deck(model, run_convert=False, xref=False, run_renumber=False, run_test_bdf=False)
+        mass_properties(model)
+        #save_load_deck(model, run_convert=False)
+        read_write_op2_geom(
+            model, run_op2_writer=True, run_op2_reader=True,
+            nastran_format='msc')
+        save_load_deck(model)
 
     def test_crac2d(self):
         log = get_logger(level='warning')

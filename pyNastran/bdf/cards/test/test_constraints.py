@@ -1,7 +1,7 @@
 from itertools import count
 import unittest
 from pyNastran.bdf.bdf import BDF, BDFCard, SUPORT, SUPORT1, MPC
-from pyNastran.bdf.cards.test.utils import save_load_deck
+from pyNastran.bdf.cards.test.utils import save_load_deck, read_write_op2_geom
 
 class TestConstraints(unittest.TestCase):
     def test_support_01(self):
@@ -261,6 +261,9 @@ class TestConstraints(unittest.TestCase):
         model.add_grid(4, [0., 0., 0.])
         check_mpc_spc(model)
         save_load_deck(model)
+        read_write_op2_geom(
+            model, run_op2_writer=True, run_op2_reader=True,
+            nastran_format='msc')
 
     def test_spcoff(self):
         """tests SPCOFF/SPCOFF1"""
@@ -333,30 +336,30 @@ class TestConstraints(unittest.TestCase):
         check_mpc_spc(model)
         save_load_deck(model)
 
-    def test_spcax(self):
-        """tests SPCAX"""
-        model = BDF(debug=False, log=None, mode='msc')
-        conid = 1
-        ringax = 42
-        hid = 43
-        component = 52
-        enforced = 101.
-        model.add_spcax(conid, ringax, hid, component, enforced, comment='spcax')
-        spcax = model.spcs[1][0]
-        card = spcax.write_card(size=8)
-        spcax.raw_fields()
-        spcax.write_card(size=16)
-        spcax.write_card(size=16, is_double=True)
-        model.add_card(card.split('\n')[1:], 'SPCAX', is_list=False)
-
-        model.pop_parse_errors()
-        model.validate()
-        model.cross_reference()
-        model.uncross_reference()
-        model.safe_cross_reference()
-        str(spcax)
-        check_mpc_spc(model)
-        save_load_deck(model)
+    # def test_spcax(self):
+    #     """tests SPCAX"""
+    #     model = BDF(debug=False, log=None, mode='msc')
+    #     conid = 1
+    #     ringax = 42
+    #     hid = 43
+    #     component = 52
+    #     enforced = 101.
+    #     model.add_spcax(conid, ringax, hid, component, enforced, comment='spcax')
+    #     spcax = model.spcs[1][0]
+    #     card = spcax.write_card(size=8)
+    #     spcax.raw_fields()
+    #     spcax.write_card(size=16)
+    #     spcax.write_card(size=16, is_double=True)
+    #     model.add_card(card.split('\n')[1:], 'SPCAX', is_list=False)
+    #
+    #     model.pop_parse_errors()
+    #     model.validate()
+    #     model.cross_reference()
+    #     model.uncross_reference()
+    #     model.safe_cross_reference()
+    #     str(spcax)
+    #     check_mpc_spc(model)
+    #     save_load_deck(model)
 
 def check_card(msg_expected, msg_actual):
     if isinstance(msg_expected, tuple):

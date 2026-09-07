@@ -1,13 +1,21 @@
-from typing import List
 import numpy as np
 from numpy import zeros
 
 from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.op2.result_objects.op2_objects import get_complex_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
-    StressObject, StrainObject, OES_Object)
+    StressObject, StrainObject, OES_Object, get_scode,
+    oes_complex_data_code, set_freq_case, set_complex_modes_case,
+    set_element_case)
 from pyNastran.f06.f06_formatting import write_imag_floats_13e, _eigenvalue_header
 
+ELEMENT_NAME_TO_ELEMENT_TYPE = {
+    'CELAS1': 11,
+    'CELAS2': 12,
+    'CELAS3': 13,
+    'CELAS4': 14,
+}
 
 class ComplexSpringDamperArray(OES_Object):
     def __init__(self, data_code, is_sort1, isubcase, dt):
@@ -33,13 +41,14 @@ class ComplexSpringDamperArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
-    #def get_headers(self):
-        #headers = ['axial', 'torque']
-        #return headers
+    # @property
+    # def headers(self) -> list[str]:
+    #     headers = ['axial', 'torque']
+    #     return headers
 
     def build(self):
         """sizes the vectorized attributes of the ComplexSpringDamperArray"""
@@ -54,23 +63,95 @@ class ComplexSpringDamperArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, cfdtype = get_complex_times_dtype(self.nonlinear_factor, self.size)
-        self._times = zeros(self.ntimes, dtype=dtype)
-        self.element = zeros(self.nelements, dtype=idtype)
+        idtype, cfdtype = get_complex_times_dtype(self.size)
+        self._times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        self.element = np.zeros(self.nelements, dtype=idtype)
 
         #[spring_stress]
-        self.data = zeros((self.ntimes, self.ntotal, 1), dtype=cfdtype)
+        self.data = np.zeros((self.ntimes, self.ntotal, 1), dtype=cfdtype)
 
     def build_dataframe(self):
         """creates a pandas dataframe"""
         headers = self.get_headers()
-        column_names, column_values = self._build_dataframe_transient_header()
-        self.data_frame = self._build_pandas_transient_elements(
-            column_values, column_names,
+        column_names, column_values = build_dataframe_transient_header(self)
+        self.data_frame = build_pandas_transient_elements(
+            self, column_values, column_names,
             headers, self.element, self.data)
+
+    @classmethod
+    def _add_case(cls,
+                  table_name, element_name, isubcase,
+                  is_sort1, is_random, is_msc,
+                  random_code, title, subtitle, label):
+        is_strain = 'Strain' in cls.__name__
+        assert isinstance(is_strain, bool), is_strain
+        assert isinstance(element_name, str), element_name
+        num_wide = 3
+        data_code = oes_complex_data_code(
+            table_name,
+            element_name, num_wide,
+            is_sort1=is_sort1, is_random=is_random,
+            random_code=random_code, title=title, subtitle=subtitle, label=label,
+            is_msc=is_msc)
+
+        #
+        #stress_bits[1] = 1  # strain bit (vs. stress)
+        #stress_bits[2] = 1  # curvature bit (vs. fiber)     ---> always 0
+        #stress_bits[3] = 1  # strain bit (vs. stress)
+        #stress_bits[4] = 1  # von mises bit (vs. max shear) ---> always 0
+        if is_strain:
+            # fiber   # 2  =0
+            # strain  # 1,3=1
+            #stress_bits[2] == 0
+            stress_bits = [1, 1, 0, 1, 0]
+            #data_code['s_code'] = 1 # strain?
+        else:
+            # fiber   # 2   =0
+            # stress  # 1, 3=0
+            stress_bits = [0, 0, 0, 0, 0]
+            #data_code['s_code'] = 0
+
+        s_code = get_scode(stress_bits)
+        data_code['stress_bits'] = stress_bits
+        data_code['s_code'] = s_code
+
+        assert stress_bits[1] == stress_bits[3]  # strain
+
+        element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name.upper()]
+        data_code['element_name'] = element_name.upper()
+        data_code['element_type'] = element_type
+        return data_code
+
+    @classmethod
+    def add_freq_case(cls, table_name, element_name: str,
+                      element, data, isubcase,
+                      freqs,
+                      is_sort1=True, is_random=False, is_msc=True,
+                      random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name, isubcase,
+            is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_freq_case(cls, is_sort1, isubcase, data_code,
+                            set_element_case, (element, data), freqs)
+        return obj
+
+    @classmethod
+    def add_complex_modes_case(cls, table_name, element, data, isubcase,
+                               modes, eigrs, eigis,
+                               element_name: str,
+                               is_sort1=True, is_random=False, is_msc=True,
+                               random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name, isubcase,
+            is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+
+        obj = set_complex_modes_case(cls, is_sort1, isubcase, data_code,
+                                     set_element_case, (element, data), modes, eigrs, eigis)
+        return obj
 
     def __eq__(self, table):  # pragma: no cover
         assert self.is_sort1 == table.is_sort1
@@ -80,9 +161,9 @@ class ComplexSpringDamperArray(OES_Object):
             msg += '%s\n' % str(self.code_information())
             i = 0
             for itime in range(self.ntimes):
-                for ie, eid in enumerate(self.element):
-                    t1 = self.data[itime, ie, :]
-                    t2 = table.data[itime, ie, :]
+                for ielem, eid in enumerate(self.element):
+                    t1 = self.data[itime, ielem, :]
+                    t2 = table.data[itime, ielem, :]
                     if not np.array_equal(t1, t2):
                         msg += '%s    (%s, %s)  (%s, %s)\n' % (
                             eid,
@@ -99,18 +180,19 @@ class ComplexSpringDamperArray(OES_Object):
 
     def add_sort1(self, dt, eid, stress):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element[self.ielement] = eid
         self.data[self.itime, self.ielement, 0] = stress
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.nelements
@@ -131,8 +213,8 @@ class ComplexSpringDamperArray(OES_Object):
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (
             ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
         #msg.append('  element type: %s\n' % self.element_type)
         msg.append('  element name: %s\n' % self.element_name)
         msg += self.get_data_code()
@@ -173,7 +255,7 @@ class ComplexSpringDamperArray(OES_Object):
         return msg
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg_temp = self.get_f06_header(is_mag_phase=is_mag_phase, is_sort1=is_sort1)
@@ -208,17 +290,17 @@ class ComplexSpringDamperArray(OES_Object):
             page_num += 1
         return page_num - 1
 
-    def write_op2(self, op2, op2_ascii, itable, new_result,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result,
                   date, is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
         from struct import Struct, pack
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #eids = self.element
@@ -238,7 +320,7 @@ class ComplexSpringDamperArray(OES_Object):
         #assert self.ntimes == 1, self.ntimes
 
         #device_code = self.device_code
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         eids_device = self.element * 10 + self.device_code
 
@@ -252,7 +334,7 @@ class ComplexSpringDamperArray(OES_Object):
 
         op2_ascii.write('%s-nelements=%i\n' % (self.element_name, nelements))
         for itime in range(self.ntimes):
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             itable -= 1
@@ -261,10 +343,10 @@ class ComplexSpringDamperArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
             from pyNastran.op2.op2_interface.utils import to_mag_phase
             stress = self.data[itime, :, 0]
@@ -273,11 +355,11 @@ class ComplexSpringDamperArray(OES_Object):
             for eid, stress_real, stress_imag in zip(eids_device, reals, imags):
                 data = [eid, stress_real, stress_imag]
                 op2_ascii.write(f'  eid={eid} stress={[stress_real, stress_imag]}\n')
-                op2.write(struct1.pack(*data))
+                op2_file.write(struct1.pack(*data))
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -288,7 +370,8 @@ class ComplexSpringStressArray(ComplexSpringDamperArray, StressObject):
         ComplexSpringDamperArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['spring_stress']
         return headers
 
@@ -298,6 +381,22 @@ class ComplexSpringStrainArray(ComplexSpringDamperArray, StrainObject):
         ComplexSpringDamperArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        h5_table_dict = {
+            'EID': Int64Col(pos=0),
+            'SR': Float64Col(pos=1),
+            'SI': Float64Col(pos=2),
+            'DOMAIN_ID': Int64Col(pos=3),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr, ntime_nnode0: int, ntime_nnode1: int, itime: int):
+        arr["EID"][ntime_nnode0:ntime_nnode1] = self.element
+        arr["SR"][ntime_nnode0:ntime_nnode1] = self.data[itime, :, 0].real
+        arr["SI"][ntime_nnode0:ntime_nnode1] = self.data[itime, :, 0].imag
+
+    @property
+    def headers(self) -> list[str]:
         headers = ['spring_strain']
         return headers

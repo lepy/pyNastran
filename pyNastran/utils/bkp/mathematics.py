@@ -9,9 +9,9 @@ def build_spline(x, y):
 
     Parameters
     ----------
-    x : List[float]
+    x : list[float]
         the independent variable
-    y : List[float]
+    y : list[float]
         the dependent variable
 
     Returns
@@ -42,9 +42,9 @@ def integrate_positive_unit_line(x, y, min_value=0.):
 
     Parameters
     ----------
-    x : List[float]
+    x : list[float]
         the independent variable
-    y : List[float]
+    y : list[float]
         the dependent variable
     min_value : float; default=0.0
         ???
@@ -61,34 +61,6 @@ def integrate_positive_unit_line(x, y, min_value=0.):
         # now integrate the area
         eval_posit_spline = lambda x, spl, min_val: max(splev([x], spl), min_val)
         out = quad(eval_posit_spline, 0., 1., args=(build_spline(x, y), min_value))
-    except:
+    except Exception:
         raise RuntimeError('spline Error x=%s y=%s' % (x, y))
-    return out[0]
-
-def integrate_unit_line(x, y):
-    """
-    Integrates a line of length 1.0 by spline interpolation
-
-    Parameters
-    ----------
-    x : List[float]
-        the independent variable
-    y : List[float]
-        the dependent variable
-
-    Returns
-    -------
-    integrated_value : float
-        the area under the curve
-    """
-    if len(set(y)) == 1:
-        return y[0]  # (x1-x0 = 1., so yBar*1 = yBar)
-    try:
-        assert len(x) == len(y), 'x=%s y=%s' % (x, y)
-        # integrate the area; y=f(x); A=integral(y*dx,x)
-
-        out = quad(splev, 0., 1., args=(build_spline(x, y)))
-    except:
-        # print('spline Error x=%s y=%s' % (x, y))
-        raise
     return out[0]

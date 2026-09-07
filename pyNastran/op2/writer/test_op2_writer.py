@@ -1,29 +1,34 @@
 import unittest
 import os
-from cpylog import get_logger
+from pathlib import Path
+from cpylog import SimpleLogger
 
 import pyNastran
 #from pyNastran.bdf.bdf import BDF
-#from pyNastran.op2.op2 import OP2, FatalError, read_op2
+#from pyNastran.op2.op2 import FatalError
 #from pyNastran.op2.op2_interface.op2_common import get_scode_word
-from pyNastran.op2.op2_geom import read_op2_geom#, OP2Geom,
-from pyNastran.op2.op2 import read_op2
+from pyNastran.op2.op2_geom import read_op2_geom, OP2Geom
+from pyNastran.op2.op2 import OP2, read_op2
 #from pyNastran.op2.test.test_op2 import run_op2
 #from pyNastran.op2.writer.op2_writer import OP2Writer
-
-PKG_PATH = pyNastran.__path__[0]
-MODEL_PATH = os.path.abspath(os.path.join(PKG_PATH, '..', 'models'))
+try:
+    import tables
+    IS_PYTABLES = True
+except ImportError:
+    IS_PYTABLES = False
+PKG_PATH = Path(pyNastran.__path__[0])
+MODEL_PATH = Path(os.path.abspath(PKG_PATH / '..' / 'models'))
 
 
 class TestOP2Writer(unittest.TestCase):
-    def test_write_1(self):
+    def test_write_solid_bending1(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'solid_bending')
-        op2_filename = os.path.join(folder, 'solid_bending.op2')
-        op2_filename_debug = os.path.join(folder, 'solid_bending.debug.out')
-        op2_filename_out = os.path.join(folder, 'solid_bending_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'solid_bending_out.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'solid_bending'
+        op2_filename = folder / 'solid_bending.op2'
+        op2_filename_debug = folder / 'solid_bending.debug.out'
+        op2_filename_out = folder / 'solid_bending_out.op2'
+        op2_filename_debug_out = folder / 'solid_bending_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
@@ -35,32 +40,263 @@ class TestOP2Writer(unittest.TestCase):
         op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
         assert op2 == op2b
 
-    def test_write_2(self):
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_static_solid_shell_bar_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'sol_101_elements' / 'static_solid_shell_bar.op2'
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+
+        h5_filename = MODEL_PATH / 'sol_101_elements' / 'model_static_solid_shell_bar.h5'
+        op2.write_h5(h5_filename, include_geometry=True)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_platepy_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'plate_py' / 'plate_py.op2'
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+
+        h5_filename = MODEL_PATH / 'plate_py' / 'model_plate_py.h5'
+        op2.write_h5(h5_filename, include_geometry=True)
+        # modelv = read_bdf_vectorized(bdf_filename, validate=True, xref=True, punch=False, log=log)
+        # modelv.write_h5(h5_filename)
+        # modelv2 = BDFv(log=log)
+        # op2b = OP2(debug=True, log=log, mode=None)
+        # op2b.read_h5(h5_filename)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_buckling_solid_shell_bar_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'sol_101_elements' / 'buckling_solid_shell_bar.op2'
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        #print(op2.get_op2_stats
+
+        h5_filename = MODEL_PATH / 'sol_101_elements' / 'model_buckling_solid_shell_bar.h5'
+        op2.write_h5(h5_filename, include_geometry=True)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_transient_solid_shell_bar_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'sol_101_elements' / 'transient_solid_shell_bar.op2'
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+
+        h5_filename = MODEL_PATH / 'sol_101_elements' / 'model_transient_solid_shell_bar.h5'
+        op2.write_h5(h5_filename, include_geometry=True)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_static_elements_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'elements' / 'static_elements.op2'
+        h5_filename = MODEL_PATH / 'elements' / 'static_elements.h5'
+        h5_model = OP2(debug=True, log=log, mode=None)
+        h5_model.read_h5(h5_filename)
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        # print(op2.get_op2_stats())
+
+        h5_filename_out = MODEL_PATH / 'elements' / 'model_static_elements.h5'
+        op2.write_h5(h5_filename_out, include_geometry=True)
+
+        # h5_model2 = OP2(debug=True, log=log, mode=None)
+        # h5_model2.read_h5(h5_filename_out)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_modes_elements_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'elements' / 'modes_elements.op2'
+        h5_filename = MODEL_PATH / 'elements' / 'modes_elements.h5'
+        h5_model = OP2(debug=True, log=log, mode=None)
+        h5_model.read_h5(h5_filename)
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        # print(op2.get_op2_stats())
+
+        h5_filename_out = MODEL_PATH / 'elements' / 'model_modes_elements.h5'
+        # op2.op2_results.stress.cbar_stress = {}
+        # op2.op2_results.strain.cbar_strain = {}
+        op2.write_h5(h5_filename_out, include_geometry=True)
+
+        # h5_model2 = OP2(debug=True, log=log, mode=None)
+        # h5_model2.read_h5(h5_filename_out)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_freq_elements2_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'elements' / 'freq_elements2.op2'
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        # print(op2.get_op2_stats())
+
+        h5_filename_out = MODEL_PATH / 'elements' / 'model_freq_elements2.h5'
+        op2.write_h5(h5_filename_out, include_geometry=True)
+
+        h5_model2 = OP2(debug=True, log=log, mode=None)
+        h5_model2.read_h5(h5_filename_out)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_time_elements_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'elements' / 'time_elements.op2'
+        h5_filename = MODEL_PATH / 'elements' / 'time_elements.h5'
+        h5_model = OP2(debug=True, log=log, mode=None)
+        h5_model.read_h5(h5_filename)
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        # print(op2.get_op2_stats())
+
+        h5_filename_out = MODEL_PATH / 'elements' / 'model_time_elements.h5'
+        op2.write_h5(h5_filename_out, include_geometry=True)
+
+        # h5_model2 = OP2(debug=True, log=log, mode=None)
+        # h5_model2.read_h5(h5_filename_out)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_time_thermal_elements_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'elements' / 'time_thermal_elements.op2'
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        # print(op2.get_op2_stats())
+
+        h5_filename_out = MODEL_PATH / 'elements' / 'model_time_thermal_elements.h5'
+        op2.write_h5(h5_filename_out, include_geometry=True)
+
+        # h5_model2 = OP2(debug=True, log=log, mode=None)
+        # h5_model2.read_h5(h5_filename_out)
+
+    @unittest.skipIf(not IS_PYTABLES, 'no hdf5')
+    def test_modes_complex_elements_h5_op2(self):
+        log = SimpleLogger(level='warning')
+        op2_filename = MODEL_PATH / 'elements' / 'modes_complex_elements.op2'
+        h5_filename = MODEL_PATH / 'elements' / 'modes_complex_elements.h5'
+
+        h5_results = OP2(debug=True, log=log, mode=None)
+        h5_results.read_h5(h5_filename)
+
+        op2 = OP2(debug=True, log=log, mode=None)
+        op2.read_op2(op2_filename)
+        # print(op2.get_op2_stats())
+
+        h5_filename_out = MODEL_PATH / 'elements' / 'model_modes_complex_elements.h5'
+        op2.write_h5(h5_filename_out, include_geometry=True)
+
+        h5_model2 = OP2(debug=True, log=log, mode=None)
+        h5_model2.read_h5(h5_filename_out)
+
+    def test_write_solid_bending2(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'solid_bending')
-        op2_filename = os.path.join(folder, 'solid_bending.op2')
-        op2_filename_debug = os.path.join(folder, 'solid_bending.debug.out')
-        op2_filename_out = os.path.join(folder, 'solid_bending_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'solid_bending_out.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'solid_bending'
+        op2_filename = folder / 'solid_bending.op2'
+        op2_filename_debug = folder / 'solid_bending.debug.out'
+        op2_filename_out = folder / 'solid_bending_out.op2'
+        op2_filename_debug_out = folder / 'solid_bending_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
 
-        op2 = read_op2(op2_filename, debug_file=op2_filename_debug, log=log)
+        op2 = OP2(debug=True, log=log, debug_file=op2_filename_debug, mode=None)
+        op2.read_op2(op2_filename)
 
         op2.write_op2(op2_filename_out) #, is_mag_phase=False)
         op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
         assert op2 == op2b
+        os.remove(op2_filename_debug_out)
 
-    def _test_write_3(self):
+    def test_write_materials(self):
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        model = OP2Geom(log=log)
+        folder = MODEL_PATH / 'solid_bending'
+        op2_filename = folder / 'solid_bending.op2'
+        model = read_op2_geom(
+            op2_filename, # debug_file=op2_filename_debug,
+            include_results='displacements', log=log)
+
+        op2_flags = {
+            'MAT10': {'include_alpha': True},  # default False
+            'RBAR': {'include_tref': True},
+        }
+        mid = 10
+        bulk = 11.
+        rho = 12.
+        c = 13.
+        model.add_mat10(mid, bulk, rho, c, ge=14.0)
+        model.add_matt9(1, 2)
+        eid = 5
+        ga = 1
+        gb = 2
+        cna = '3'
+        cnb = '4'
+        cma = ''
+        cmb = ''
+        model.add_rbar(eid, [ga, gb], cna, cnb, cma, cmb, alpha=2.0)
+        cma = '1'
+        cmb = '2'
+        model.add_rrod(eid+1, [ga, gb], cna, cnb, cma, cmb)
+
+        op2_filename_out = folder / 'materials.op2'
+        model.write_op2(op2_filename_out, op2_flags=op2_flags,
+                        nastran_format='msc')
+
+        new_model = read_op2_geom(op2_filename_out, validate=False, log=log)
+        op2_filename_out.unlink()
+
+    def _test_write_solid_shell_bar_static_basic(self):  # pragma: no cover
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'sol_101_elements')
-        op2_filename = os.path.join(folder, 'static_solid_shell_bar.op2')
-        op2_filename_debug = os.path.join(folder, 'static_solid_shell_bar.debug.out')
-        op2_filename_out = os.path.join(folder, 'static_solid_shell_bar_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'static_solid_shell_bar_out.debug.out')
+        # log = SimpleLogger(level='warning', encoding='utf-8')
+        log = SimpleLogger(level='info', encoding='utf-8')
+        folder = MODEL_PATH / 'sol_101_elements'
+        op2_filename = folder / 'static_solid_shell_bar.op2'
+        op2_filename_debug = folder / 'static_solid_shell_bar.debug.out'
+
+        exclude_results = [
+            #'bgpdt', 'eqexin',
+            #'displacements', 'spc_forces', 'mpc_forces', 'load_vectors',
+            #'grid_point_forces',
+            #'*crod_force',
+            #'*cbar_force', '*cbeam_force',
+            #'*ctria3_force', # problematic
+            #'*cquad4_force', # problematic
+            #'stress*', 'strain*',
+        ]
+        log = SimpleLogger(level='debug', encoding='utf-8')
+        model = OP2(log=log, debug_file=op2_filename_debug)
+        model.include_exclude_results(exclude_results=exclude_results)
+        model.read_op2(op2_filename)
+        # model = read_op2(op2_filename, # debug_file=op2_filename_debug,
+        #                  exclude_results=exclude_results,
+        #                  log=log)
+        # print(model.get_op2_stats())
+
+        op2_filename_out = folder / 'static_solid_shell_bar_out.op2'
+        model.write_op2(op2_filename_out) #, is_mag_phase=False)
+
+        op2_filename_debug_out = folder / 'static_solid_shell_bar_out.debug.out'
+        op2b = OP2(debug_file=op2_filename_debug_out)
+        op2b.read_op2(op2_filename_out)
+        assert model == op2b
+        os.remove(op2_filename_debug_out)
+
+    def test_write_solid_shell_bar_static1(self):
+        """tests basic op2 writing"""
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'sol_101_elements'
+        op2_filename = folder / 'static_solid_shell_bar.op2'
+        op2_filename_debug = folder / 'static_solid_shell_bar.debug.out'
+        op2_filename_out = folder / 'static_solid_shell_bar_out.op2'
+        op2_filename_debug_out = folder / 'static_solid_shell_bar_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
@@ -68,16 +304,18 @@ class TestOP2Writer(unittest.TestCase):
         op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug, log=log)
 
         op2.write_op2(op2_filename_out) #, is_mag_phase=False)
-        unused_op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out)
+        # unused_op2b = read_op2(op2_filename_out, debug_file=op2_filename_debug_out)
+        unused_op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_4(self):
+    def test_write_solid_shell_bar_static2(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'sol_101_elements')
-        op2_filename = os.path.join(folder, 'static_solid_shell_bar.op2')
-        op2_filename_debug = os.path.join(folder, 'static_solid_shell_bar.debug.out')
-        op2_filename_out = os.path.join(folder, 'static_solid_shell_bar_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'static_solid_shell_bar_out.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'sol_101_elements'
+        op2_filename = folder / 'static_solid_shell_bar.op2'
+        op2_filename_debug = folder / 'static_solid_shell_bar.debug.out'
+        op2_filename_out = folder / 'static_solid_shell_bar_out.op2'
+        op2_filename_debug_out = folder / 'static_solid_shell_bar_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
@@ -89,40 +327,69 @@ class TestOP2Writer(unittest.TestCase):
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_5(self):
-        """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'sol_101_elements')
-        op2_filename = os.path.join(folder, 'mode_solid_shell_bar.op2')
-        op2_filename_debug = os.path.join(folder, 'mode_solid_shell_bar.debug.out')
-        op2_filename_out = os.path.join(folder, 'mode_solid_shell_bar_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'mode_solid_shell_bar_out.debug.out')
+    def test_write_modal(self):
+        """
+        tests basic op2 writing
+         - this test has issues with grid_point_forces and cquad4_force
+         - FEMAP does not...
+        """
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        # log = SimpleLogger(level='debug', encoding='utf-8')
+        folder = MODEL_PATH / 'sol_101_elements'
+        op2_filename = folder / 'mode_solid_shell_bar.op2'
+        op2_filename_debug = folder / 'mode_solid_shell_bar.debug.out'
+        op2_filename_out = folder / 'mode_solid_shell_bar_out.op2'
+        op2_filename_debug_out = folder / 'mode_solid_shell_bar_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
 
-        exclude_results = [
-            #'*_strain_energy',
-        ]
+        exclude_results = []
         op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug,
                             exclude_results=exclude_results,
                             log=log, )
+        # print(op2.get_op2_stats())
 
         op2.write_op2(op2_filename_out) #is_mag_phase=False)
         op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_6(self):
+    def test_write_transient(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'sol_101_elements')
-        op2_filename = os.path.join(folder, 'transient_solid_shell_bar.op2')
-        op2_filename_debug = os.path.join(folder, 'transient_solid_shell_bar.debug.out')
-        op2_filename_out = os.path.join(folder, 'transient_solid_shell_bar_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'transient_solid_shell_bar_out.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'sol_101_elements'
+        op2_filename = folder / 'transient_solid_shell_bar.op2'
+        op2_filename_debug = folder / 'transient_solid_shell_bar.debug.out'
+        op2_filename_out = folder / 'transient_solid_shell_bar_out.op2'
+        op2_filename_debug_out = folder / 'transient_solid_shell_bar_out.debug.out'
+        #debug_file = 'solid_bending.debug.out'
+        #model = os.path.splitext(op2_filename)[0]
+        #debug_file = model + '.debug.out'
+
+        exclude_results = []
+        op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug, log=log,
+                            exclude_results=exclude_results)
+
+        op2.write_op2(op2_filename_out) #, is_mag_phase=False)
+        op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
+        op2.assert_op2_equal(op2b,
+                             skip_results=['params', ],
+                             stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
+
+    def test_write_solid_shell_bar_freq(self):
+        """tests basic op2 writing"""
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'sol_101_elements'
+        op2_filename = folder / 'freq_solid_shell_bar.op2'
+        op2_filename_debug = folder / 'freq_solid_shell_bar.debug.out'
+        op2_filename_out = folder / 'freq_solid_shell_bar_out.op2'
+        op2_filename_debug_out = folder / 'freq_solid_shell_bar_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
@@ -134,54 +401,37 @@ class TestOP2Writer(unittest.TestCase):
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_7(self):
+    def test_write_elements_freq1(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'sol_101_elements')
-        op2_filename = os.path.join(folder, 'freq_solid_shell_bar.op2')
-        op2_filename_debug = os.path.join(folder, 'freq_solid_shell_bar.debug.out')
-        op2_filename_out = os.path.join(folder, 'freq_solid_shell_bar_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'freq_solid_shell_bar_out.debug.out')
-        #debug_file = 'solid_bending.debug.out'
-        #model = os.path.splitext(op2_filename)[0]
-        #debug_file = model + '.debug.out'
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'elements'
+        op2_filename = folder / 'freq_elements.op2'
+        op2_filename_debug = folder / 'freq_elements.debug.out'
+        op2_filename_out = folder / 'freq_elements_out.op2'
+        op2_filename_debug_out = folder / 'freq_elements_out.debug.out'
 
         op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug, log=log)
 
-        op2.write_op2(op2_filename_out) #, is_mag_phase=False)
-        op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
-        op2.assert_op2_equal(op2b,
-                             skip_results=['params', ],
-                             stop_on_failure=True, debug=False)
+        # print(op2.get_op2_stats())
+        with self.assertRaises(AssertionError):
+            # no results written...
+            op2.write_op2(op2_filename_out) #, is_mag_phase=False)
+        # op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
+        # op2.assert_op2_equal(op2b,
+        #                      skip_results=['params', ],
+        #                      stop_on_failure=True, debug=False)
+        # os.remove(op2_filename_debug_out)
 
-    def test_write_elements_1(self):
+    def test_write_elements_freq2(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='warning', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'elements')
-        op2_filename = os.path.join(folder, 'freq_elements.op2')
-        op2_filename_debug = os.path.join(folder, 'freq_elements.debug.out')
-        op2_filename_out = os.path.join(folder, 'freq_elements_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'freq_elements_out.debug.out')
-        #model = os.path.splitext(op2_filename)[0]
-
-        op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug, log=log)
-
-        op2.write_op2(op2_filename_out) #, is_mag_phase=False)
-        op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
-        op2.assert_op2_equal(op2b,
-                             skip_results=['params', ],
-                             stop_on_failure=True, debug=False)
-
-    def test_write_elements_2(self):
-        """tests basic op2 writing"""
-        log = get_logger(log=None, level='info', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'elements')
-        op2_filename = os.path.join(folder, 'freq_elements2.op2')
-        op2_filename_debug = os.path.join(folder, 'freq_elements2.debug.out')
-        op2_filename_out = os.path.join(folder, 'freq_elements_out2.op2')
-        op2_filename_debug_out = os.path.join(folder, 'freq_elements_out2.debug.out')
-        #model = os.path.splitext(op2_filename)[0]
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'elements'
+        op2_filename = folder / 'freq_elements2.op2'
+        op2_filename_debug = folder / 'freq_elements2.debug.out'
+        op2_filename_out = folder / 'freq_elements_out2.op2'
+        op2_filename_debug_out = folder / 'freq_elements_out2.debug.out'
 
         exclude_results = [
             'force.ctria6_force', 'force.ctriar_force', 'force.cshear_force',
@@ -189,26 +439,92 @@ class TestOP2Writer(unittest.TestCase):
         ]
         op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug,
                             exclude_results=exclude_results, log=log)
+        #print(op2.get_op2_stats())
+        #from pyNastran.utils import object_stats
+        #op2.op2_results.modal_contribution.celas1_stress = {}
+        #op2.op2_results.modal_contribution.celas2_stress = {}
+        #op2.op2_results.modal_contribution.celas3_stress = {}
+
+        #op2.op2_results.modal_contribution.ctube_stress = {}
+        #op2.op2_results.modal_contribution.crod_stress = {}
+        #op2.op2_results.modal_contribution.conrod_stress = {}
+
+        #op2.op2_results.modal_contribution.ctria3_stress = {}
+        #op2.op2_results.modal_contribution.cquad4_stress = {}
+        #op2.op2_results.modal_contribution.ctria6_stress = {}
+        #op2.op2_results.modal_contribution.cquad8_stress = {}
+        op2.op2_results.modal_contribution.ctriar_composite_stress = {}
+        op2.op2_results.modal_contribution.cquadr_composite_stress = {}
+        op2.op2_results.modal_contribution.cquad4_composite_stress = {}
+        op2.op2_results.modal_contribution.ctria3_composite_stress = {}
+
+        # ------------------------------------------------
+        #op2.op2_results.modal_contribution.celas1_strain = {}
+        #op2.op2_results.modal_contribution.celas2_strain = {}
+        #op2.op2_results.modal_contribution.celas3_strain = {}
+
+        #op2.op2_results.modal_contribution.ctube_strain = {}
+        #op2.op2_results.modal_contribution.crod_strain = {}
+        #op2.op2_results.modal_contribution.conrod_strain = {}
+
+        #op2.op2_results.modal_contribution.ctria3_strain = {}
+        #op2.op2_results.modal_contribution.cquad4_strain = {}
+        #op2.op2_results.modal_contribution.ctria6_strain = {}
+        #op2.op2_results.modal_contribution.cquad8_strain = {}
+        op2.op2_results.modal_contribution.ctriar_composite_strain = {}
+        op2.op2_results.modal_contribution.cquadr_composite_strain = {}
+        op2.op2_results.modal_contribution.cquad4_composite_strain = {}
+        op2.op2_results.modal_contribution.ctria3_composite_strain = {}
+        #print(object_stats(op2.op2_results.modal_contribution))
+        #aa
 
         op2.write_op2(op2_filename_out) #, is_mag_phase=False)
         unused_op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
         #op2.assert_op2_equal(op2b,
                              #skip_results=['params', ],
                              #stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_elements_3(self):
+    def test_write_elements_freq_random(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='info', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'elements')
-        op2_filename = os.path.join(folder, 'freq_random_elements.op2')
-        op2_filename_debug = os.path.join(folder, 'freq_random_elements.debug.out')
-        op2_filename_out = os.path.join(folder, 'freq_random_elements_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'freq_random_elements_out.debug.out')
-        #model = os.path.splitext(op2_filename)[0]
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'elements'
+        op2_filename = folder / 'freq_random_elements.op2'
+        op2_filename_debug = folder / 'freq_random_elements.debug.out'
+        op2_filename_out = folder / 'freq_random_elements_out.op2'
+        op2_filename_debug_out = folder / 'freq_random_elements_out.debug.out'
 
         exclude_results = [
             'force.ctria6_force', 'force.ctriar_force', 'force.cshear_force',
-            'force.cvisc_force', 'cshear_stress', '*strain_energy',
+            'force.cvisc_force', 'stress.cshear_stress', '*strain_energy',
+        ]
+        op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug,
+                            exclude_results=exclude_results,
+                            xref=False, log=log)
+        op2.safe_cross_reference()
+
+        op2.write_op2(op2_filename_out) #, is_mag_phase=False)
+        op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out,
+                             xref=False, log=log)
+        op2b.safe_cross_reference()
+
+        op2.assert_op2_equal(op2b,
+                             skip_results=['params', ],
+                             stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
+
+    def test_write_elements_modes_complex(self):
+        """tests basic op2 writing"""
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'elements'
+        op2_filename = folder / 'modes_complex_elements.op2'
+        op2_filename_debug = folder / 'modes_complex_elements.debug.out'
+        op2_filename_out = folder / 'modes_complex_elements_out.op2'
+        op2_filename_debug_out = folder / 'modes_complex_elements_out.debug.out'
+
+        exclude_results = [
+            'force.ctria6_force', 'force.ctriar_force', 'force.cshear_force',
+            'force.cvisc_force', 'stress.cshear_stress',
         ]
         op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug,
                             exclude_results=exclude_results, log=log)
@@ -218,21 +534,22 @@ class TestOP2Writer(unittest.TestCase):
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_elements_4(self):
+    def test_write_elements_time_elements(self):
         """tests basic op2 writing"""
-        log = get_logger(log=None, level='info', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'elements')
-        op2_filename = os.path.join(folder, 'modes_complex_elements.op2')
-        op2_filename_debug = os.path.join(folder, 'modes_complex_elements.debug.out')
-        op2_filename_out = os.path.join(folder, 'modes_complex_elements_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'modes_complex_elements_out.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'elements'
+        op2_filename = folder / 'time_elements.op2'
+        op2_filename_debug = folder / 'time_elements.debug.out'
+        op2_filename_out = folder / 'time_elements_out.op2'
+        op2_filename_debug_out = folder / 'time_elements_out.debug.out'
         #model = os.path.splitext(op2_filename)[0]
 
         exclude_results = [
-            'force.ctria6_force', 'force.ctriar_force', 'force.cshear_force',
+            # 'force.cshear_force',
             'force.cvisc_force',
-            'cshear_stress',
+            'grid_point_forces', '*strain_energy',
         ]
         op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug,
                             exclude_results=exclude_results, log=log)
@@ -242,38 +559,16 @@ class TestOP2Writer(unittest.TestCase):
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    def test_write_elements_5(self):
-        """tests basic op2 writing"""
-        log = get_logger(log=None, level='info', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'elements')
-        op2_filename = os.path.join(folder, 'time_elements.op2')
-        op2_filename_debug = os.path.join(folder, 'time_elements.debug.out')
-        op2_filename_out = os.path.join(folder, 'time_elements_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'time_elements_out.debug.out')
-        #model = os.path.splitext(op2_filename)[0]
-
-        exclude_results = [
-            'force.cshear_force', 'force.cvisc_force',
-            'cshear_stress', 'grid_point_forces', '*strain_energy',
-        ]
-        op2 = read_op2_geom(op2_filename, debug_file=op2_filename_debug,
-                            exclude_results=exclude_results, log=log)
-
-        op2.write_op2(op2_filename_out) #, is_mag_phase=False)
-        op2b = read_op2_geom(op2_filename_out, debug_file=op2_filename_debug_out, log=log)
-        op2.assert_op2_equal(op2b,
-                             skip_results=['params', ],
-                             stop_on_failure=True, debug=False)
-
-    def test_thermal_1(self):
+    def test_thermal_time_elements(self):
         """tests basic op2 thermal writing"""
-        log = get_logger(log=None, level='info', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'elements')
-        op2_filename = os.path.join(folder, 'time_thermal_elements.op2')
-        op2_filename_debug = os.path.join(folder, 'time_thermal_elements.debug.out')
-        op2_filename_out = os.path.join(folder, 'time_thermal_elements_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'time_thermal_elements.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'elements'
+        op2_filename = folder / 'time_thermal_elements.op2'
+        op2_filename_debug = folder / 'time_thermal_elements.debug.out'
+        op2_filename_out = folder / 'time_thermal_elements_out.op2'
+        op2_filename_debug_out = folder / 'time_thermal_elements.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
@@ -289,15 +584,16 @@ class TestOP2Writer(unittest.TestCase):
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
     def test_thermal_2(self):
         """tests basic op2 thermal writing"""
-        log = get_logger(log=None, level='info', encoding='utf-8')
-        folder = os.path.join(MODEL_PATH, 'other')
-        op2_filename = os.path.join(folder, 'hd15306.op2')
-        op2_filename_debug = os.path.join(folder, 'hd15306.debug.out')
-        op2_filename_out = os.path.join(folder, 'hd15306_out.op2')
-        op2_filename_debug_out = os.path.join(folder, 'hd15306_out.debug.out')
+        log = SimpleLogger(level='warning', encoding='utf-8')
+        folder = MODEL_PATH / 'other'
+        op2_filename = folder / 'hd15306.op2'
+        op2_filename_debug = folder / 'hd15306.debug.out'
+        op2_filename_out = folder / 'hd15306_out.op2'
+        op2_filename_debug_out = folder / 'hd15306_out.debug.out'
         #debug_file = 'solid_bending.debug.out'
         #model = os.path.splitext(op2_filename)[0]
         #debug_file = model + '.debug.out'
@@ -315,17 +611,18 @@ class TestOP2Writer(unittest.TestCase):
         op2.assert_op2_equal(op2b,
                              skip_results=['params', ],
                              stop_on_failure=True, debug=False)
+        os.remove(op2_filename_debug_out)
 
-    #def test_thermal_3(self):
-        #"""tests basic op2 thermal writing"""
-        #folder = os.path.join(MODEL_PATH, 'other')
-        #op2_filename = os.path.join(folder, 'ofprand1.op2')
-        #op2_filename_debug = os.path.join(folder, 'ofprand1.debug.out')
-        #op2_filename_out = os.path.join(folder, 'ofprand1_out.op2')
-        #op2_filename_debug_out = os.path.join(folder, 'ofprand1.debug.out')
-        #debug_file = 'solid_bending.debug.out'
-        #model = os.path.splitext(op2_filename)[0]
-        #debug_file = model + '.debug.out'
+    # def test_thermal_3(self):
+    #     """tests basic op2 thermal writing"""
+    #     folder = MODEL_PATH / 'other'
+    #     op2_filename = folder / 'ofprand1.op2'
+    #     op2_filename_debug = folder / 'ofprand1.debug.out'
+    #     op2_filename_out = folder / 'ofprand1_out.op2'
+    #     op2_filename_debug_out = folder / 'ofprand1.debug.out'
+    #     debug_file = 'solid_bending.debug.out'
+    #     model = os.path.splitext(op2_filename)[0]
+    #     debug_file = model + '.debug.out'
 
         #exclude_results = [
             #'thermal_load.chbdyg_thermal_load',
@@ -339,7 +636,7 @@ class TestOP2Writer(unittest.TestCase):
                             ##include_results='eigenvectors',
                             ##include_results=['crod_stress', 'cbar_stress'],
                             ##include_results=['crod_force', 'cbar_force'],
-                            ##include_results='element_forces',
+                            ##include_results='force',
                             ##include_results='stress',
                             #)
         #print(op2.get_op2_stats(short=True))
@@ -350,5 +647,5 @@ class TestOP2Writer(unittest.TestCase):
                              #skip_results=['params', ],
                              #stop_on_failure=True, debug=False)
 
-if __name__ == '__main__':
+if __name__ == '__main__':   # pragma: no cover
     unittest.main()

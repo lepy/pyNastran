@@ -1,10 +1,10 @@
 import os
 
-from cpylog import get_logger2
+from cpylog import get_logger
 from pyNastran.converters.tecplot.tecplot import read_tecplot
 
 def main():
-    log = get_logger2(debug=True)
+    log = get_logger(level=True)
 
     dirnames = ['ascii', 'binary']
     filenames = [
@@ -57,9 +57,8 @@ def run_filenames(fnames, log):
             print('')
             raise
             continue
-        print(model)
+        str(model)
         model.write_tecplot('junk.plt', res_types=None, adjust_nids=True)
 
 if __name__ == '__main__':  # pragma: no cover
     main()
-

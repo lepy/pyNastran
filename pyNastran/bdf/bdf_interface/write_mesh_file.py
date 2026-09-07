@@ -4,19 +4,31 @@ This file defines:
   - WriteMesh
 
 """
-from __future__ import annotations
 import os
-from typing import Any, Union, Optional, Any
+import warnings
 from collections import defaultdict
-from typing import Optional, TYPE_CHECKING
-if TYPE_CHECKING:  # pragma: no cover
-    from io import StringIO
+from typing import Optional, Any
 
 import numpy as np
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
-from pyNastran.bdf.bdf_interface.write_mesh import WriteMesh
+from pyNastran.bdf.bdf_interface.write_mesh import WriteMesh, _output_helper
+from pyNastran.bdf.bdf_interface.write_mesh_utils import find_aero_location
 from pyNastran.bdf.write_path import write_include
+from pyNastran.utils import PathLike
+
+
+class TrashWriter:
+    def __init__(self, log, filename: PathLike=''):
+        self.log = log
+        self.filename = str(filename)
+
+    def write(self, msg):
+        if self.filename:
+            self.log.warning(f'trying to write to {self.filename}\n{str(msg)}')
+
+    def close(self):
+        pass
 
 
 class WriteMeshs(WriteMesh):
@@ -33,8 +45,9 @@ class WriteMeshs(WriteMesh):
         """creates methods for writing cards"""
         WriteMesh.__init__(self)
 
-    def write_bdfs(self, out_filenames: Optional[Union[str, StringIO]],
-                   relative_dirname: Optional[str]=None, encoding: Optional[str]=None,
+    def write_bdfs(self, out_files_map: dict[str, str],
+                   relative_dirname: PathLike='',
+                   encoding: Optional[str]=None,
                    size: int=8, is_double: bool=False,
                    enddata: Optional[bool]=None, close: bool=True,
                    is_windows: Optional[bool]=None) -> None:
@@ -43,15 +56,14 @@ class WriteMeshs(WriteMesh):
 
         Parameters
         ----------
-        out_filename : varies; default=None
-            str        - the name to call the output bdf
-            file       - a file object
-            StringIO() - a StringIO object
-            None       - pops a dialog
-        relative_dirname : str; default=None -> os.curdir
+        out_files_map : dict[source_bdf, out_bdf]
+            source_bdf : str
+                the name of the original bdf
+            out_bdf : str
+                the name of the output bdf
+        relative_dirname : str; default=''
             A relative path to reference INCLUDEs.
-            ''   : relative to the main bdf
-            None : use the current directory
+            ''   : relative to the first bdf in out_files_map
             path : absolute path
         encoding : str; default=None -> system specified encoding
             the unicode encoding
@@ -71,51 +83,63 @@ class WriteMeshs(WriteMesh):
                 files, so the format for a BDF that will run on Linux and
                 Windows is different.
             None : Check the platform
-        """
-        is_long_ids = False
 
-        if self.is_bdf_vectorized:  # pragma: no cover
-            raise NotImplementedError()
-        else:
-            # required for MasterModelTaxi
-            is_long_ids = (
-                self.nodes and max(self.nodes) > 100000000 or
-                self.coords and max(self.coords) > 100000000 or
-                self.elements and max(self.elements) > 100000000 or
-                self.properties and max(self.properties) > 100000000 or
-                self.materials and max(self.materials) > 100000000 or
-                self.thermal_materials and max(self.thermal_materials) > 100000000 or
-                self.nsms and max(self.nsms) > 100000000 or
-                self.nsmadds and max(self.nsmadds) > 100000000)
-            if is_long_ids:
-                size = 16
+        out_files_map = {}
+        out_files_map[fem.active_filenames[0]] = bdf_filename[:-4] + "_NEW" + bdf_filename[-4:]
+        for ifile, include_filenames in model.include_filenames.items():
+            for include_filename in include_filenames:
+                base, ext = os.path.splitext(include_filename)
+                new_filename = base + "_NEW" + ext
+                out_files_map[include_filename] = new_filename
+
+        """
+        log = self.log
+        assert isinstance(out_files_map, dict), out_files_map
+        for key, value in out_files_map.items():
+            assert isinstance(key, PathLike), type(key)
+            assert isinstance(value, PathLike), type(value)
+            # assert isinstance(key, PathLike), key
+            # assert isinstance(value, PathLike), value
+        #is_long_ids = False
+
+        is_long_ids, size = self._get_long_ids(size)
 
         ifile_out_filenames = _map_filenames_to_ifile_filname_dict(
-            out_filenames, self.active_filenames)
-        ifile0 = list(sorted(ifile_out_filenames))[0]
+            out_files_map, self.active_filenames)
+        if len(ifile_out_filenames) == 0:
+            log.warning(f'active_filenames = {self.active_filenames}')
+            log.warning(f'ifile_out_filenames = {ifile_out_filenames}')
+            raise RuntimeError(ifile_out_filenames)
+            # bdf_filename = 'temp.bdf'
+            # self.write_bdf(bdf_filename, size=size, is_double=is_double, encoding=encoding,
+            #                close=close)
+            return
+        ifiles = list(sorted(ifile_out_filenames))
+        #print(f'ifiles = {ifiles}')
+        ifile0 = ifiles[0]
         #print('ifile_out_filenames =', ifile_out_filenames)
 
         out_filename0 = ifile_out_filenames[ifile0]
         #print("out_filename0 =", out_filename0)
 
         interspersed = False
-        out_filename = self._output_helper(out_filename0,
-                                           interspersed, size, is_double)
-        self.log.debug('---starting BDF.write_bdf of %s---' % out_filename)
+        out_filename, size = _output_helper(
+            out_filename0, interspersed, size, is_double, self.log)
+        self.log.debug(f'---starting BDF.write_bdf of {out_filename}---')
         encoding = self.get_encoding(encoding)
 
-        #class DevNull:
-            #def write(self, *_):
-                #pass
+        # class DevNull:
+        #     def write(self, *_):
+        #         pass
+        # devnull = DevNull()
 
-        #devnull = DevNull()
-
-        bdf_files, bdf_file0 = _open_bdf_files(ifile_out_filenames, self.active_filenames, encoding)
+        bdf_files, bdf_file0 = _open_bdf_files(ifile_out_filenames, self.active_filenames, encoding, self.log)
+        bdf_files[-1] = bdf_file0 # TrashWriter()
 
         if bdf_file0 is not None:
             self._write_header(bdf_file0, encoding)
 
-        self._write_bdf_includes(out_filenames, bdf_files, relative_dirname=relative_dirname,
+        self._write_bdf_includes(out_files_map, bdf_files, relative_dirname=relative_dirname,
                                  is_windows=is_windows)
 
         self._write_params_file(bdf_files, size, is_double, is_long_ids=is_long_ids)
@@ -139,13 +163,16 @@ class WriteMeshs(WriteMesh):
                     bdf_file.close()
         del bdf_files
 
-    def _write_bdf_includes(self, out_filenames, bdf_files, relative_dirname=None, is_windows=True):
+    def _write_bdf_includes(self, out_files_map: dict[str, str],
+                            bdf_files,
+                            relative_dirname: str='',
+                            is_windows: bool=True):
         """
         Writes the INCLUDE files
 
         Parameters
         ----------
-        out_filenames : dict[fname] : fname2
+        out_files_map : dict[fname] : fname2
             fname_in - the nominal bdf that was read
             fname_out - the bdf that will be written
         relative_dirname : str; default=None -> os.curdir
@@ -162,13 +189,13 @@ class WriteMeshs(WriteMesh):
         if relative_dirname is None:
             relative_dirname = os.curdir
         elif relative_dirname == '':
-            out_filename0 = list(out_filenames.keys())[0]
+            out_filename0 = list(out_files_map.keys())[0]
             relative_dirname = os.path.dirname(os.path.abspath(out_filename0))
-            self.log.debug('relative_dirname = %s' % relative_dirname)
+            self.log.debug(f'relative_dirname = {relative_dirname}')
 
         self.log.debug('include_filenames:')
         for ifile, include_filenames in self.include_filenames.items():
-            self.log.debug('ifile=%i %s' % (ifile, include_filenames))
+            self.log.debug(f'ifile={ifile:d} {include_filenames}')
             assert len(include_filenames) > 0, include_filenames
             bdf_file = bdf_files[ifile]
             if bdf_file is None:
@@ -179,8 +206,8 @@ class WriteMeshs(WriteMesh):
                 #print('***', include_filename, '***')
 
                 mapped_include_filename = include_filename
-                if include_filename in out_filenames:
-                    mapped_include_filename = out_filenames[include_filename]
+                if include_filename in out_files_map:
+                    mapped_include_filename = out_files_map[include_filename]
 
                 if relative_dirname == '':
                     # absolute path
@@ -217,26 +244,28 @@ class WriteMeshs(WriteMesh):
         Writes the nsm in a sorted order
         """
         if self.nsms or self.nsmadds:
-            write_bdfs_dict(bdf_files, self.nsmadds, size, is_double, is_long_ids)
-            write_bdfs_dict(bdf_files, self.nsms, size, is_double, is_long_ids)
+            # write_bdfs_dict(bdf_files, self.nsmadds, size, is_double, is_long_ids)  # TODO: is this right?
+            write_bdfs_dict_list(bdf_files, self.nsmadds, size, is_double, is_long_ids)
+            write_bdfs_dict_list(bdf_files, self.nsms, size, is_double, is_long_ids)
 
     def _write_aero_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                          is_long_ids: Optional[bool]=None) -> None:
         """Writes the aero cards"""
         if self.caeros or self.paeros or self.monitor_points or self.splines:
             write_bdfs_dict(bdf_files, self.caeros, size, is_double, is_long_ids)
+            write_bdfs_dict(bdf_files, self.paeros, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.splines, size, is_double, is_long_ids)
-            write_bdfs_dict(bdf_files, self.nsmadds, size, is_double, is_long_ids)
-            write_bdfs_dict(bdf_files, self.nsmadds, size, is_double, is_long_ids)
             for monitor_point in self.monitor_points:
                 bdf_files[monitor_point.ifile].write(monitor_point.write_card(size, is_double))
-        self.zona.write_bdf(bdf_files[0], size=8, is_double=False)
+        self.zaero.write_bdf(bdf_files[0], size=8, is_double=False)
 
     def _write_aero_control_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                                  is_long_ids: Optional[bool]=None) -> None:
         """Writes the aero control surface cards"""
-        if(self.aecomps or self.aefacts or self.aeparams or self.aelinks or
-           self.aelists or self.aestats or self.aesurf or self.aesurfs):
+        is_aero = (
+            self.aecomps or self.aefacts or self.aeparams or self.aelinks or
+            self.aelists or self.aestats or self.aesurf or self.aesurfs)
+        if is_aero:
             write_bdfs_dict_list(bdf_files, self.aecomps, size, is_double, is_long_ids)
 
             write_bdfs_dict(bdf_files, self.aecomps, size, is_double, is_long_ids)
@@ -258,14 +287,14 @@ class WriteMeshs(WriteMesh):
             write_bdfs_dict(bdf_files, self.trims, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.divergs, size, is_double, is_long_ids)
 
-
     def _write_flutter_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                             write_aero_in_flutter: bool=True,
                             is_long_ids: Optional[bool]=None) -> None:
         """Writes the flutter cards"""
         if (write_aero_in_flutter and self.aero) or self.flfacts or self.flutters or self.mkaeros:
-            if write_aero_in_flutter:
-                bdf_files[self.aero.ifile].write(self.aero.write_card(size, is_double))
+            if write_aero_in_flutter and self.aero is not None:
+                file_obj = bdf_files[_ifile(self.aero)]
+                file_obj.write(self.aero.write_card(size, is_double))
             write_bdfs_dict(bdf_files, self.flutters, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.flfacts, size, is_double, is_long_ids)
             write_bdfs_list(bdf_files, self.mkaeros, size, is_double, is_long_ids)
@@ -276,7 +305,7 @@ class WriteMeshs(WriteMesh):
         if (write_aero_in_gust and self.aero) or self.gusts:
             if write_aero_in_gust:
                 for (unused_id, aero) in sorted(self.aero.items()):
-                    bdf_files[aero.ifile].write(aero.write_card(size, is_double))
+                    bdf_files[_ifile(aero)].write(aero.write_card(size, is_double))
             write_bdfs_dict(bdf_files, self.gusts, size, is_double, is_long_ids)
 
     def _write_common_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
@@ -300,7 +329,7 @@ class WriteMeshs(WriteMesh):
         self._write_aero_control_file(bdf_files, size, is_double, is_long_ids=is_long_ids)
         self._write_static_aero_file(bdf_files, size, is_double, is_long_ids=is_long_ids)
 
-        write_aero_in_flutter, write_aero_in_gust = self._find_aero_location()
+        write_aero_in_flutter, write_aero_in_gust = find_aero_location(self)
         self._write_flutter_file(bdf_files, size, is_double, write_aero_in_flutter,
                                  is_long_ids=is_long_ids)
         self._write_gust_file(bdf_files, size, is_double, write_aero_in_gust,
@@ -328,15 +357,14 @@ class WriteMeshs(WriteMesh):
                 bdf_files[suport.ifile].write(suport.write_card(size, is_double))
 
         if self.spcs or self.spcadds or self.spcoffs:
-            #bdf_file.write('$SPCs\n')
-            #str_spc = str(self.spcObject) # old
-            #if str_spc:
-                #bdf_file.write(str_spc)
-            #else:
+            # bdf_file.write('$SPCs\n')
+            # str_spc = str(self.spcObject) # old
+            # if str_spc:
+            #     bdf_file.write(str_spc)
+            # else:
             write_bdfs_dict_list(bdf_files, self.spcadds, size, is_double, is_long_ids)
             write_bdfs_dict_list(bdf_files, self.spcs, size, is_double, is_long_ids)
             write_bdfs_dict_list(bdf_files, self.spcoffs, size, is_double, is_long_ids)
-
 
         if self.mpcs or self.mpcadds:
             write_bdfs_dict_list(bdf_files, self.mpcadds, size, is_double, is_long_ids)
@@ -345,13 +373,15 @@ class WriteMeshs(WriteMesh):
     def _write_contact_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                             is_long_ids: Optional[bool]=None) -> None:
         """Writes the contact cards sorted by ID"""
-        is_contact = (self.bcrparas or self.bctadds or self.bctparas
+        is_contact = (self.bcrparas or self.bctadds or self.bctparas or self.bctparms
                       or self.bctsets or self.bsurf or self.bsurfs
-                      or self.bconp or self.blseg or self.bfric)
+                      or self.bconp or self.blseg or self.bfric
+                      or self.bgsets or self.bgadds)
         if is_contact:
             write_bdfs_dict(bdf_files, self.bcrparas, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bctadds, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bctparas, size, is_double, is_long_ids)
+            write_bdfs_dict(bdf_files, self.bctparms, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bctsets, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bsurf, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bsurfs, size, is_double, is_long_ids)
@@ -359,6 +389,8 @@ class WriteMeshs(WriteMesh):
             write_bdfs_dict(bdf_files, self.bconp, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.blseg, size, is_double, is_long_ids)
             write_bdfs_dict(bdf_files, self.bfric, size, is_double, is_long_ids)
+            write_bdfs_dict(bdf_files, self.bgadds, size, is_double, is_long_ids)
+            write_bdfs_dict(bdf_files, self.bgsets, size, is_double, is_long_ids)
 
     def _write_coords_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                            is_long_ids: Optional[bool]=None) -> None:
@@ -415,7 +447,6 @@ class WriteMeshs(WriteMesh):
             write_bdfs_dict(bdf_files, self.tics, size, is_double, is_long_ids)
 
             write_bdfs_dict_list(bdf_files, self.transfer_functions, size, is_double, is_long_ids)
-
 
     def _write_loads_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                           is_long_ids: Optional[bool]=None) -> None:
@@ -478,14 +509,14 @@ class WriteMeshs(WriteMesh):
         if self.points:
             write_bdfs_dict(bdf_files, self.points, size, is_double, is_long_ids)
 
-        if self._is_axis_symmetric:
-            if self.axic:
-                bdf_files[self.axic.ifile].write(self.axic.write_card(size, is_double))
-            if self.axif:
-                bdf_files[self.axif.ifile].write(self.axif.write_card(size, is_double))
-            write_bdfs_dict(bdf_files, self.ringaxs, size, is_double, is_long_ids)
-            write_bdfs_dict(bdf_files, self.ringfl, size, is_double, is_long_ids)
-            write_bdfs_dict(bdf_files, self.gridb, size, is_double, is_long_ids)
+        # if self._is_axis_symmetric:
+        #     if self.axic:
+        #         bdf_files[self.axic.ifile].write(self.axic.write_card(size, is_double))
+        #     if self.axif:
+        #         bdf_files[self.axif.ifile].write(self.axif.write_card(size, is_double))
+        #     write_bdfs_dict(bdf_files, self.ringaxs, size, is_double, is_long_ids)
+        #     write_bdfs_dict(bdf_files, self.ringfl, size, is_double, is_long_ids)
+        #     write_bdfs_dict(bdf_files, self.gridb, size, is_double, is_long_ids)
 
         self._write_grids_file(bdf_files, size=size, is_double=is_double)
         if self.seqgp:
@@ -598,7 +629,7 @@ class WriteMeshs(WriteMesh):
                     raise TypeError(reject_lines)
 
     def _write_rigid_elements_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
-                           is_long_ids: Optional[bool]=None) -> None:
+                                   is_long_ids: Optional[bool]=None) -> None:
         """Writes the rigid elements in a sorted order"""
         size, is_long_ids = self._write_mesh_long_ids_size(size, is_long_ids)
         if self.rigid_elements:
@@ -608,7 +639,7 @@ class WriteMeshs(WriteMesh):
             write_bdfs_dict(bdf_files, self.plotels, size, is_double, is_long_ids)
 
     def _write_sets_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
-                           is_long_ids: Optional[bool]=None) -> None:
+                         is_long_ids: Optional[bool]=None) -> None:
         """Writes the SETx cards sorted by ID"""
         is_sets = (self.sets or self.asets or self.omits or self.bsets or self.csets or self.qsets
                    or self.usets)
@@ -693,7 +724,6 @@ class WriteMeshs(WriteMesh):
                 bdf_files[self.radset.ifile].write(self.radset.write_card(size, is_double))
             write_bdfs_dict(bdf_files, self.radcavs, size, is_double, is_long_ids)
 
-
     def _write_thermal_materials_file(self, bdf_files: Any, size: int=8, is_double: bool=False,
                                       is_long_ids: Optional[bool]=None) -> None:
         """Writes the thermal materials in a sorted order"""
@@ -709,6 +739,7 @@ def _get_ifiles_dict(cards_dict):
         ifiles_dict[card.ifile].append(card)
     return ifiles_dict
 
+
 def write_bdf_dict_ids(bdf_file, cards, ids, size, is_double, is_long_ids):
     """writes a dictionary by ifile"""
     assert isinstance(cards, dict), cards
@@ -722,6 +753,7 @@ def write_bdf_dict_ids(bdf_file, cards, ids, size, is_double, is_long_ids):
         for idi in ids:
             bdf_file.write(cards[idi].write_card(size, is_double))
 
+
 def write_bdfs_dict(bdf_files, cards, size, is_double, is_long_ids):
     """writes a dictionary by ifile"""
     assert isinstance(cards, dict), cards
@@ -729,6 +761,7 @@ def write_bdfs_dict(bdf_files, cards, size, is_double, is_long_ids):
     for file_id, file_cards in ifiles_dict.items():
         bdf_file = bdf_files[file_id]
         _write_bdf_dict_cards(bdf_file, file_cards, size, is_double, is_long_ids)
+
 
 def _write_bdf_dict_cards(bdf_file, cards, size, is_double, is_long_ids):
     """writes a dictionary"""
@@ -741,6 +774,7 @@ def _write_bdf_dict_cards(bdf_file, cards, size, is_double, is_long_ids):
         for card in cards:
             bdf_file.write(card.write_card(size, is_double))
 
+
 def _get_ifiles_dict_list(cards):
     """gets the ids for a dictionary of lists by file number"""
     assert isinstance(cards, dict), cards
@@ -751,6 +785,7 @@ def _get_ifiles_dict_list(cards):
             ifiles_dict_list[card.ifile].append(card)
     return ifiles_dict_list
 
+
 def write_bdfs_dict_list(bdf_files, cards, size, is_double, is_long_ids):
     """writes a dictionary of lists by ifile"""
     ifiles_dict_list = _get_ifiles_dict_list(cards)
@@ -758,17 +793,20 @@ def write_bdfs_dict_list(bdf_files, cards, size, is_double, is_long_ids):
         bdf_file = bdf_files[file_id]
         _write_bdf_dict_cards(bdf_file, file_cards, size, is_double, is_long_ids)
 
+
 def write_bdfs_list(bdf_files, cards, size, is_double, is_long_ids):
     """writes a list by ifile"""
     assert isinstance(cards, list), cards
     if is_long_ids:
         for card in cards:
-            bdf_files[card.ifile].write_card_16(size, is_double)
+            bdf_files[card.ifile].write(card.write_card_16(size, is_double))
     else:
         for card in cards:
-            bdf_files[card.ifile].write_card(size, is_double)
+            bdf_files[card.ifile].write(card.write_card(size, is_double))
 
-def _map_filenames_to_ifile_filname_dict(out_filenames, active_filenames):
+
+def _map_filenames_to_ifile_filname_dict(out_filenames: dict[str, str],
+                                         active_filenames: list[str]) -> dict[int, str]:
     """
     Converts a old_filename->new_filename dict to a
     ifile->new_filename dict.
@@ -778,20 +816,25 @@ def _map_filenames_to_ifile_filname_dict(out_filenames, active_filenames):
     ifile_out_filenames = {}
     unused_out_filename0 = None
     for filename, new_filename in out_filenames.items():
-        assert isinstance(filename, str), 'filename=%r' % filename
+        assert isinstance(filename, PathLike), 'filename=%r' % filename
+        assert isinstance(new_filename, PathLike), 'new_filename=%r' % new_filename
         #print('filename = %r' % filename)
         abs_filename = os.path.abspath(filename)
         #print('abs_filename = %r' % abs_filename)
+        if abs_filename not in active_filenames_abspath:
+            continue
         ifile = active_filenames_abspath.index(abs_filename)
         #print('ifile = %r' % ifile)
         #print('new_filename = %r' % new_filename)
         ifile_out_filenames[ifile] = new_filename
     return ifile_out_filenames
 
-def _open_bdf_files(ifile_out_filenames, active_filenames, encoding):
+
+def _open_bdf_files(ifile_out_filenames, active_filenames, encoding, log):
     """opens N bdf files"""
-    bdf_files = {i : None for i in range(len(active_filenames))}
+    bdf_files = {i: TrashWriter(log, fname) for i, fname in enumerate(active_filenames)}
     for ifile, out_filename in ifile_out_filenames.items():
+        log.debug('opening {str(out_filename)}')
         if hasattr(out_filename, 'read') and hasattr(out_filename, 'write'):
             bdf_file = out_filename
         else:
@@ -800,8 +843,20 @@ def _open_bdf_files(ifile_out_filenames, active_filenames, encoding):
     bdf_file0 = bdf_files[0]
     return bdf_files, bdf_file0
 
-def write_xpoints_file(bdf_files, cardtype, points, comment=''):
+
+def write_xpoints_file(bdf_files, cardtype: str,
+                       points: dict[int, Any],
+                       comment: str='') -> None:
     """writes SPOINTs/EPOINTs"""
     assert isinstance(points, dict), points
     for point_id, point in points.items():
         bdf_files[point.ifile].write(point.write_card())
+
+
+def _ifile(card) -> int:
+    try:
+        ifile = card.ifile
+    except AttributeError:
+        warnings.warn(f'cant find ifile in\n{str(card)}')
+        ifile = -1
+    return ifile

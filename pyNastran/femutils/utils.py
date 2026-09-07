@@ -8,49 +8,176 @@ This includes:
  - augmented_identity(A)
 
 """
+from typing import Optional
 import numpy as np
+from pyNastran.utils.mathematics import get_abs_max
 
 #ver = np.lib.NumpyVersion(np.__version__)
 #if ver < '1.13.0':
 
-def pivot_table(data, rows, cols):
-    """PCOMP: rows=element_ids, cols=layer"""
+
+def hstack_unique(list_of_arrays: list[np.ndarray],
+                  unique: bool=True,
+                  ) -> np.ndarray:
+    """
+    Stacks an arrays
+
+    list_of_arrays = [
+        [1, 2, 3], [4, 5, 6, 7, 3],
+    ]
+    stacked = [1, 2, 3, 4, 5, 6, 7, 3]
+    unique_stacked = [1, 2, 3, 4, 5, 6, 7]
+    """
+    myarray = hstack_lists(list_of_arrays, unique_sort=False)
+    if unique:
+        myarray = np.unique(myarray)
+    return myarray
+
+#def hstack_unique_sort(list_of_arrays: list[np.ndarray],
+                       #unique: bool=True,
+                       #sort: bool=True,
+                       #) -> np.ndarray:
+    #myarray = hstack_lists(list_of_arrays)
+    #if unique and sort:
+        #myarray = np.unique(myarray)
+    #elif sort:
+        #myarray = myarray.copy()
+        #myarray.sort()
+    #else:
+        #raise RuntimeError(f'cannot unique without sorting; unique={unique} sort={sort}')
+    #return myarray
+
+
+def hstack_lists(list_of_arrays: list[np.ndarray],
+                 unique_sort: bool=False) -> np.ndarray:
+    """
+    Stacks an array
+
+    list_of_arrays = [
+        [1, 2, 3], [4, 5, 6, 7, 3],
+    ]
+    stacked = [1, 2, 3, 4, 5, 6, 7, 3]
+    """
+    if len(list_of_arrays) == 1:
+        array = list_of_arrays[0]
+    else:
+        array = np.hstack(list_of_arrays)
+    if unique_sort:
+        array = np.unique(array)
+    return array
+
+
+def vstack_lists(list_of_arrays: list[np.ndarray]) -> np.ndarray:
+    """
+    Stacks an array
+
+    list_of_arrays = [
+        [
+            [1, 2, 3],
+        ],
+        [
+            [1, 2, 3],
+            [1, 2, 3],
+        ]
+    ]
+    stacked = [
+        [1, 2, 3],
+        [1, 2, 3],
+        [1, 2, 3],
+    ]
+
+    """
+    if len(list_of_arrays) == 1:
+        array = list_of_arrays[0]
+    else:
+        array = np.vstack(list_of_arrays)
+    return array
+
+
+def pivot_table(data, rows, cols, shape: int=0) -> tuple[np.ndarray, np.ndarray]:
+    """
+    A pivot table is a useful tool to make "square" and slicable data from
+    data that is not square.  A PCOMP may have 10 layers for all elements
+    but one, so a pivot table is a great choice here to find the max layer
+    thickness.
+
+    PCOMP: rows=element_ids, cols=layer
+
+    Parameters
+    ----------
+    data : (nx*ny,), (nx,ny), (nx,ny,nz) float array
+       the data to pivot
+    shape: int; default=0 -> guess
+       adds a check on the shape of the input data
+
+    Returns
+    -------
+    pivot_data : float array
+        adds one dimension to the output; sticks nan in the
+        blank areas.
+        (nx*ny, )       -> (nx, ny)
+        (nx*ny, nz)     -> (nx, ny, nz)
+        (nw, nx*ny, nz) -> (nw, nx, ny, nz)
+        Some examples:
+        (ntimes, nelements*nlayers, nheaders) -> (ntimes, nelements, nlayers, nheaders)
+
+    Example
+    -------
+    data = [1, 2, 3, 4, 5, 6, 7]
+    rows = [1, 1, 1, 2, 2, 3, 4]
+    cols = [1, 2, 3, 1, 2, 1, 1]
+    pivot_data = [
+        [1,   2,   3],
+        [4,   5, nan],
+        [6, nan, nan],
+        [7, nan, nan]
+    ]
+    rows_new = [1, 2, 3, 4]
+    """
     ncount = len(rows)
     icount = np.arange(ncount)
-    assert len(data.shape) in [2, 3], data.shape
+    assert len(data.shape) in [1, 2, 3], data.shape
     nresults = data.shape[-1]
 
     rows_new, row_pos_new = np.unique(rows, return_inverse=True)
     cols_new, col_pos_new = np.unique(cols, return_inverse=True)
     nrows = len(rows_new)
     ncols = len(cols_new)
+    # assert data.size <= (nrows * ncols * nresults), f'size={data.size} nrows={nrows} ncols={ncols} nresults={nresults}'
 
     nshape = len(data.shape)
+    if shape != 0:
+        assert nshape == shape, f'data.shape={data.shape} -> nshape={nshape}; expected={shape}'
     if nshape == 3:
         ntimes = data.shape[0]
         shape2 = (ntimes, nrows, ncols, nresults)
     elif nshape == 2:
         shape2 = (nrows, ncols, nresults)
+    elif nshape == 1:
+        shape2 = (nrows, ncols)
     else:  # pragma: no cover
         raise RuntimeError(nshape)
 
-    pivot_table = np.full((nrows, ncols), -1, dtype='int32')
-    pivot_table[row_pos_new, col_pos_new] = icount
-    #print(pivot_table)
+    pivot_tablei = np.full((nrows, ncols), -1, dtype='int32')
+    pivot_tablei[row_pos_new, col_pos_new] = icount
+    #print(pivot_tablei)
 
-    ipivot_row, ipivot_col = np.where(pivot_table != -1)
-    data2 = np.full(shape2, np.nan, dtype=data.dtype)
+    ipivot_row, ipivot_col = np.where(pivot_tablei != -1)
+    default_val = np.nan if data.dtype.name not in {'int32', 'int64'} else -1
+    data2 = np.full(shape2, default_val, dtype=data.dtype)
 
     if nshape == 3:
         data2[:, ipivot_row, ipivot_col, :] = data[:, icount, :]
-    elif  nshape == 2:
+    elif nshape == 2:
         data2[ipivot_row, ipivot_col, :] = data[icount, :]
+    elif nshape == 1:
+        data2[ipivot_row, ipivot_col] = data[icount]
     else:  # pragma: no cover
         raise NotImplementedError(nshape)
     return data2, rows_new
 
 
-def unique2d(a):
+def unique2d(a: np.ndarray, return_index=False):
     """
     Gets the unique pairs in a 2D vector where the pairs are defined:
     (column 0, column 1).
@@ -73,6 +200,8 @@ def unique2d(a):
     x, y = a.T
     b = x + y*1.0j
     idx = np.unique(b, return_index=True)[1]
+    if return_index:
+        return a[idx], idx
     return a[idx]
 
 #def unique_rows(data):
@@ -82,16 +211,26 @@ def unique2d(a):
     #uniq = unique(data.view(data.dtype.descr * data.shape[1]))
     #return uniq.view(data.dtype).reshape(-1, data.shape[1])
 
-def duplicates(ids):
+
+def duplicates(ids: np.ndarray) -> np.ndarray:
     """finds the duplicate ids"""
     counts = np.bincount(ids)
     return np.where(counts > 1)[0]
 
-def is_monotonic(int_array):
-    """is the array monotonic?"""
-    return np.all(int_array[1:] >= int_array[:-1])
 
-def unique_rows(A, return_index=False, return_inverse=False):
+def is_monotonic(int_array: np.ndarray,
+                 is_strict: bool=False,
+                 ) -> bool:
+    """is the array monotonic?"""
+    diff = np.diff(int_array, n=1)
+    if is_strict:
+        out = np.all(diff > 0)
+    else:
+        out = np.all(diff >= 0)
+    return out
+
+
+def unique_rows(A: np.ndarray, return_index=False, return_inverse=False):
     """
     Similar to MATLAB's unique(A, 'rows'), this returns B, I, J
     where B is the unique rows of A and I and J satisfy
@@ -128,7 +267,8 @@ def unique_rows(A, return_index=False, return_inverse=False):
     else:
         return B.view(A.dtype).reshape((-1, A.shape[1]), order='C')
 
-def cross2d(a, b):
+
+def cross2d(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """
     Interface to np.cross for 2d matrices
 
@@ -140,21 +280,24 @@ def cross2d(a, b):
     # axisa=-1, axisb=-1, axisc=-1,
     return np.cross(a, b, axis=1)
 
-def augmented_identity(nx, ny):
+
+def augmented_identity(nx: int, ny: int) -> np.ndarray:
     """
     Creates an Identity Matrix augmented with zeros.
     The location of the extra zeros depends on nx/ny.
 
     .. code-block:: python
 
-      [ 1, 0, 0, 0 ]
-      [ 0, 1, 0, 0 ]
-      [ 0, 0, 1, 0 ]
+       [ 1, 0, 0, 0 ]
+       [ 0, 1, 0, 0 ]
+       [ 0, 0, 1, 0 ]
+
     """
     eye = np.eye(max(nx, ny), dtype='float64')
     return eye[:nx, :ny]
 
-def perpendicular_vector(v):
+
+def perpendicular_vector(v: np.ndarray) -> np.ndarray:
     """
     Finds an arbitrary perpendicular vector to *v*.
 
@@ -193,7 +336,8 @@ def perpendicular_vector(v):
     #     c = -(x + y)/z
     return np.array([1., 1., -1.0 * (v[0] + v[1]) / v[2]])
 
-def perpendicular_vector2d(v_array):
+
+def perpendicular_vector2d(v_array: np.ndarray) -> np.ndarray:
     """
     Finds an array of arbitrary perpendicular vector to *v_array*.
 
@@ -259,16 +403,80 @@ def perpendicular_vector2d(v_array):
     vout[is_3d, 2] = -1. * (v[is_3d, 0] + v[is_3d, 1]) / v[is_3d, 2]
     return vout
 
-def underflow_norm(x, ord=None, axis=None, keepdims=False):
-    """see numpy.linalg.norm"""
+
+_dtype_map = {
+    'float32': 'float64',
+    'complex64': 'complex128',
+}
+
+
+def safe_norm(t123: np.ndarray,
+              ord=None,
+              axis: Optional[int]=None) -> np.ndarray:
+    """
+    float32s are apparently buggy in numpy if you have small numbers
+    see models/elements/loadstep_elememnts.op2
+
+    """
+    assert ord is None, ord
+
     try:
-        normi = np.linalg.norm(x, axis=axis)
+        tnorm = np.linalg.norm(t123, axis=axis)
     except FloatingPointError:
-        # the dreaded underflow
-        if x.dtype == np.float32:
-            x = x.astype('float64')
-            normi = np.linalg.norm(x, axis=axis)
-        else:  # pragma: no cover
-            # the next step would be to nan the min=max depending on the axis
+        dtype_str = t123.dtype.name
+        if dtype_str not in _dtype_map:  # pragma: no cover
             raise
-    return normi
+        dtype = _dtype_map[dtype_str]
+        t123 = t123.astype(dtype=dtype)
+        tnorm = np.linalg.norm(t123, axis=axis)
+    return tnorm
+
+#def underflow_norm(x: np.ndarray,
+                   #ord=None, axis=None,
+                   #keepdims: bool=False) -> np.ndarray:
+    #"""see numpy.linalg.norm"""
+    #try:
+        #normi = np.linalg.norm(x, axis=axis)
+    #except FloatingPointError:
+        ## the dreaded underflow
+        #if x.dtype == np.float32:
+            #x = x.astype('float64')
+            #normi = np.linalg.norm(x, axis=axis)
+        #else:  # pragma: no cover
+            ## the next step would be to nan the min=max depending on the axis
+            #raise
+    #return normi
+
+
+def abs_min_max(x: np.ndarray, axis: int) -> np.ndarray:
+    max_values = np.amax(x, axis=axis)
+    min_values = np.amin(x, axis=axis)
+    y = get_abs_max(min_values, max_values, dtype=x.dtype)
+    return y
+
+
+def abs_nan_min_max(x: np.ndarray, axis: int) -> np.ndarray:
+    if x.ndim == 2 and axis == 1 and x.shape[1] == 1:
+        # hack to prevent:
+        #   RuntimeWarning: All-NaN slice encountered
+        # happens when the shape is (N, 1), so min=max=y and we can return out
+        y = x[:, 0]
+    else:
+        max_values = np.nanmax(x, axis=axis)
+        min_values = np.nanmin(x, axis=axis)
+        y = get_abs_max(min_values, max_values, dtype=x.dtype)
+    return y
+
+
+def safe_nanstd(x: np.ndarray, axis: int) -> np.ndarray:
+    try:
+        out = np.nanstd(x, axis=axis)
+    except FloatingPointError:
+        # underflow
+        dtype_str = x.dtype.name
+        if dtype_str not in _dtype_map:  # pragma: no cover
+            raise
+        dtype = _dtype_map[dtype_str]
+        x2 = x.astype(dtype=dtype)
+        out = np.nanstd(x2, axis=axis)
+    return out

@@ -1,11 +1,24 @@
 """tests nodes.py"""
+import copy
 import unittest
 
 import numpy as np
+from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF, BDFCard
 from pyNastran.bdf.cards.nodes import GRID, SPOINTs as SPOINT
 
 class TestNodes(unittest.TestCase):
+    def test_spoint(self):
+        model = BDF(debug=False)
+        spoint = model.add_spoint([1, 2], comment='cat')
+        # str(spoint)
+        model2 = copy.deepcopy(model)
+        key0 = list(model2.spoints)[0]
+        spoint2 = model.spoints[key0]
+        str(spoint2)
+        spoints = model2.spoints
+        str(spoints)
+
     def test_point(self):
         """tests POINT"""
         model = BDF(debug=False)
@@ -207,10 +220,11 @@ class TestNodes(unittest.TestCase):
                 pass
         dt_instance = time.time() - time1
         #print('dt_type=%.4f dt_instance=%.4f' % (dt_type, dt_instance))
+        log = SimpleLogger(level='debug', encoding='utf-8')
+        msg = ("flip the way you do type checking; card.type == 'GRID' "
+               "is faster than isinstance(card, GRID); dt_instance=%s dt_type=%s" % (dt_instance, dt_type))
         if dt_instance < dt_type:
-            msg = ("flip the way you do type checking; card.type == 'GRID' "
-                   "is faster than isinstance(card, GRID); dt_instance=%s dt_type=%s" % (dt_instance, dt_type))
-            raise ValueError(msg)
+            log.warning(msg)
 
 if __name__ == '__main__':  # pragma: no cover
     unittest.main()

@@ -1,0 +1,243 @@
+from itertools import count
+import numpy as np
+
+from pyNastran.dev.bdf_vectorized3.cards.base_card import searchsorted_filter  #, searchsorted_filter_
+from pyNastran.dev.bdf_vectorized3.bdf import BDF, Subcase
+from .pload1 import apply_pload1
+from .grav_rforce import apply_rforce, apply_grav
+
+from ..matrices.build_mass import build_Mbb
+from ..elements.beam import thermal_load_beam
+from ..elements.shells import (
+    build_pload4_cquad4, #build_pload2_cquad4,
+    build_pload4_ctria3, #build_pload2_ctria3,
+    build_thermal_load_cquad4, build_thermal_load_ctria3)
+
+DOF_MAP = dict[tuple[int, int], int]
+Array = np.ndarray
+
+
+def build_Fb_from_loadid(model: BDF,
+                         subcase_id: int,
+                         dof_map: DOF_MAP,
+                         ndof: int,
+                         xg: np.ndarray,
+                         sset_b: np.ndarray,
+                         load_id: int=0,
+                         temp_load_id: int=0,
+                         fdtype: str='float32',
+                         Mbb: Array | None = None,
+                         xyz_cid0: np.ndarray | None = None):
+    if xyz_cid0 is None:
+        xyz_cid0 = model.grid.xyz_cid0()
+
+    Fb = np.zeros(ndof, dtype=fdtype)
+    assert len(xg) == ndof
+
+    if load_id == 0 and temp_load_id == 0:
+        return Fb
+    log = model.log
+
+    if load_id:
+        reduced_loads = model.get_reduced_static_load()
+
+        loads = reduced_loads[load_id]
+        loads2 = []
+        for scale, load in loads:
+            if isinstance(load, list):
+                for loadi in load:
+                    loads2.append((scale, loadi))
+                continue
+            loads2.append((scale, load))
+
+        build_mbb = Mbb is None
+        for scale, load in loads2:
+            if load.type in {'GRAV', 'RFORCE'}:
+                build_mbb = True
+                break
+
+        if build_mbb and Mbb is None:
+            # mass matrix.
+            temp_subcase = Subcase(id=0)
+            Mbb = build_Mbb(
+                model, temp_subcase, dof_map, ndof,
+                fdtype="float64")
+            assert Mbb is not None, 'Mbb is still None'
+        assert Mbb is not None, Mbb
+
+        for scale, load in loads2:
+            # print(scale, load, type(load))
+            if load.type == "SLOAD":
+                for mag, nid in zip(load.mags, load.nodes):
+                    i = dof_map[(nid, 0)]  # TODO: wrong...
+                    Fb[i] = mag * scale
+            elif load.type == "FORCE":
+                # TODO: wrong because it doesn't handle SPOINTs
+                fxyz_myz = load.sum_forces_moments()
+                fxyz = fxyz_myz[:, :3]
+                nids = load.node_id
+                log.debug(f"  FORCE nids={nids} Fxyz={fxyz}")
+                for fxyzi, nid in zip(fxyz, nids):
+                    assert len(fxyzi) == 3
+                    fi = dof_map[(nid, 1)]
+                    Fb[fi : fi + 3] = fxyzi
+
+            elif load.type == "MOMENT":
+                fxyz_myz = load.sum_forces_moments()
+                mxyz = fxyz_myz[:, 3:]
+                nids = load.node_id
+                log.debug(f"  MOMENT nid={nids} Mxyz={mxyz}")
+                for mxyzi, nid in zip(mxyz, nids):
+                    fi = dof_map[(nid, 4)]
+                    assert len(mxyzi) == 3
+                    Fb[fi : fi + 3] = mxyzi
+            elif load.type == "SPCD":
+                for nid, components, enforced in zip(
+                    load.nodes, load.components, load.enforced):
+                    for component in str(components):
+                        dof = int(component)
+                        fi = dof_map[(nid, dof)]
+                        xg[fi] = enforced
+                        Fb[fi] = np.nan
+                        sset_b[fi] = True
+            elif load.type == "PLOAD1":
+                apply_pload1(model, load, scale, Fb, dof_map, log)
+            #elif load.type == "PLOAD2":
+                #build_pload2_cquad4(model, Fb, dof_map, load_id)
+                #build_pload2_ctria3(model, Fb, dof_map, load_id)
+            elif load.type == "PLOAD4":
+                build_pload4_cquad4(model, Fb, dof_map, load_id)
+                build_pload4_ctria3(model, Fb, dof_map, load_id)
+            elif load.type == "GRAV":
+                apply_grav(model, load, scale, Fb, dof_map, ndof, log,
+                           Mbb=Mbb)
+            elif load.type == "RFORCE":
+                apply_rforce(model, load, scale, Fb, dof_map, ndof, log, Mbb=Mbb)
+            else:
+                print(load.get_stats())
+                raise NotImplementedError(load)
+
+    # Thermal loads via TEMPERATURE(LOAD) or TEMPERATURE(BOTH)
+    if temp_load_id:
+        node_temperatures = _get_node_temperatures(model, subcase_id, temp_load_id)
+        if node_temperatures:
+            log.debug(f"  Thermal load: {len(node_temperatures)} nodes with dT")
+            build_thermal_load_cquad4(model, Fb, dof_map, node_temperatures)
+            build_thermal_load_ctria3(model, Fb, dof_map, node_temperatures)
+            build_thermal_load_beam(model, Fb, dof_map, node_temperatures, xyz_cid0)
+    return Fb, Mbb, xyz_cid0
+
+
+def build_thermal_load_beam(
+    model: BDF,
+    Fb: np.ndarray,
+    dof_map: DOF_MAP,
+    node_temperatures: dict[int, float],
+    xyz_cid0: np.ndarray) -> None:
+    """Add beam thermal loads to the global force vector.
+
+    Parameters
+    ----------
+    model : BDF
+        The model.
+    Fb : np.ndarray
+        Global force vector to accumulate into.
+    dof_map : DOF_MAP
+        DOF map.
+    node_temperatures : dict[int, float]
+        Node temperatures.
+    """
+    grid = model.grid
+    for elem in [model.cbar, model.cbeam]:
+        if elem.n == 0:
+            continue
+
+        area = elem.area()
+        inode = grid.index(elem.nodes)
+        xyz1 = xyz_cid0[inode[:, 0], :]
+        xyz2 = xyz_cid0[inode[:, 1], :]
+        #xyz1, xyz2 = elem.get_xyz()
+        lengths = np.linalg.norm(xyz2 - xyz1, axis=1)
+        v, ihat, yhat, zhat, wa, wb = elem.get_axes(xyz1, xyz2)
+        e_g_nus = elem.e_g_nu()
+
+        # Get thermal expansion coefficient from MAT1
+        mat = model.mat1
+        pids = elem.property_id
+        for prop in elem.allowed_properties:
+            i_lookup, i_all = searchsorted_filter(prop.property_id, pids, msg='')
+            if len(i_lookup) == 0:
+                continue
+            mat_ids = prop.material_id[i_all]
+            mat_slice = mat.slice_card_by_material_id(mat_ids)
+            
+            #print(mat_slice.get_stats())
+            tref = mat_slice.tref
+            alpha = mat_slice.alpha
+            nodes = elem.nodes[i_lookup, :]
+            for idx, ielem, (nid1, nid2), alphai, trefi in zip(count(), i_lookup, nodes, alpha, tref):
+                T1 = node_temperatures[nid1] + trefi
+                T2 = node_temperatures[nid2] + trefi
+                dT = 0.5 * (T1 + T2)
+                if abs(dT) < 1e-30:
+                    continue
+                if alphai == 0.0:
+                    continue
+                e_i = e_g_nus[ielem, 0]
+                PG = thermal_load_beam(
+                    area[ielem], e_i, alphai, lengths[ielem],
+                    ihat[ielem], yhat[ielem], zhat[ielem], dT,
+                )
+                gi1 = dof_map[(nid1, 1)]
+                gi2 = dof_map[(nid2, 1)]
+                Fb[gi1:gi1 + 6] += PG[:6]
+                Fb[gi2:gi2 + 6] += PG[6:]
+
+
+
+def _get_node_temperatures(model: BDF,
+                           subcase_id: int,
+                           temp_load_id: int) -> dict[int, float]:
+    """Build a dict of {node_id: temperature} from TEMP/TEMPD cards.
+
+    Parameters
+    ----------
+    temp_load_id : int
+        Load set ID referencing TEMP/TEMPD cards.
+
+    Returns
+    -------
+    node_temperatures : dict[int, float]
+        Temperature at each grid point.
+    """
+    node_temperatures: dict[int, float] = {}
+
+    # Default temperature from TEMPD
+    default_temp = np.nan
+    if model.tempd.n > 0:
+        tempd = model.tempd
+        idx = np.where(tempd.load_id == temp_load_id)[0]
+        if len(idx) > 0:
+            default_temp = tempd.temperature[idx[0]]
+
+    # Apply default to all grid points
+    for nid in model.grid.node_id:
+        node_temperatures[nid] = default_temp
+
+    # Override with explicit TEMP cards
+    if model.temp.n > 0:
+        temp = model.temp
+        idx = np.where(temp.load_id == temp_load_id)[0]
+        for i in idx:
+            inode = temp.inode
+            i0, i1 = inode[i]
+            for j in range(i0, i1):
+                nid = temp.node_id[j]
+                t_val = temp.temperature[j]
+                node_temperatures[nid] = t_val
+    if default_temp is None:
+        nids_nan = np.array([
+            nid for nid, temp in node_temperatures.items()
+            if not np.isfinite(temp)], dtype='int32')
+        raise RuntimeError(f'subcase={subcase_id}: No TEMP/TEMPD defined for nodes={nids_nan.tolist()}')
+    return node_temperatures

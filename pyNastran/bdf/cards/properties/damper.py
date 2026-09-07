@@ -17,6 +17,7 @@ from pyNastran.utils.numpy_utils import integer_types
 from pyNastran.bdf.field_writer_8 import set_blank_if_default, print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.cards.base_card import Property
+from pyNastran.bdf.bdf_interface.internal_get import material_id
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, integer_or_blank, double, double_or_blank)
 if TYPE_CHECKING:  # pragma: no cover
@@ -29,6 +30,9 @@ class DamperProperty(Property):
 
     def cross_reference(self, model: BDF) -> None:
         pass
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        return self.cross_reference(model)
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -93,13 +97,13 @@ class PDAMP(DamperProperty):
         return PDAMP(pid, b, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PDAMP card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -164,7 +168,7 @@ class PDAMP5(DamperProperty):
         self.mid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a PDAMP5 card from ``BDF.add_card(...)``
 
@@ -179,17 +183,17 @@ class PDAMP5(DamperProperty):
         pid = integer(card, 1, 'pid')
         mid = integer(card, 2, 'mid')
         b = double(card, 3, 'b')
-        assert len(card) == 4, 'len(PDAMP5 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) == 4, f'len(PDAMP5 card) = {len(card):d}\ncard={card}'
         return PDAMP5(pid, mid, b, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PDAMP5 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -223,12 +227,10 @@ class PDAMP5(DamperProperty):
         self.mid = self.Mid()
         self.mid_ref = None
 
-    def Mid(self):
-        if self.mid_ref is not None:
-            return self.mid_ref.mid
-        return self.mid
+    def Mid(self) -> int:
+        return material_id(self.mid_ref, self.mid)
 
-    def repr_fields(self):
+    def repr_fields(self) -> list:
         return self.raw_fields()
 
     def raw_fields(self):
@@ -285,17 +287,17 @@ class PDAMPT(DamperProperty):
         """
         pid = integer(card, 1, 'pid')
         tbid = integer_or_blank(card, 2, 'tbid', 0)
-        assert len(card) <= 3, 'len(PDAMPT card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 3, f'len(PDAMPT card) = {len(card):d}\ncard={card}'
         return PDAMPT(pid, tbid, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PDAMPT card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -417,13 +419,13 @@ class PVISC(DamperProperty):
         return PVISC(pid, ce, cr, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a PVISC card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card

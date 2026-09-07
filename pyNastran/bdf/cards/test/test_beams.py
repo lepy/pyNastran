@@ -13,7 +13,7 @@ import numpy as np
 try:
     import matplotlib
     IS_MATPLOTLIB = True
-except ImportError:  # pragma: no cover
+except ModuleNotFoundError:  # pragma: no cover
     IS_MATPLOTLIB = False
 
 if IS_MATPLOTLIB:
@@ -24,6 +24,8 @@ from pyNastran.bdf.bdf import BDF, BDFCard, PBEAM, PBEND, PBMSECT, PBRSECT
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.cards.test.utils import save_load_deck
 from pyNastran.bdf.cards.properties.bars import get_beam_sections
+from pyNastran.bdf.mesh_utils.mass_properties import mass_properties, mass_properties_nsm
+
 
 class TestBeams(unittest.TestCase):
     """
@@ -32,6 +34,22 @@ class TestBeams(unittest.TestCase):
       - CBEAM3, PBEAM3
 
     """
+    def test_pbeam_continuation(self):
+        """a buggy PBEAM unless you add a trailing +"""
+        nastran_model = BDF()
+        pbeam = nastran_model.add_pbeam(
+            1001, 1,
+            [0., 1.],
+            ['YES', 'YES'],
+            [10., 10.],
+            [50., 50.],
+            [55., 55.],
+            [0., 0.],
+            [30., 30.])
+        print(pbeam)
+        #print(pbeam.write_card_16())
+        x = 1
+
     def test_pbeam_01(self):
         """tests a nasty PBEAM"""
         lines = [
@@ -459,6 +477,63 @@ class TestBeams(unittest.TestCase):
         str(model.properties[622])
         str(model.properties[623])
 
+    def test_pbeaml_02(self):
+        model = BDF(debug=False)
+        pid = 1
+        mid = 1
+        xxb = [0.]
+        so = 'YES'
+        area = 1.0
+        i1 = 1.0
+        i2 = 1.0
+        i12 = 0.0
+        j = 1.0
+        pbeam = model.add_pbeam(
+            pid, mid, xxb, so, area, i1, i2, i12, j, nsm=None,
+            c1=None, c2=None, d1=None, d2=None,
+            e1=None, e2=None, f1=None, f2=None,
+            k1=1., k2=1., s1=0., s2=0.,
+            nsia=0., nsib=None,
+            cwa=0., cwb=None,
+            m1a=0., m2a=0.,
+            m1b=None, m2b=None,
+            n1a=0., n2a=0.,
+            n1b=None, n2b=3.0, comment='')
+        str(pbeam)
+        #'PBEAM          1       1      1.      1.      1.              1.'
+        #'+'
+        #'+'
+        #'                                                                      3.'
+
+        pid += 1
+        pbeam = model.add_pbeam(
+            pid, mid, xxb, so, area, i1, i2, i12, j, nsm=None,
+            c1=None, c2=None, d1=None, d2=None,
+            e1=None, e2=None, f1=None, f2=None,
+            k1=1., k2=1., s1=0., s2=0.,
+            nsia=0., nsib=None,
+            cwa=0., cwb=None,
+            m1a=0., m2a=0.,
+            m1b=None, m2b=None,
+            n1a=0., n2a=0.,
+            n1b=2.0, n2b=None, comment='')
+        str(pbeam)
+
+        pid += 1
+        pbeam = model.add_pbeam(
+            pid, mid, xxb, so, area, i1, i2, i12, j, nsm=None,
+            c1=None, c2=None, d1=None, d2=None,
+            e1=None, e2=None, f1=None, f2=None,
+            k1=1., k2=1., s1=0., s2=0.,
+            nsia=0., nsib=None,
+            cwa=0., cwb=None,
+            m1a=0., m2a=0.,
+            m1b=1.1, m2b=2.2,
+            n1a=0., n2a=0.,
+            n1b=None, n2b=None, comment='')
+        str(pbeam)
+        x = 1
+
     def test_cbeam_01(self):
         """modification of test_pbeam_05"""
         model = BDF(debug=False)
@@ -511,9 +586,38 @@ class TestBeams(unittest.TestCase):
         nids = [10, 20]
         x = None
         g0 = 30
-        model.add_cbeam(eid, pid, nids, x, g0, offt='GGG', bit=None, pa=0,
-                        pb=0, wa=None, wb=None, sa=0,
-                        sb=0, comment='')
+        cbeam = model.add_cbeam(
+            eid, pid, nids, x, g0, offt='GGG', bit=None, pa=0,
+            pb=0, wa=None, wb=None, sa=0,
+            sb=0, comment='')
+        with self.assertRaises(RuntimeError):
+            cbeam.Mid()
+        with self.assertRaises(RuntimeError):
+            cbeam.E()
+        with self.assertRaises(RuntimeError):
+            cbeam.G()
+        with self.assertRaises(RuntimeError):
+            cbeam.Nu()
+        with self.assertRaises(RuntimeError):
+            cbeam.Rho()
+        with self.assertRaises(RuntimeError):
+            cbeam.Area()
+        # with self.assertRaises(RuntimeError):
+        #     cbeam.I1()
+        # with self.assertRaises(RuntimeError):
+        #     cbeam.I2()
+        # with self.assertRaises(RuntimeError):
+        #     cbeam.I12()
+        # with self.assertRaises(RuntimeError):
+        #     cbeam.J()
+        with self.assertRaises(RuntimeError):
+            cbeam.Centroid()
+        with self.assertRaises(RuntimeError):
+            cbeam.MassPerLength()
+        with self.assertRaises(RuntimeError):
+            cbeam.Nsm()
+        with self.assertRaises(RuntimeError):
+            cbeam.Mass()
 
         mid = 6
         E = 1.0e7
@@ -673,17 +777,17 @@ class TestBeams(unittest.TestCase):
             #property id
         #mid : int
             #material id
-        #xxb : List[float]
+        #xxb : list[float]
             #The percentage locations along the beam [0., ..., 1.]
-        #so : List[str]
+        #so : list[str]
             #YES, YESA, NO
-        #area : List[float]
+        #area : list[float]
             #area
-        #i1, i2, i12, j : List[float]
+        #i1, i2, i12, j : list[float]
             #moments of inertia
-        #nsm : List[float]
+        #nsm : list[float]
             #nonstructural mass per unit length
-        #c1/c2, d1/d2, e1/e2, f1/f2 : List[float]
+        #c1/c2, d1/d2, e1/e2, f1/f2 : list[float]
            #the y/z locations of the stress recovery points
            #c1 - point C.y
            #c2 - point C.z
@@ -729,7 +833,7 @@ class TestBeams(unittest.TestCase):
         model.cross_reference()
 
         model._verify_bdf(xref=True)
-        model.mass_properties()
+        mass_properties(model)
         pids_to_area = model.get_area_breakdown(property_ids=None, sum_bar_area=False)
         for pid, area in sorted(pids_to_area.items()):
             assert area > 0., 'pid=%s area=%s' % (pid, area)
@@ -816,6 +920,44 @@ class TestBeams(unittest.TestCase):
         model.add_mat1(mid, E, G, nu, rho=1.)
         save_load_deck(model, run_mass_properties=False, run_test_bdf=False)
 
+    def test_pbeaml_single_station(self):
+        """tests a PBEAML with 1 station (based on a bad error message)"""
+        model = BDF(debug=False, log=None, mode='msc')
+        model.add_grid(1, [0., 0., 0.])
+        model.add_grid(2, [1., 0., 0.])
+
+        eid = 1
+        pid = 1
+        mid = 1
+        beam_type = 'ROD'
+        d = 20  # [mm]
+        dimensions = [d / 2]
+        with self.assertRaises(TypeError):
+            pbeaml = model.add_pbeaml(pid, mid, beam_type, xxb='', dims=dimensions)
+        with self.assertRaises(TypeError):
+            pbeaml = model.add_pbeaml(pid, mid, beam_type, xxb=[0.], dims=dimensions)
+
+        # corrected
+        pbeaml = model.add_pbeaml(pid, mid, beam_type, xxb=[0.], dims=[dimensions])
+        pbeaml.validate()
+
+        E = 3.0e7
+        G = None
+        nu = 0.3
+        rho = 0.333
+        model.add_mat1(mid, E, G, nu, rho=rho)
+
+        x = [0., 1., 0.]
+        g0 = None
+        cbeam = model.add_cbeam(eid, pid, [1, 2], x, g0, offt='GGG', bit=None,
+                                pa=0, pb=0, wa=None, wb=None, sa=0, sb=0, comment='')
+        model.cross_reference()
+
+        L = 1.
+        expected_area = np.pi * d ** 2 / 4.
+        expected_mass = rho * expected_area * L
+        assert np.allclose(pbeaml.Area(), expected_area)
+        assert np.allclose(cbeam.Mass(), expected_mass)
 
     def test_beam_mass_01(self):
         """tests a CBEAM/PBEAM and gets the mass_properties"""
@@ -868,20 +1010,27 @@ class TestBeams(unittest.TestCase):
         model.cross_reference()
         #print(model.properties[11])
 
-        unused_mass, unused_cg, unused_I = model.mass_properties(
-            element_ids=None, mass_ids=None,
+        unused_mass, unused_cg, unused_I = mass_properties(
+            model, element_ids=None, mass_ids=None,
             reference_point=None,
             sym_axis=None,
             scale=None)
         #print('cg* =', cg)
         L = 1.0
+        # model.log.warning(f"A1={area1} A2={area2} nsm1={nsm_a} nsm2={nsm_b}")
         area = (area1 + area2) / 2.
         nsm = (nsm_a + nsm_b) / 2.
         mass_per_length = area * rho + nsm
+        mass_per_length_expected = rho * area  # for nsm = 0
+        # print(f'mass_per_length_expected={mass_per_length_expected}')
+        assert np.allclose(mass_per_length, mass_per_length_expected)
+
         unused_mass = L * mass_per_length
 
         mass_a = L / 2. * (area1 * rho + nsm_a)
         mass_b = L / 2. * (area2 * rho + nsm_b)
+        mass_total_expected = mass_a + mass_b
+        # model.log.warning(f'mass_total_expected = {mass_total_expected}')
         #xcg = (0.0 * mass_a + 1.0 * mass_b) / (mass_a + mass_b)
 
         #print(mass_a, mass_b, xcg, mass_a + mass_b)
@@ -896,9 +1045,11 @@ class TestBeams(unittest.TestCase):
         assert np.allclose(cbeam.Length(), 1.0), cbeam.Length()
         assert np.allclose(cg[0], 0.5), 'cg=%s' % cg
         assert np.allclose(centroid[0], 0.5), 'centroid=%s' % centroid
-        #assert allclose(cbeam.Mass(), 10.25), cbeam.Mass()
-        #assert allclose(cbeam.MassPerLength(), 10.25), cbeam.MassPerLength()
-        #assert allclose(mass, 10.25), mass
+
+        assert np.allclose(cbeam.Mass(), mass_total_expected), cbeam.Mass()
+        assert np.allclose(cbeam.MassPerLength(), mass_per_length_expected), (cbeam.MassPerLength(), mass_per_length_expected)
+        # assert np.allclose(cbeam.Mass(), 10.25), cbeam.Mass()
+        #assert np.allclose(mass, 10.25), mass
 
         with open('pbeam12.bdf', 'w') as bdf_file:
             case_control_lines = (
@@ -933,7 +1084,7 @@ class TestBeams(unittest.TestCase):
             #assert op2_mass == mass, 'op2_mass=%s mass=%s' % (op2_mass, mass)
             #print('op2_mass=%s mass=%s' % (op2_mass, mass))
             #op2_cg = gpw.cg
-            #cg = array([0.5, 0., 0.], dtype='float32')
+            #cg = np.array([0.5, 0., 0.], dtype='float32')
             #print('cg =', op2_cg)
 
     def test_pbeam_nsm(self):
@@ -967,23 +1118,25 @@ class TestBeams(unittest.TestCase):
 
         nsm = [1., 1.]
         pid_pbeam_nsm = 30
-        pbeam_b1 = model.add_pbeam(pid_pbeam_nsm, mid, xxb, so, area, i1, i2, i12, j, nsm,
-                                   c1, c2, d1, d2,
-                                   e1, e2, f1, f2,
-                                   k1=1., k2=1.,
-                                   s1=0., s2=0.,
-                                   nsia=10., nsib=10.,
-                                   cwa=0., cwb=None,
-                                   # cg location at A/B (1.,1.)
-                                   m1a=1., m2a=1.,
-                                   m1b=None, m2b=None,
-                                   # neutral axis at A/B (0., 0.)
-                                   n1a=0., n2a=0.,
-                                   n1b=None, n2b=None,
-                                   comment='')
+        pbeam_b1 = model.add_pbeam(
+            pid_pbeam_nsm, mid, xxb, so, area, i1, i2, i12, j, nsm,
+            c1, c2, d1, d2,
+            e1, e2, f1, f2,
+            k1=1., k2=1.,
+            s1=0., s2=0.,
+            nsia=10., nsib=10.,
+            cwa=0., cwb=None,
+            # cg location at A/B (1.,1.)
+            m1a=1., m2a=1.,
+            m1b=None, m2b=None,
+            # neutral axis at A/B (0., 0.)
+            n1a=0., n2a=0.,
+            n1b=None, n2b=None,
+            comment='')
         eid = 42
-        model.add_cbeam(eid, pid_pbeam_nsm, [1, 2], x, g0, offt='GGG', bit=None,
-                        pa=0, pb=0, wa=None, wb=None, sa=0, sb=0, comment='')
+        cbeam = model.add_cbeam(
+            eid, pid_pbeam_nsm, [1, 2], x, g0, offt='GGG', bit=None,
+            pa=0, pb=0, wa=None, wb=None, sa=0, sb=0, comment='')
 
         pbeam_a1.validate()
         pbeam_b1.validate()
@@ -1005,6 +1158,19 @@ class TestBeams(unittest.TestCase):
         model.cross_reference()
         model.pop_xref_errors()
 
+        #-----------------------------------------
+        #xyz1, xyz2 = cbeam.get_xyz()
+        is_failed, (v, ihat, yhat, zhat, wa, wb) = cbeam.get_axes(model)
+
+        ihat_expected = [1., 0., 0.]
+        yhat_expected = [0., 1., 0.]  # x
+        zhat_expected = [0., 0., 1.]  # i x y
+
+        assert np.allclose(v, x), f'v={v} expected={x}'
+        assert np.allclose(ihat, ihat_expected), f'v={ihat} expected={ihat_expected}'
+        assert np.allclose(yhat, yhat_expected), f'v={yhat} expected={yhat_expected}'
+        assert np.allclose(zhat, zhat_expected), f'v={zhat} expected={zhat_expected}'
+        # ----------------------------------------
         assert pbeam_a1.Nsm() == 1.0
         assert pbeam_a1.Area() == 2.0
 
@@ -1012,8 +1178,8 @@ class TestBeams(unittest.TestCase):
         assert pbeam_a1.MassPerLength() == 1.0
         assert pbeam_b1.MassPerLength() == 1.0, pbeam_b1.MassPerLength() # should be 10
 
-        mass, cg1, unused_inertia = model.mass_properties(
-            element_ids=eid,
+        mass, cg1, unused_inertia = mass_properties(
+            model, element_ids=eid,
             mass_ids=None,
             reference_point=None,
             sym_axis=None,
@@ -1022,8 +1188,8 @@ class TestBeams(unittest.TestCase):
         #print('cg1=%s' % cg)
         assert np.allclose(cg1, [0.5, 1., 1.]), cg1
 
-        mass, cg2, unused_inertia = model.mass_properties_nsm(
-            element_ids=eid, mass_ids=None,
+        mass, cg2, unused_inertia = mass_properties_nsm(
+            model, element_ids=eid, mass_ids=None,
             nsm_id=None,
             reference_point=None,
             sym_axis=None,
@@ -1271,77 +1437,6 @@ class TestBeams(unittest.TestCase):
         model.uncross_reference()
         pbeam3.write_card()
         pbeam3.write_card(size=16)
-
-    def test_cbend(self):
-        model = BDF(debug=False)
-        model.add_grid(10, [1., 0., 0.])
-        model.add_grid(11, [.707, .707, 0.])
-        model.add_grid(12, [0., 1., 0.])
-        eid = 2
-        pid = 3
-        nids = [10, 11]
-        g0 = 12
-        geom = 1
-
-        mid = 100
-
-        # The center of curvature lies on the line AO (or its
-        # extension) or vector v.
-        #
-        #      0
-        #     /
-        #    +
-        #   / \
-        #  A   R   B
-        #    ------
-        #      --   <---- curve A-B
-        #
-        x = None
-        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
-
-        A = 1.0
-        i1 = 2.0
-        i2 = 3.0
-        j = 4.0
-        pbend1 = PBEND.add_beam_type_1(
-            pid, mid, A, i1, i2, j,
-            rb=None, theta_b=None,
-            c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
-            k1=None, k2=None, nsm=0.,
-            rc=0., zc=0., delta_n=0., comment='pbend1')
-
-        fsi = 1
-        rm = 0.2
-        t = 0.4
-        #p = 0.5
-        #rb = 0.6
-        #theta_b = 0.7
-        pbend2 = PBEND.add_beam_type_2(
-            pid, mid, fsi, rm, t,
-            p=None, rb=None, theta_b=None,
-            nsm=0., rc=0., zc=0., comment='')
-        model.properties[pid] = pbend1
-
-        #model.add_pbend(pid, mid, beam_type, A, i1, i2, j,
-                        #c1, c2, d1, d2, e1, e2, f1, f2, k1, k2,
-                        #nsm, rc, zc, delta_n, fsi, rm, t, p, rb, theta_b, comment='')
-        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
-        model.validate()
-        model.cross_reference()
-        model.pop_xref_errors()
-
-        model.uncross_reference()
-
-        cbend.write_card()
-        cbend.write_card(size=16)
-
-        pbend1.write_card()
-        pbend1.write_card(size=16)
-
-        pbend2.write_card()
-        pbend2.write_card(size=16)
-
-        save_load_deck(model, punch=True, run_convert=False)
 
     def test_pbrsect(self):
         """tests a PBRSECT"""
@@ -1696,6 +1791,215 @@ class TestBeams(unittest.TestCase):
         ]
         pbmsect = PBMSECT.add_card(card, comment='')
         pbmsect.write_card()
+
+    def test_get_update_cbeam(self):
+        #CBEAM       3001    3001    3007    3034     -1.      0.      0.
+        model = BDF(debug=True, log=None, mode='msc')
+        eid = 3001
+        pid = 3001
+        nids = [3007, 3034]
+        g0 = None
+        x = [1., 2., 3.]
+        wa = [4., 5., 6.]
+        wb = [7., 8., 9.]
+        cbeam = model.add_cbeam(
+            eid, pid, nids, x, g0, offt='GGG', bit=None,
+            pa=0, pb=0, wa=wa, wb=wb, sa=0, sb=0, comment='')
+        #print(cbeam)
+        # x
+        assert cbeam.get_field(5) == 1.
+        assert cbeam.get_field(6) == 2.
+        assert cbeam.get_field(7) == 3.
+        cbeam.update_field(5, -1.)
+        cbeam.update_field(6, -2.)
+        cbeam.update_field(7, -3.)
+        assert cbeam.get_field(5) == -1.
+        assert cbeam.get_field(6) == -2.
+        assert cbeam.get_field(7) == -3.
+
+        # wa - 11-13
+        assert cbeam.get_field(11) == 4.
+        assert cbeam.get_field(12) == 5.
+        assert cbeam.get_field(13) == 6.
+        cbeam.update_field(11, -4.)
+        cbeam.update_field(12, -5.)
+        cbeam.update_field(13, -6.)
+        assert cbeam.get_field(11) == -4.
+        assert cbeam.get_field(12) == -5.
+        assert cbeam.get_field(13) == -6.
+
+        # wb - 14-16
+        assert cbeam.get_field(14) == 7.
+        assert cbeam.get_field(15) == 8.
+        assert cbeam.get_field(16) == 9.
+        cbeam.update_field(14, -7.)
+        cbeam.update_field(15, -8.)
+        cbeam.update_field(16, -9.)
+        assert cbeam.get_field(14) == -7.
+        assert cbeam.get_field(15) == -8.
+        assert cbeam.get_field(16) == -9.
+        #print(cbeam)
+
+
+class TestBend(unittest.TestCase):
+    def test_cbend_geom1_plot(self):
+        model = BDF(debug=False)
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [2., 0., 0.])
+        model.add_grid(12, [1., -2., 0.])
+        eid = 2
+        pid = 3
+        nids = [10, 11]
+        g0 = 12
+        geom = 2
+        x = None
+        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
+
+        mid = 2
+        A = 1.0
+        i1 = 2.0
+        i2 = 3.0
+        j = 4.0
+        pbend1 = PBEND.add_beam_type_1(
+            pid, mid, A, i1, i2, j,
+            rb=None, theta_b=None,
+            c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
+            k1=None, k2=None, nsm=0.,
+            rc=0., zc=0., delta_n=0., comment='pbend1')
+        model.properties[pid] = pbend1
+        cbend.cross_reference(model)
+        #cbend.plot()
+
+    def test_cbend_geom3_plot(self):
+        model = BDF(debug=False)
+        model.add_grid(10, [0., 0., 0.])
+        model.add_grid(11, [2., 0., 0.])
+        model.add_grid(12, [1., -2., 0.])
+        eid = 2
+        pid = 3
+        nids = [10, 11]
+        g0 = 12
+        geom = 3
+        x = None
+        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
+
+        mid = 2
+        A = 1.0
+        i1 = 2.0
+        i2 = 3.0
+        j = 4.0
+        pbend1 = PBEND.add_beam_type_1(
+            pid, mid, A, i1, i2, j,
+            rb=3.0, theta_b=None,
+            c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
+            k1=None, k2=None, nsm=0.,
+            rc=0., zc=0., delta_n=0., comment='pbend1')
+        model.properties[pid] = pbend1
+        cbend.cross_reference(model)
+        cbend.plot()
+
+    def test_cbend_a(self):
+        """tests a CBEND"""
+        model = BDF(debug=False)
+
+        eid = 7
+        pid = 10
+        nids = [2, 3]
+        g0 = 5
+        x = None
+        geom = 1
+        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
+        model.add_grid(2, [0., 0., 0.])
+        model.add_grid(3, [0., 0., 0.])
+        model.add_grid(5, [0., 0., 0.])
+        #pbend = model.add_pbend(pid, mid, beam_type, A, i1, i2, j,
+                                #c1, c2, d1, d2, e1, e2, f1, f2,
+                                #k1, k2, nsm, rc, zc, delta_n, fsi,
+                                #rm, t, p, rb, theta_b, comment='')
+
+        cbend.validate()
+        cbend.raw_fields()
+        cbend.write_card()
+        cbend.write_card(size=16)
+
+        model.validate()
+        model._verify_bdf(xref=False)
+        model.pop_parse_errors()
+        #model.cross_reference()
+        #model.pop_xref_errors()
+
+        #model._verify_bdf(xref=True)
+        #model.uncross_reference()
+
+    def test_cbend_b(self):
+        model = BDF(debug=False)
+        model.add_grid(10, [1., 0., 0.])
+        model.add_grid(11, [.707, .707, 0.])
+        model.add_grid(12, [0., 1., 0.])
+        eid = 2
+        pid = 3
+        nids = [10, 11]
+        g0 = 12
+        geom = 1
+
+        mid = 100
+
+        # The center of curvature lies on the line AO (or its
+        # extension) or vector v.
+        #
+        #      0
+        #     /
+        #    +
+        #   / \
+        #  A   R   B
+        #    ------
+        #      --   <---- curve A-B
+        #
+        x = None
+        cbend = model.add_cbend(eid, pid, nids, g0, x, geom, comment='cbend')
+
+        A = 1.0
+        i1 = 2.0
+        i2 = 3.0
+        j = 4.0
+        pbend1 = PBEND.add_beam_type_1(
+            pid, mid, A, i1, i2, j,
+            rb=None, theta_b=None,
+            c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
+            k1=None, k2=None, nsm=0.,
+            rc=0., zc=0., delta_n=0., comment='pbend1')
+
+        fsi = 1
+        rm = 0.2
+        t = 0.4
+        #p = 0.5
+        #rb = 0.6
+        #theta_b = 0.7
+        pbend2 = PBEND.add_beam_type_2(
+            pid, mid, fsi, rm, t,
+            p=None, rb=None, theta_b=None,
+            nsm=0., rc=0., zc=0., comment='')
+        model.properties[pid] = pbend1
+
+        #model.add_pbend(pid, mid, beam_type, A, i1, i2, j,
+                        #c1, c2, d1, d2, e1, e2, f1, f2, k1, k2,
+                        #nsm, rc, zc, delta_n, fsi, rm, t, p, rb, theta_b, comment='')
+        model.add_mat1(mid, 3.0e7, None, 0.3, rho=0.2)
+        model.validate()
+        model.cross_reference()
+        model.pop_xref_errors()
+
+        model.uncross_reference()
+
+        cbend.write_card()
+        cbend.write_card(size=16)
+
+        pbend1.write_card()
+        pbend1.write_card(size=16)
+
+        pbend2.write_card()
+        pbend2.write_card(size=16)
+        save_load_deck(model, punch=True, run_convert=False, run_renumber=False)
 
 
 if __name__ == '__main__':  # pragma: no cover

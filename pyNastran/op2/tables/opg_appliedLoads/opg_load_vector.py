@@ -1,6 +1,6 @@
 import numpy as np
 from pyNastran.op2.result_objects.table_object import RealTableArray, ComplexTableArray
-from pyNastran.op2.result_objects.scalar_table_object import RealScalarTableArray
+from pyNastran.op2.result_objects.scalar6_table_object import RealScalarTableArray
 
 
 class RealLoadVectorArray(RealTableArray):  # table_code=2, sort_code=0, thermal=0
@@ -9,7 +9,7 @@ class RealLoadVectorArray(RealTableArray):  # table_code=2, sort_code=0, thermal
         RealTableArray.__init__(self, data_code, is_sort1, isubcase, dt)
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         words = ['                                                     L O A D   V E C T O R\n', ]
@@ -30,7 +30,7 @@ class ComplexLoadVectorArray(ComplexTableArray):
         ComplexTableArray.__init__(self, data_code, is_sort1, isubcase, dt)
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         words = ['                                               C O M P L E X   L O A D   V E C T O R\n', ]
@@ -43,7 +43,7 @@ class RealTemperatureVectorArray(RealScalarTableArray):
         RealScalarTableArray.__init__(self, data_code, is_sort1, isubcase, dt)
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         words = [
@@ -64,8 +64,33 @@ class RealThermalVelocityVectorArray(RealScalarTableArray):
     def __init__(self, data_code, is_sort1, isubcase, dt):
         RealScalarTableArray.__init__(self, data_code, is_sort1, isubcase, dt)
 
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        h5_table_dict = {
+            'ID': Int64Col(pos=0),
+            'X': Float64Col(pos=1),
+            'Y': Float64Col(pos=2),
+            'Z': Float64Col(pos=3),
+            'RX': Float64Col(pos=4),
+            'RY': Float64Col(pos=5),
+            'RZ': Float64Col(pos=6),
+            'DOMAIN_ID': Int64Col(pos=7),
+        }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr,
+                        ntime_nnode0: int, ntime_nnode1: int,
+                        itime: int):
+        arr["ID"][ntime_nnode0:ntime_nnode1] = self.node_gridtype[:, 0]
+        arr["X"][ntime_nnode0:ntime_nnode1] = 0.
+        arr["Y"][ntime_nnode0:ntime_nnode1] = 0.
+        arr["Z"][ntime_nnode0:ntime_nnode1] = 0.
+        arr["RX"][ntime_nnode0:ntime_nnode1] = 0.
+        arr["RY"][ntime_nnode0:ntime_nnode1] = 0.
+        arr["RZ"][ntime_nnode0:ntime_nnode1] = 0.
+
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         words = [

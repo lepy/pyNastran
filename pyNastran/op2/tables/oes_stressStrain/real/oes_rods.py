@@ -1,11 +1,22 @@
-from typing import List
+from typing import TextIO, Optional
 import numpy as np
-from numpy import zeros, searchsorted, allclose
 
-from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.utils.numpy_utils import integer_float_types
+from pyNastran.utils.mathematics import get_abs_max
+
+from pyNastran.op2.result_objects.op2_objects import (
+    get_times_dtype, combination_inplace)
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_elements
+from pyNastran.op2.stress_reduction import von_mises_2d, max_shear
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import (
-    StressObject, StrainObject, OES_Object, oes_data_code)
-from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header #, get_key0
+    StressObject, StrainObject, OES_Object, oes_real_data_code,
+    set_element_case, set_static_case, set_modal_case,
+    set_transient_case, set_post_buckling_case)
+from pyNastran.op2.op2_interface.write_utils import view_dtype, view_idtype_as_fdtype
+from pyNastran.f06.f06_formatting import (
+    write_floats_13e, write_floats_13e_long,
+    _eigenvalue_header) #, get_key0
+from pyNastran.op2.writer.utils import fdtype_from_data
 
 ELEMENT_NAME_TO_ELEMENT_TYPE = {
     'CROD' : 1,
@@ -26,45 +37,130 @@ class RealRodArray(OES_Object):
         self.ielement = 0
         self.element = None
 
-    @classmethod
-    def add_static_case(cls, table_name, element_name, element, data, isubcase,
-                        is_sort1=True, is_random=False, is_stress=True, is_msc=True,
-                        random_code=0, title='', subtitle='', label=''):
+    def get_neid(self) -> int:
+        neid = self.element.shape[0]
+        return neid
 
-        analysis_code = 1 # static
-        data_code = oes_data_code(table_name, analysis_code,
-                                  is_sort1=is_sort1, is_random=is_random,
-                                  random_code=random_code,
-                                  title=title, subtitle=subtitle, label=label,
-                                  is_msc=is_msc)
-        data_code['lsdvmns'] = [0] # TODO: ???
-        data_code['data_names'] = []
+    def h5_table_dict(self) -> dict:
+        from tables import Int64Col, Float64Col
+        if self.element_type == 3:  # CTUBE
+            h5_table_dict = {
+                'EID': Int64Col(pos=0),
+                'AS': Float64Col(pos=1),
+                'MSA': Float64Col(pos=2),
+                'TS': Float64Col(pos=3),
+                'MST': Float64Col(pos=4),
+                'DOMAIN_ID': Int64Col(pos=5),
+            }
+        else:
+            h5_table_dict = {
+                'EID': Int64Col(pos=0),
+                'A': Float64Col(pos=1),
+                'MSA': Float64Col(pos=2),
+                'T': Float64Col(pos=3),
+                'MST': Float64Col(pos=4),
+                'DOMAIN_ID': Int64Col(pos=5),
+            }
+        return h5_table_dict
+
+    def add_to_h5_array(self, arr, ntime_neid0: int, ntime_neid1: int, itime: int):
+        arr["EID"][ntime_neid0:ntime_neid1] = self.element
+        if self.element_type == 3:  # CTUBE
+            arr["AS"][ntime_neid0:ntime_neid1] = self.data[itime, :, 0]
+            arr["TS"][ntime_neid0:ntime_neid1] = self.data[itime, :, 2]
+        else:
+            arr["A"][ntime_neid0:ntime_neid1] = self.data[itime, :, 0]
+            arr["T"][ntime_neid0:ntime_neid1] = self.data[itime, :, 2]
+        arr["MSA"][ntime_neid0:ntime_neid1] = self.data[itime, :, 1]
+        arr["MST"][ntime_neid0:ntime_neid1] = self.data[itime, :, 3]
+
+    @classmethod
+    def _add_case(cls,
+                  table_name, element_name, isubcase,
+                  is_sort1, is_random, is_msc,
+                  random_code, title, subtitle, label):
+        num_wide = 3
+        is_strain = 'Strain' in cls.__name__
+        data_code = oes_real_data_code(table_name,
+                                       element_name, num_wide,
+                                       is_sort1=is_sort1, is_random=is_random,
+                                       random_code=random_code,
+                                       title=title, subtitle=subtitle, label=label,
+                                       is_msc=is_msc)
 
         # I'm only sure about the 1s in the strains and the
         # corresponding 0s in the stresses.
-        if is_stress:
-            data_code['stress_bits'] = [0, 0, 0, 0]
-            data_code['s_code'] = 0
+        #stress / strain -> 1, 3
+        if is_strain:
+            stress_bits = [0, 1, 0, 1]
+            s_code = 1
         else:
-            data_code['stress_bits'] = [0, 1, 0, 1]
-            data_code['s_code'] = 1 # strain?
+            stress_bits = [0, 0, 0, 0]
+            s_code = 0
+            assert stress_bits[1] == 0, 'stress_bits=%s' % (stress_bits)
+
+        # stress
+        assert stress_bits[1] == stress_bits[3], 'stress_bits=%s' % (stress_bits)
+        data_code['stress_bits'] = stress_bits
+        data_code['s_code'] = s_code
 
         element_type = ELEMENT_NAME_TO_ELEMENT_TYPE[element_name]
         data_code['element_name'] = element_name
         data_code['element_type'] = element_type
-        data_code['load_set'] = 1
+        return data_code
 
-        ntimes = data.shape[0]
-        nnodes = data.shape[1]
-        dt = None
-        obj = cls(data_code, is_sort1, isubcase, dt)
-        obj.element = element
-        obj.data = data
+    @classmethod
+    def add_static_case(cls, table_name, element_name, element, data, isubcase,
+                        is_sort1=True, is_random=False, is_msc=True,
+                        random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_static_case(cls, is_sort1, isubcase, data_code,
+                              set_element_case, (element, data))
+        return obj
 
-        obj.ntimes = ntimes
-        obj.ntotal = nnodes
-        obj._times = [None]
-        obj.is_built = True
+    @classmethod
+    def add_modal_case(cls, table_name, element_name: str, element, data, isubcase,
+                       modes, eigns, cycles,
+                       is_sort1=True, is_random=False, is_msc=True,
+                       random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_modal_case(cls, is_sort1, isubcase, data_code,
+                             set_element_case, (element, data),
+                             modes, eigns, cycles)
+        return obj
+
+    @classmethod
+    def add_transient_case(cls, table_name, element_name, element, data, isubcase,
+                           times,
+                           is_sort1=True, is_random=False, is_msc=True,
+                           random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_transient_case(cls, is_sort1, isubcase, data_code,
+                                 set_element_case, (element, data),
+                                 times)
+        return obj
+
+    @classmethod
+    def add_post_buckling_case(cls, table_name, element_name, element, data, isubcase,
+                               modes, eigrs, eigis,
+                               is_sort1=True, is_random=False, is_msc=True,
+                               random_code=0, title='', subtitle='', label=''):
+        data_code = cls._add_case(
+            table_name, element_name,
+            isubcase, is_sort1, is_random, is_msc,
+            random_code, title, subtitle, label)
+        obj = set_post_buckling_case(cls, is_sort1, isubcase, data_code,
+                                     set_element_case, (element, data),
+                                     modes, eigrs, eigis)
         return obj
 
     @property
@@ -79,14 +175,11 @@ class RealRodArray(OES_Object):
     def nnodes_per_element(self) -> int:
         return 1
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
-        raise NotImplementedError()
-
-    def get_headers(self):
         raise NotImplementedError()
 
     def build(self):
@@ -102,21 +195,20 @@ class RealRodArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("ntimes=%s nelements=%s ntotal=%s" % (self.ntimes, self.nelements, self.ntotal))
-        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size)
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
         self.build_data(self.ntimes, self.nelements, dtype, idtype, fdtype)
 
     def build_data(self, ntimes, nelements, dtype, idtype, fdtype):
         """actually performs the build step"""
         self.ntimes = ntimes
         self.nelements = nelements
-        _times = zeros(ntimes, dtype=dtype)
-        element = zeros(nelements, dtype=idtype)
+        _times = np.zeros(ntimes, dtype=self.analysis_fmt)
+        element = np.zeros(nelements, dtype=idtype)
 
         #[axial, torsion, SMa, SMt]
-        data = zeros((ntimes, nelements, 4), dtype=fdtype)
+        data = np.zeros((ntimes, nelements, 4), dtype=fdtype)
 
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
@@ -130,15 +222,91 @@ class RealRodArray(OES_Object):
             self.element = element
             self.data = data
 
+    def envelope(self,
+                 eids: np.ndarray,
+                 result_name: str) -> np.ndarray:
+        is_min = (result_name == 'min')
+        func_name = 'min' if is_min else 'max'
+        max_min_func = getattr(np, func_name)
+
+        # print(''.join(self.get_stats()))
+        element = self.element
+        # print(f'element = {element}')
+        ielement = np.searchsorted(element, eids)
+        assert np.array_equal(element[ielement], eids)
+
+        #[axial, torsion, SMa, SMt]
+        stress_strain_dict_map = {
+            'axial': 0,
+            'torsion': 1,
+            # 'max_shear': 1,
+        }
+        ntime, neid, _ = self.data.shape
+        if result_name == 'von_mises':
+            data = self.von_mises()
+        elif result_name == 'max_shear':
+            data = self.max_shear()
+        elif result_name == 'abs_max':
+            # TODO: wrong, but ok...
+            data = np.abs(self.abs_principal())
+            assert data.shape == (ntime, neid), data.shape
+        elif result_name in stress_strain_dict_map:
+            iresult = stress_strain_dict_map[result_name]
+            data = self.data[:, :, iresult]
+        else:  # pragma: No cover
+            raise NotImplementedError(result_name)
+
+        assert data.ndim == 2, data.shape
+        # ntime, nelement = data.shape
+
+        # data.shape = (ntime, neid)
+        eid_data = max_min_func(data, axis=0)
+        assert eid_data.shape == (neid, ), eid_data.shape
+        return eid_data[ielement]
+
+    def von_mises(self) -> np.ndarray:
+        #[axial, SMa, torsion, SMt]
+        oxx = self.data[:, :, 0]
+        txy = self.data[:, :, 2]
+        oyy = oxx * 0.
+        von_mises = von_mises_2d(oxx, oyy, txy, self.is_stress)
+        return von_mises
+
+    def abs_principal(self) -> np.ndarray:
+        #[axial, SMa, torsion, SMt]
+        oxx = self.data[:, :, 0]
+        txy = np.abs(self.data[:, :, 2])
+        omax = oxx + txy
+        omin = oxx - txy
+        abs_max = get_abs_max(omin, omax, dtype=omax.dtype)
+        return abs_max
+
+    def max_shear(self) -> np.ndarray:
+        #[axial, SMa, torsion, SMt]
+        max_shear = np.abs(self.data[:, :, 2])
+        return max_shear
+
+    def linear_combination(self, factor: integer_float_types,
+                           data: Optional[np.ndarray]=None,
+                           update: bool=True) -> None:
+        #[axial, SMa, torsion, SMt]
+        ires = [0, 2]  # axial, torsion
+        combination_inplace(self.data, data, factor, ires=ires)
+        if update:
+            self.update_data_components()
+
+    def update_data_components(self):
+        import warnings
+        warnings.warn('verify oes_crod margins')
+
     def build_dataframe(self):
         """creates a pandas dataframe"""
         import pandas as pd
-
         headers = self.get_headers()
         if self.nonlinear_factor not in (None, np.nan):
-            column_names, column_values = self._build_dataframe_transient_header()
-            data_frame = self._build_pandas_transient_elements(
-                column_values, column_names,
+            column_names, column_values = build_dataframe_transient_header(self)
+            data_frame = build_pandas_transient_elements(
+                self, column_values, column_names,
                 headers, self.element, self.data)
         else:
             #Static     axial           SMa  torsion           SMt
@@ -179,7 +347,7 @@ class RealRodArray(OES_Object):
                         t2 = table.data[itime, ieid, :]
                         (axial1, torsion1, sma1, smt1) = t1
                         (axial2, torsion2, sma2, smt2) = t2
-                        if not allclose(t1, t2):
+                        if not np.allclose(t1, t2):
                         #if not np.array_equal(t1, t2):
                             msg += '%s\n  (%s, %s, %s, %s)\n  (%s, %s, %s, %s)\n' % (
                                 eid,
@@ -197,6 +365,7 @@ class RealRodArray(OES_Object):
         return True
 
     def add_sort1(self, dt, eid, axial, SMa, torsion, SMt):
+        assert self.sort_method == 1, self
         self._times[self.itime] = dt
         #if self.itime == 0:
         #print('itime=%s eid=%s' % (self.itime, eid))
@@ -204,12 +373,12 @@ class RealRodArray(OES_Object):
         self.data[self.itime, self.ielement, :] = [axial, SMa, torsion, SMt]
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         ntimes, nelements, _ = self.data.shape
@@ -229,9 +398,9 @@ class RealRodArray(OES_Object):
         headers = self.get_headers()
         n = len(headers)
         msg.append('  data: [%s, nelements, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element.shape = %s\n' % str(self.element.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element.shape = {self.element.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
@@ -249,17 +418,61 @@ class RealRodArray(OES_Object):
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element)  #[0]
+        itot = np.searchsorted(eids, self.element)  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        #ind = ravel([searchsorted(self.element_node[:, 0] == eid) for eid in eids])
-        ind = searchsorted(eids, self.element)
+        #ind = np.ravel([np.searchsorted(self.element_node[:, 0] == eid) for eid in eids])
+        ind = np.searchsorted(eids, self.element)
         #ind = ind.reshape(ind.size)
         #ind.sort()
         return ind
 
-    def write_f06(self, f06_file, header=None, page_stamp='PAGE %s', page_num=1, is_mag_phase=False, is_sort1=True):
+    def write_csv(self, csv_file: TextIO,
+                  is_exponent_format: bool=False,
+                  is_mag_phase: bool=False, is_sort1: bool=True,
+                  write_header: bool=True):
+        """
+        Stress Table - CROD/CONROD/CTUBE
+        --------------------------------
+        Flag, SubcaseID, iTime, EID,  BLANK,  BLANK,  Sxx,       Syy,  Szz,      Sxy,  Syz,  Szx
+        10,           1,     0, 312,      0,      0,  1642.503,    0,    0,  167.541,    0,    0
+        10,           1,     0, 313,      0,      0,  3937.541,    0,    0,   66.171,    0,    0
+        """
+        name = str(self.__class__.__name__)
+        if write_header:
+            csv_file.write('# %s\n' % name)
+            headers = ['Flag', 'SubcaseID', 'iTime', 'Eid', 'BLANK', 'BLANK', 'Sxx', 'Syy', 'Szz', 'Sxy', 'Syz', 'Sxz']
+            csv_file.write('# ' + ','.join(headers) + '\n')
+
+        # stress vs. strain
+        flag = 10 if 'Stress' in name else 11
+
+        isubcase = self.isubcase
+        #times = self._times
+
+        # write the f06
+        ntimes = self.data.shape[0]
+        eids = self.element
+        eid_len = '%d' % len(str(eids.max()))
+
+        zero = ' 0.000000E+00'
+        for itime in range(ntimes):
+            dt = self._times[itime]
+            #header = _eigenvalue_header(self, header, itime, ntimes, dt)
+
+            #print("self.data.shape=%s itime=%s ieids=%s" % (str(self.data.shape), itime, str(ieids)))
+            axial = self.data[itime, :, 0]
+            torsion = self.data[itime, :, 2]
+            for eid, axiali, torsioni in zip(eids, axial, torsion):
+                if is_exponent_format:
+                    [axiali, torsioni] = write_floats_13e_long([axiali, torsioni])
+                csv_file.write(f'{flag}, {isubcase}, {itime}, {eid:{eid_len}d}, 0, 0, '
+                               f'{axiali}, {zero}, {zero}, {torsioni}, {zero}, {zero}\n')
+        return
+
+    def write_f06(self, f06_file: TextIO, header=None, page_stamp: str='PAGE %s',
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         (unused_elem_name, msg_temp) = self.get_f06_header(is_mag_phase)
@@ -267,7 +480,7 @@ class RealRodArray(OES_Object):
             page_num = self._write_sort1_as_sort1(header, page_stamp, page_num, f06_file, msg_temp)
         return page_num
 
-    def _write_sort1_as_sort1(self, header, page_stamp, page_num, f06_file, msg_temp):
+    def _write_sort1_as_sort1(self, header, page_stamp, page_num, f06_file: TextIO, msg_temp):
         ntimes = self.data.shape[0]
 
         eids = self.element
@@ -303,17 +516,17 @@ class RealRodArray(OES_Object):
             page_num += 1
         return page_num - 1
 
-    def write_op2(self, op2, op2_ascii, itable, new_result, date,
+    def write_op2(self, op2_file, op2_ascii, itable, new_result, date,
                   is_mag_phase=False, endian='>'):
         """writes an OP2"""
         import inspect
-        from struct import Struct, pack
+        from struct import pack # Struct,
         frame = inspect.currentframe()
         call_frame = inspect.getouterframes(frame, 2)
-        op2_ascii.write('%s.write_op2: %s\n' % (self.__class__.__name__, call_frame[1][3]))
+        op2_ascii.write(f'{self.__class__.__name__}.write_op2: {call_frame[1][3]}\n')
 
         if itable == -1:
-            self._write_table_header(op2, op2_ascii, date)
+            self._write_table_header(op2_file, op2_ascii, date)
             itable = -3
 
         #if isinstance(self.nonlinear_factor, float):
@@ -339,7 +552,7 @@ class RealRodArray(OES_Object):
         #print('shape = %s' % str(self.data.shape))
         #assert self.ntimes == 1, self.ntimes
 
-        op2_ascii.write('  ntimes = %s\n' % self.ntimes)
+        op2_ascii.write(f'  ntimes = {self.ntimes}\n')
 
         eids_device = self.element * 10 + self.device_code
 
@@ -347,16 +560,20 @@ class RealRodArray(OES_Object):
         #print('ntotal=%s' % (ntotal))
         #assert ntotal == 193, ntotal
 
-        if self.is_sort1:
-            struct1 = Struct(endian + b'i4f')
-        else:
+        if not self.is_sort1:
             raise NotImplementedError('SORT2')
+        #struct1 = Struct(endian + b'i4f')
 
-        op2_ascii.write('nelements=%i\n' % nelements)
+        fdtype = fdtype_from_data(self.data, self.size)
+        # [eid, axial, SMa, torsion, SMt]
+        data_out = np.empty((nelements, 5), dtype=fdtype)
+        data_out[:, 0] = view_idtype_as_fdtype(eids_device, fdtype)
+
+        op2_ascii.write(f'nelements={nelements:d}\n')
 
         for itime in range(self.ntimes):
             #print('3, %s' % itable)
-            self._write_table_3(op2, op2_ascii, new_result, itable, itime)
+            self._write_table_3(op2_file, op2_ascii, new_result, itable, itime)
 
             # record 4
             #print('stress itable = %s' % itable)
@@ -367,24 +584,18 @@ class RealRodArray(OES_Object):
                       4, 0, 4,
                       4, ntotal, 4,
                       4 * ntotal]
-            op2.write(pack('%ii' % len(header), *header))
+            op2_file.write(pack('%ii' % len(header), *header))
             op2_ascii.write('r4 [4, 0, 4]\n')
-            op2_ascii.write('r4 [4, %s, 4]\n' % (itable))
-            op2_ascii.write('r4 [4, %i, 4]\n' % (4 * ntotal))
+            op2_ascii.write(f'r4 [4, {itable:d}, 4]\n')
+            op2_ascii.write(f'r4 [4, {4 * ntotal:d}, 4]\n')
 
-            axial = self.data[itime, :, 0]
-            SMa = self.data[itime, :, 1]
-            torsion = self.data[itime, :, 2]
-            SMt = self.data[itime, :, 3]
-
-            for eid, axiali, SMai, torsioni, SMti in zip(eids_device, axial, SMa, torsion, SMt):
-                data = [eid, axiali, SMai, torsioni, SMti]
-                op2_ascii.write('  eid=%s axial=%s SMa=%s torsion=%s SMt=%s\n' % tuple(data))
-                op2.write(struct1.pack(*data))
+            # [eid, axial, SMa, torsion, SMt]
+            data_out[:, 1:] = self.data[itime, :, :]
+            op2_file.write(data_out)
 
             itable -= 1
             header = [4 * ntotal,]
-            op2.write(pack('i', *header))
+            op2_file.write(pack('i', *header))
             op2_ascii.write('footer = %s\n' % header)
             new_result = False
         return itable
@@ -395,7 +606,8 @@ class RealBushStressArray(RealRodArray, StressObject):
         RealRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial', 'SMa', 'torsion', 'SMt']
         return headers
 
@@ -419,7 +631,8 @@ class RealRodStressArray(RealRodArray, StressObject):
         RealRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial', 'SMa', 'torsion', 'SMt']
         return headers
 
@@ -439,7 +652,8 @@ class RealRodStrainArray(RealRodArray, StrainObject):
         RealRodArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['axial', 'SMa', 'torsion', 'SMt']
         return headers
 

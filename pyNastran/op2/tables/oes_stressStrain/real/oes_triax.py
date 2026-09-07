@@ -1,8 +1,9 @@
-from typing import List
 import numpy as np
 from numpy import zeros, searchsorted, ravel
 
 from pyNastran.utils.numpy_utils import integer_types
+from pyNastran.op2.result_objects.op2_objects import get_times_dtype
+from pyNastran.op2.result_objects.utils_pandas import build_dataframe_transient_header, build_pandas_transient_element_node
 from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import StressObject, StrainObject, OES_Object
 from pyNastran.f06.f06_formatting import write_floats_13e, _eigenvalue_header #, get_key0
 
@@ -36,21 +37,15 @@ class RealTriaxArray(OES_Object):
             raise NotImplementedError(self.element_type)
         return nnodes_per_element
 
-    def _reset_indices(self):
+    def _reset_indices(self) -> None:
         self.itotal = 0
         self.ielement = 0
 
     def _get_msgs(self):
         raise NotImplementedError('%s needs to implement _get_msgs' % self.__class__.__name__)
 
-    def get_headers(self):
-        raise NotImplementedError('%s needs to implement get_headers' % self.__class__.__name__)
-        #return headers
-
     def build(self):
         """sizes the vectorized attributes of the RealTriaxArray"""
-        if self.is_built:
-            return
         #print("self.ielement =", self.ielement)
         #print('ntimes=%s nelements=%s ntotal=%s' % (self.ntimes, self.nelements, self.ntotal))
         assert self.ntimes > 0, 'ntimes=%s' % self.ntimes
@@ -63,18 +58,15 @@ class RealTriaxArray(OES_Object):
         self.itotal = 0
         #self.ntimes = 0
         #self.nelements = 0
-        self.is_built = True
 
         #print("***name=%s type=%s nnodes_per_element=%s ntimes=%s nelements=%s ntotal=%s" % (
             #self.element_name, self.element_type, nnodes_per_element, self.ntimes, self.nelements, self.ntotal))
-        dtype = 'float32'
-        if isinstance(self.nonlinear_factor, integer_types):
-            dtype = 'int32'
-        _times = zeros(self.ntimes, dtype=dtype)
-        element_node = zeros((self.ntotal, 2), dtype='int32')
+        dtype, idtype, fdtype = get_times_dtype(self.nonlinear_factor, self.size, self.analysis_fmt)
+        _times = np.zeros(self.ntimes, dtype=self.analysis_fmt)
+        element_node = np.zeros((self.ntotal, 2), dtype=idtype)
 
         # [radial, azimuthal, axial, shear, omax, oms, ovm]
-        data = zeros((self.ntimes, self.ntotal, 7), dtype='float32')
+        data = np.zeros((self.ntimes, self.ntotal, 7), dtype=fdtype)
 
         if self.load_as_h5:
             #for key, value in sorted(self.data_code.items()):
@@ -107,18 +99,17 @@ class RealTriaxArray(OES_Object):
             #          30021  omax       1.973730e+02
             #          30023  oms        1.973730e+00
             #          30024  ovm        3.947461e+00
-            column_names, column_values = self._build_dataframe_transient_header()
+            column_names, column_values = build_dataframe_transient_header(self)
             names = ['ElementID', 'NodeID', 'Item']
-            data_frame = self._build_pandas_transient_element_node(
-                column_values, column_names,
+            data_frame = build_pandas_transient_element_node(
+                self, column_values, column_names,
                 headers, element_node, self.data, from_tuples=False, from_array=True,
                 names=names,
             )
-
-            #column_names, column_values = self._build_dataframe_transient_header()
-            #data_frame = self._build_pandas_transient_element_node(
-                #column_values, column_names,
-                #headers, self.element_node, self.data)
+            # column_names, column_values = build_dataframe_transient_header(self)
+            # data_frame = build_pandas_transient_element_node(
+            #     self, column_values, column_names,
+            #     headers, self.element_node, self.data)
         else:
             #                    radial  azimuthal     axial     shear      omax       oms       ovm
             #ElementID NodeID
@@ -130,8 +121,11 @@ class RealTriaxArray(OES_Object):
             #          5311   -0.006616  -0.089126 -0.007863  0.012473 -0.089126  0.047187  0.084695
             #          5313   -0.032047  -0.038660  0.001105  0.011260 -0.038660  0.021614  0.041742
             #          5315   -0.017285  -0.129091 -0.017932  0.002921 -0.129091  0.057211  0.111599
-            df1 = pd.DataFrame(element_node).T
-            df1.columns = ['ElementID', 'NodeID']
+            data = {
+                'ElementID': self.element_node[:, 0],
+                'NodeID': self.element_node[:, 1],
+            }
+            df1 = pd.DataFrame(data)
             df2 = pd.DataFrame(self.data[0], columns=headers)
             data_frame = df1.join(df2).set_index(['ElementID', 'NodeID'])
             #self.data_frame = pd.Panel(self.data, major_axis=element_node, minor_axis=headers).to_frame()
@@ -183,6 +177,7 @@ class RealTriaxArray(OES_Object):
 
     def add_sort1(self, dt, eid, nid, radial, azimuthal, axial, shear, omax, oms, ovm):
         """unvectorized method for adding SORT1 transient data"""
+        assert self.sort_method == 1, self
         assert isinstance(eid, integer_types) and eid > 0, 'dt=%s eid=%s' % (dt, eid)
         self._times[self.itime] = dt
         self.element_node[self.itotal, :] = [eid, nid]
@@ -190,12 +185,12 @@ class RealTriaxArray(OES_Object):
         self.itotal += 1
         self.ielement += 1
 
-    def get_stats(self, short=False) -> List[str]:
+    def get_stats(self, short: bool=False) -> list[str]:
         if not self.is_built:
             return [
-                '<%s>\n' % self.__class__.__name__,
-                '  ntimes: %i\n' % self.ntimes,
-                '  ntotal: %i\n' % self.ntotal,
+                f'<{self.__class__.__name__}>; table_name={self.table_name!r}\n',
+                f'  ntimes: {self.ntimes:d}\n',
+                f'  ntotal: {self.ntotal:d}\n',
             ]
 
         nelements = self.ntotal
@@ -217,23 +212,23 @@ class RealTriaxArray(OES_Object):
         n = len(headers)
         assert n == self.data.shape[2], 'nheaders=%s shape=%s' % (n, str(self.data.shape))
         msg.append('  data: [%s, ntotal, %i] where %i=[%s]\n' % (ntimes_word, n, n, str(', '.join(headers))))
-        msg.append('  element_node.shape = %s\n' % str(self.element_node.shape).replace('L', ''))
-        msg.append('  data.shape = %s\n' % str(self.data.shape).replace('L', ''))
-        msg.append('  element type: %s\n' % self.element_name)
+        msg.append(f'  element_node.shape = {self.element_node.shape}\n')
+        msg.append(f'  data.shape = {self.data.shape}\n')
+        msg.append(f'  element type: {self.element_name}-{self.element_type}\n')
         msg += self.get_data_code()
         return msg
 
     def get_element_index(self, eids):
         # elements are always sorted; nodes are not
-        itot = searchsorted(eids, self.element)  #[0]
+        itot = np.searchsorted(eids, self.element)  #[0]
         return itot
 
     def eid_to_element_node_index(self, eids):
-        ind = ravel([searchsorted(self.element == eid) for eid in eids])
+        ind = np.ravel([np.searchsorted(self.element == eid) for eid in eids])
         return ind
 
     def write_f06(self, f06_file, header=None, page_stamp='PAGE %s',
-                  page_num=1, is_mag_phase=False, is_sort1=True):
+                  page_num: int=1, is_mag_phase: bool=False, is_sort1: bool=True):
         if header is None:
             header = []
         msg = self._get_msgs()
@@ -276,11 +271,12 @@ class RealTriaxStressArray(RealTriaxArray, StressObject):
         RealTriaxArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StressObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['radial', 'azimuthal', 'axial', 'shear', 'omax', 'oms', 'ovm']
         return headers
 
-    def _get_msgs(self) -> List[str]:
+    def _get_msgs(self) -> list[str]:
         if self.element_type == 53:
             pass
         else:
@@ -300,11 +296,12 @@ class RealTriaxStrainArray(RealTriaxArray, StrainObject):
         RealTriaxArray.__init__(self, data_code, is_sort1, isubcase, dt)
         StrainObject.__init__(self, data_code, isubcase)
 
-    def get_headers(self) -> List[str]:
+    @property
+    def headers(self) -> list[str]:
         headers = ['radial', 'azimuthal', 'axial', 'shear', 'omax', 'oms', 'ovm']
         return headers
 
-    def _get_msgs(self) -> List[str]:
+    def _get_msgs(self) -> list[str]:
         if self.element_type == 53:
             pass
         else:

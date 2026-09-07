@@ -9,7 +9,9 @@ The preferences menu handles:
  - Clipping Max
 
 """
+from __future__ import annotations
 import os
+from typing import Callable, TYPE_CHECKING
 
 from qtpy.QtCore import Qt
 from qtpy import QtGui
@@ -17,16 +19,21 @@ from qtpy.QtWidgets import (
     QLabel, QPushButton, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout,
     QColorDialog, QLineEdit, QCheckBox, QComboBox)
 
-from pyNastran.gui.utils.qt.pydialog import PyDialog
+from pyNastran.utils.locale import func_str
+from pyNastran.gui.utils.qt.pydialog import PyDialog, QFloatEdit, make_font, check_color
+from pyNastran.gui.utils.qt.qcombobox import get_combo_box_text  # set_combo_box_text,
 from pyNastran.gui.utils.qt.qpush_button_color import QPushButtonColor
 from pyNastran.gui.utils.qt.dialogs import save_file_dialog
 from pyNastran.gui.utils.qt.checks.qlineedit import (
-    check_save_path, #check_path,
+    check_save_path,  # check_path,
     #check_int, check_positive_int_or_blank,
-    check_float,# check_float_ranged,
+    check_float,  # check_float_ranged,
     #check_name_str, check_name_length, check_format, check_format_str,
 )
 from pyNastran.gui.utils.wildcards import wildcard_csv
+if TYPE_CHECKING:  # pragma: no cover
+    from pyNastran.gui.main_window import MainWindow
+
 
 class CuttingPlaneWindow(PyDialog):
     """
@@ -41,12 +48,14 @@ class CuttingPlaneWindow(PyDialog):
     |    Apply OK Cancel     |
     +------------------------+
     """
-    def __init__(self, data, win_parent=None, show_tol=True):
+    def __init__(self, data, callback,
+                 win_parent=None, show_tol=True):
         """
         Saves the data members from data and
         performs type checks
         """
         PyDialog.__init__(self, data, win_parent)
+        self.callback = callback
 
         self._updated_preference = False
 
@@ -60,7 +69,7 @@ class CuttingPlaneWindow(PyDialog):
 
         #self.out_data = data
 
-        self.plane_color_float, self.plane_color_int = _check_color(
+        self.plane_color_float, self.plane_color_int = check_color(
             data['plane_color'])
         self.methods = ['Z-Axis Projection', 'CORD2R']
         self.zaxis_methods = ['Global Z', 'Camera Normal', 'Manual']
@@ -84,17 +93,25 @@ class CuttingPlaneWindow(PyDialog):
         # Z-Axis Projection
         self.p1_label = QLabel("Origin/P1:")
         self.p2_label = QLabel("P2:")
-        self.zaxis_label = QLabel("Z Axis:")
+        self.zaxis_label = QLabel('Z Axis:')
 
         self.method_pulldown = QComboBox()
         for method in self.methods:
             self.method_pulldown.addItem(method)
 
         self.zaxis_method_pulldown = QComboBox()
+        self.zaxis_method_pulldown.setToolTip(
+            'Define the output coordinate system\n'
+            ' - "Start to XZ-Plane" defines x-axis\n\n'
+            'Options for Z-Axis:\n'
+            ' - Global Z: z=<0, 0, 1>\n'
+            ' - Camera Normal: depends on orientation of model (out of the page)\n'
+            ' - Manual: Explicitly define the z-axis'
+        )
         for method in self.zaxis_methods:
             self.zaxis_method_pulldown.addItem(method)
 
-        self.cid_label = QLabel("Coordinate System:")
+        self.cid_label = QLabel('Coordinate System:')
         self.p1_cid_pulldown = QComboBox()
         self.p2_cid_pulldown = QComboBox()
         self.zaxis_cid_pulldown = QComboBox()
@@ -122,27 +139,29 @@ class CuttingPlaneWindow(PyDialog):
         #self.p2_cid_pulldown.setItemText(0, cid_str)
         #self.zaxis_cid_pulldown.setItemText(0, cid_str)
 
-        self.p1_cid_pulldown.setToolTip('Defines the coordinate system for the Point P1')
-        self.p2_cid_pulldown.setToolTip('Defines the coordinate system for the Point P2')
+        self.p1_cid_pulldown.setToolTip('Defines the coordinate system for Point P1')
+        self.p2_cid_pulldown.setToolTip('Defines the coordinate system for Point P2')
         self.zaxis_cid_pulldown.setToolTip('Defines the coordinate system for the Z Axis')
 
-        self.p1_x_edit = QLineEdit('')
-        self.p1_y_edit = QLineEdit('')
-        self.p1_z_edit = QLineEdit('')
+        self.p1_x_edit = QFloatEdit('0.0')
+        self.p1_y_edit = QFloatEdit('0.0')
+        self.p1_z_edit = QFloatEdit('0.0')
 
-        self.p2_x_edit = QLineEdit('')
-        self.p2_y_edit = QLineEdit('')
-        self.p2_z_edit = QLineEdit('')
+        self.p2_x_edit = QFloatEdit('0.0')
+        self.p2_y_edit = QFloatEdit('1.0')
+        self.p2_z_edit = QFloatEdit('0.0')
 
-        self.zaxis_x_edit = QLineEdit('')
-        self.zaxis_y_edit = QLineEdit('')
-        self.zaxis_z_edit = QLineEdit('')
+        self.zaxis_x_edit = QFloatEdit('1.0')
+        self.zaxis_y_edit = QFloatEdit('0.0')
+        self.zaxis_z_edit = QFloatEdit('0.0')
 
         self.ytol_label = QLabel('Y Tolerance:')
         self.zero_tol_label = QLabel('Zero Tolerance:')
 
-        self.ytol_edit = QLineEdit('10.0')
-        self.zero_tol_edit = QLineEdit('1e-5')
+        ytol = 10.
+        zero_tol = 1e-5
+        self.ytol_edit = QFloatEdit(func_str(ytol))
+        self.zero_tol_edit = QFloatEdit(func_str(zero_tol))
 
         if not show_tol:
             self.ytol_label.setVisible(False)
@@ -150,21 +169,21 @@ class CuttingPlaneWindow(PyDialog):
             self.ytol_edit.setVisible(False)
             self.zero_tol_edit.setVisible(False)
 
-        self.p2_label = QLabel("P2:")
+        self.p2_label = QLabel('P2:')
 
         # Plane Color
-        self.plane_color_label = QLabel("Plane Color:")
+        self.plane_color_label = QLabel('Plane Color:')
         self.plane_color_edit = QPushButtonColor(self.plane_color_int)
 
-        self.corner_coord_label = QLabel("Show Corner Coordinate System:")
+        self.corner_coord_label = QLabel('Show Corner Coordinate System:')
         self.corner_coord_checkbox = QCheckBox()
         #self.corner_coord_checkbox.setChecked(self._show_corner_coord)
 
         #-----------------------------------------------------------------------
         # closing
-        self.apply_button = QPushButton("Apply")
-        self.ok_button = QPushButton("OK")
-        self.cancel_button = QPushButton("Cancel")
+        self.apply_button = QPushButton('Apply')
+        self.ok_button = QPushButton('OK')
+        self.cancel_button = QPushButton('Cancel')
 
     def create_layout(self):
         grid = QGridLayout()
@@ -254,13 +273,14 @@ class CuttingPlaneWindow(PyDialog):
     #def on_browse_csv(self):
         #csv_filename = 'Cp.csv'
 
-    def on_export_checkbox(self):
+    def on_export_checkbox(self) -> None:
+        """this is called when the checkbox is clicked"""
         is_checked = self.export_checkbox.isChecked()
         self.csv_label.setEnabled(is_checked)
         self.csv_edit.setEnabled(is_checked)
         self.csv_button.setEnabled(is_checked)
 
-    def on_browse_csv(self):
+    def on_browse_csv(self) -> None:
         """opens a file dialog"""
         default_dirname = os.getcwd()
         csv_filename, wildcard = save_file_dialog(
@@ -334,7 +354,7 @@ class CuttingPlaneWindow(PyDialog):
         #grid.addWidget(self.corner_coord_checkbox, irow, 1)
         #irow += 1
 
-    def set_connections(self):
+    def set_connections(self) -> None:
         """creates the actions for the menu"""
         self.method_pulldown.currentIndexChanged.connect(self.on_method)
         self.zaxis_method_pulldown.currentIndexChanged.connect(self.on_zaxis_method)
@@ -352,7 +372,7 @@ class CuttingPlaneWindow(PyDialog):
             is_cord2r = False
         elif method == 'CORD2R':
             is_cord2r = True
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError(method)
         if is_cord2r:
             p1_label_text = 'Origin:'
@@ -395,7 +415,7 @@ class CuttingPlaneWindow(PyDialog):
             is_visible = False
         elif method == 'Manual':
             is_visible = True
-        else:
+        else:  # pragma: no cover
             raise NotImplementedError(method)
 
         self.zaxis_cid_pulldown.setVisible(is_visible)
@@ -405,10 +425,9 @@ class CuttingPlaneWindow(PyDialog):
 
     def on_font(self, value=None):
         """update the font for the current window"""
-        if value is None:
+        if value in (0, None):
             value = self.font_size_edit.value()
-        font = QtGui.QFont()
-        font.setPointSize(value)
+        font = make_font(value, is_bold=False)
         self.setFont(font)
 
     #def on_corner_coord(self):
@@ -418,7 +437,7 @@ class CuttingPlaneWindow(PyDialog):
 
     def on_plane_color(self):
         """ Choose a plane color"""
-        title = "Choose a cutting plane color"
+        title = 'Choose a cutting plane color'
         rgb_color_ints = self.plane_color_int
         color_edit = self.plane_color_edit
         func_name = 'set_plane_color'
@@ -428,21 +447,24 @@ class CuttingPlaneWindow(PyDialog):
             self.plane_color_int = rgb_color_ints
             self.plane_color_float = rgb_color_floats
 
-    def _background_color(self, title, color_edit, rgb_color_ints, func_name):
+    def _background_color(self, title: str,
+                          color_edit: QPushButtonColor,
+                          rgb_color_ints: tuple[int, int, int],
+                          func_name: Callable):
         """helper method for ``on_background_color`` and ``on_background_color2``"""
         passed, rgb_color_ints, rgb_color_floats = self.on_color(
             color_edit, rgb_color_ints, title)
-        if passed and 0:
-            if self.win_parent is not None:
-                settings = self.win_parent.settings
-                func_background_color = getattr(settings, func_name)
-                func_background_color(rgb_color_floats)
+        #if passed and 0:
+            #if self.win_parent is not None:
+                #settings = self.win_parent.settings
+                #func_background_color = getattr(settings, func_name)
+                #func_background_color(rgb_color_floats)
         return passed, rgb_color_ints, rgb_color_floats
 
     def on_color(self, color_edit, rgb_color_ints, title):
         """pops a color dialog"""
-        col = QColorDialog.getColor(QtGui.QColor(*rgb_color_ints), self,
-                                    title)
+        qcolor = QtGui.QColor(*rgb_color_ints)
+        col = QColorDialog.getColor(qcolor, self, title)
         if not col.isValid():
             return False, rgb_color_ints, None
 
@@ -453,19 +475,18 @@ class CuttingPlaneWindow(PyDialog):
         assert isinstance(color_int[0], int), color_int
 
         color_edit.setStyleSheet(
-            "QPushButton {"
-            "background-color: rgb(%s, %s, %s);" % tuple(color_int) +
+            'QPushButton {'
+            'background-color: rgb(%s, %s, %s);' % tuple(color_int) +
             #"border:1px solid rgb(255, 170, 255); "
-            "}")
+            '}')
         return True, color_int, color_float
-
 
     #---------------------------------------------------------------------------
 
     def on_validate(self):
-        p1_cidi = self.p1_cid_pulldown.currentText()
-        p2_cidi = self.p2_cid_pulldown.currentText()
-        zaxis_cidi = self.zaxis_cid_pulldown.currentText()
+        p1_cidi = get_combo_box_text(self.p1_cid_pulldown)
+        p2_cidi = get_combo_box_text(self.p2_cid_pulldown)
+        zaxis_cidi = get_combo_box_text(self.zaxis_cid_pulldown)
         p1_cid = int(p1_cidi) if 'Global' not in p1_cidi else 0
         p2_cid = int(p2_cidi) if 'Global' not in p2_cidi else 0
         zaxis_cid = int(zaxis_cidi) if 'Global' not in zaxis_cidi else 0
@@ -483,7 +504,7 @@ class CuttingPlaneWindow(PyDialog):
         p2 = [p2_x, p2_y, p2_z]
 
         flag6, flag7, flag8, zaxis_cid, zaxis = get_zaxis(
-            self.win_parent, # for camera
+            self.win_parent,  # for camera
             self.zaxis_method_pulldown,
             self.zaxis_x_edit, self.zaxis_y_edit, self.zaxis_z_edit)
         #print('zaxis =', zaxis)
@@ -496,14 +517,13 @@ class CuttingPlaneWindow(PyDialog):
         zero_tol, flag11 = check_float(self.zero_tol_edit)
 
         csv_filename = None
-        flag12 = True
+        csv_flag = True
         if self.export_checkbox.isChecked():
-            csv_filename, flag12 = check_save_path(self.csv_edit)
-
+            csv_filename, csv_flag = check_save_path(self.csv_edit)
 
         flags = [flag0, flag1, flag2, flag3, flag4, flag5,
                  flag6, flag7, flag8,
-                 flag9, flag10, flag11, flag12]
+                 flag9, flag10, flag11, csv_flag]
         if all(flags):
             self.out_data['method'] = method
             self.out_data['p1'] = [p1_cid, p1]
@@ -522,7 +542,8 @@ class CuttingPlaneWindow(PyDialog):
         passed = self.on_validate()
 
         if (passed or force) and self.win_parent is not None:
-            self.win_parent.make_cutting_plane_from_data(self.out_data)
+            #callback = make_cutting_plane_from_data
+            self.callback(self.out_data)
         return passed
 
     def on_ok(self):
@@ -536,7 +557,11 @@ class CuttingPlaneWindow(PyDialog):
         self.close()
 
 
-def get_zaxis(win_parent, zaxis_method_pulldown, zaxis_x_edit, zaxis_y_edit, zaxis_z_edit):
+def get_zaxis(win_parent: MainWindow,
+              zaxis_method_pulldown: QComboBox,
+              zaxis_x_edit: QFloatEdit,
+              zaxis_y_edit: QFloatEdit,
+              zaxis_z_edit: QFloatEdit) -> tuple[bool, bool, bool, int, list[float]]:
     zaxis_method = str(zaxis_method_pulldown.currentText())
     flag1, flag2, flag3 = True, True, True
     if zaxis_method == 'Global Z':
@@ -547,6 +572,7 @@ def get_zaxis(win_parent, zaxis_method_pulldown, zaxis_x_edit, zaxis_y_edit, zax
         zaxis_y, flag2 = check_float(zaxis_y_edit)
         zaxis_z, flag3 = check_float(zaxis_z_edit)
         zaxis = [zaxis_x, zaxis_y, zaxis_z]
+        zaxis_cid = 0
     elif zaxis_method == 'Camera Normal':
         if win_parent is not None:
             camera = win_parent.GetCamera()
@@ -554,17 +580,14 @@ def get_zaxis(win_parent, zaxis_method_pulldown, zaxis_x_edit, zaxis_y_edit, zax
         else:
             zaxis = [1., 1., 1.]
         zaxis_cid = 0
-    else:
+    else:  # pragma: no cover
         raise NotImplementedError(zaxis_method)
     return flag1, flag2, flag3, zaxis_cid, zaxis
 
-def _check_color(color_float):
-    assert len(color_float) == 3, color_float
-    assert isinstance(color_float[0], float), color_float
-    color_int = [int(colori * 255) for colori in color_float]
-    return color_float, color_int
 
-def get_pulldown_text(method_int, methods, pulldown):
+def get_pulldown_text(method_int: int,
+                      methods: list[str],
+                      pulldown: QComboBox):
     if method_int is None:
         #method = pulldown.getText()
         method = pulldown.currentText()
@@ -572,12 +595,12 @@ def get_pulldown_text(method_int, methods, pulldown):
         method = methods[method_int]
     return method
 
-def main():
+
+def main():  # pragma: no cover
     # kills the program when you hit Cntl+C from the command line
     # doesn't save the current state as presumably there's been an error
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-
 
     import sys
     # Someone is launching this directly
@@ -585,17 +608,20 @@ def main():
     app = QApplication(sys.argv)
     #The Main window
     data = {
-        'font_size' : 8,
-        #'cids' : [0, 1, 2, 3],
-        'cids' : [0],
-        'plane_color' : (1., 0., 1.), # purple
-        'name' : 'main',
-
+        'font_size': 8,
+        #'cids': [0, 1, 2, 3],
+        'cids': [0],
+        'plane_color': (1., 0., 1.),  # purple
+        'name': 'main',
     }
-    main_window = CuttingPlaneWindow(data, show_tol=True)
+
+    def func(*args):
+        pass
+    main_window = CuttingPlaneWindow(data, func, show_tol=True)
     main_window.show()
     # Enter the main loop
     app.exec_()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':   # pragma: no cover
     main()

@@ -10,20 +10,24 @@ All bar properties are defined in this file.  This includes:
 All bars are LineProperty objects.
 Multi-segment beams are IntegratedLineProperty objects.
 
+shoelace formula
+second moment of area on wikipedia
 """
 from __future__ import annotations
 from itertools import count
-from typing import List, Tuple, Union, Any, TYPE_CHECKING
-from numpy import pi, array
+from typing import Optional, Any, TYPE_CHECKING
 import numpy as np
 
 from pyNastran.bdf.field_writer_8 import set_blank_if_default
 from pyNastran.bdf.cards.base_card import Property
 from pyNastran.bdf.bdf_interface.assign_type import (
     integer, double, double_or_blank, string, string_or_blank,
-    blank, integer_or_double, #integer_or_blank,
+    blank, integer_or_double,  # integer_or_blank,
 )
+from pyNastran.bdf.bdf_interface.assign_type_force import (
+    force_double, force_double_or_blank)
 from pyNastran.utils.mathematics import integrate_unit_line, integrate_positive_unit_line
+from pyNastran.bdf import MAX_INT
 from pyNastran.bdf.field_writer_8 import print_card_8
 from pyNastran.bdf.field_writer_16 import print_card_16
 from pyNastran.bdf.bdf_interface.bdf_card import BDFCard
@@ -50,7 +54,7 @@ def get_inertia_rectangular(sections):
 
     Returns
     -------
-    interia_parameters : List[Area, Iyy, Izz, Iyz]
+    interia_parameters : list[Area, Iyy, Izz, Iyz]
         the inertia parameters
 
     .. seealso:: http://www.webs1.uidaho.edu/mindworks/Machine_Design/Posters/PDF/Moment%20of%20Inertia.pdf
@@ -80,11 +84,10 @@ def get_inertia_rectangular(sections):
     Ixx = Axx / A
     Iyy = Ayy / A
     Ixy = Axy / A
-    return (A, Ixx, Iyy, Ixy)
+    return A, Ixx, Iyy, Ixy
 
 
-def _IAreaL(prop, dim):
-    # type: (Any, List[float]) -> Tuple[float, float, float, float]
+def _IAreaL(prop: Any, dim: list[float]) -> tuple[float, float, float, float]:
     beam_type = prop.beam_type
     if beam_type == 'ROD':
         A, I1, I2, I12 = rod_section(prop.type, prop.beam_type, dim, prop)
@@ -138,11 +141,12 @@ def _IAreaL(prop, dim):
         Izz = 1 / 12. * h1 * w1 ** 3
         Iyz = 0.  #: .. todo:: is the Ixy of a bar 0 ???
 
-    else:
+    else:  # pragma: no cover
         msg = 'beam_type=%r is not supported for %s class...' % (
             beam_type, prop.type)
         raise NotImplementedError(msg)
-    return (A, Iyy, Izz, Iyz)
+    return A, Iyy, Izz, Iyz
+
 
 class LineProperty(Property):
     def __init__(self):
@@ -173,7 +177,6 @@ class LineProperty(Property):
         return self.A
 
     def Nsm(self) -> float:
-        # type: () -> float
         """gets nonstructural mass per unit length"""
         return self.nsm
 
@@ -193,8 +196,7 @@ class LineProperty(Property):
         """gets the material density"""
         return self.mid_ref.rho
 
-    def E(self):
-        # type: () -> float
+    def E(self) -> float:
         """gets the material Young's ratio"""
         return self.mid_ref.E
 
@@ -208,7 +210,7 @@ class LineProperty(Property):
 
 
 def A_I1_I2_I12(prop, beam_type: str,
-                dim: List[float]) -> Tuple[float, float, float, float]:
+                dim: list[float]) -> tuple[float, float, float, float]:
     r"""
     ::
 
@@ -239,6 +241,8 @@ def A_I1_I2_I12(prop, beam_type: str,
         A, I1, I2, I12 = box_section(prop.type, beam_type, dim, prop)
     elif beam_type == 'L':
         A, I1, I2, I12 = l_section(prop.type, beam_type, dim, prop)
+    elif beam_type == 'T':
+        A, I1, I2, I12 = t_section(prop.type, beam_type, dim, prop)
     else:  # pragma: no cover
         msg = 'A_I1_I2_I12; beam_type=%s is not supported for %s class...' % (
             beam_type, prop.type)
@@ -246,14 +250,15 @@ def A_I1_I2_I12(prop, beam_type: str,
     assert A == prop.Area(), prop
     return A, I1, I2, I12
 
-def _bar_areaL(class_name: str, beam_type: str, dim: List[float],
-               prop: Any) -> float:
+
+def _bar_areaL(class_name: str, beam_type: str, dim: list[float],
+               prop: Any) -> tuple[float, float, float, float]:
     """
     Area(x) method for the PBARL and PBEAML classes (pronounced **Area-L**)
 
     Parameters
     ----------
-    dim : List[float]
+    dim : list[float]
         a list of the dimensions associated with **beam_type**
 
     Returns
@@ -323,7 +328,8 @@ def _bar_areaL(class_name: str, beam_type: str, dim: List[float],
             beam_type, class_name)
         raise NotImplementedError(msg)
     assert A > 0, 'beam_type=%r dim=%r A=%s\n%s' % (beam_type, dim, A, prop)
-    return A
+    return A, I1, I2, I12
+
 
 def rod_section(class_name, beam_type, dim, prop):
     # This is a circle if you couldn't tell...
@@ -336,34 +342,37 @@ def rod_section(class_name, beam_type, dim, prop):
     #   \_E_/
     #
     R = dim[0]
-    A = pi * R ** 2
+    A = np.pi * R ** 2
     I1 = A * R ** 2 / 4.
     I2 = I1
     I12 = 0.
     return A, I1, I2, I12
 
-def tube_section(class_type, beam_type, dim, prop):
+
+def tube_section(class_type: str, beam_type: str, dim: np.ndarray, prop):
     r_outer, r_inner = dim
     assert r_outer > r_inner, 'TUBE; r_outer=%s r_inner=%s' % (r_outer, r_inner)
-    A = pi * (r_outer ** 2 - r_inner ** 2)
-    I1 = pi * (r_outer ** 4 - r_inner ** 4) / 4.
+    A = np.pi * (r_outer ** 2 - r_inner ** 2)
+    I1 = np.pi * (r_outer ** 4 - r_inner ** 4) / 4.
     I2 = I1
     I12 = 0.
     return A, I1, I2, I12
 
-def tube2_section(class_type, beam_type, dim, prop):
+
+def tube2_section(class_type: str, beam_type: str, dim, prop):
     r_outer, thick = dim
     r_inner = r_outer - thick
     assert r_outer > r_inner, 'TUBE2; r_outer=%s r_inner=%s' % (r_outer, r_inner)
 
     # same as tube
-    A = pi * (r_outer ** 2 - r_inner ** 2)
-    I1 = pi * (r_outer ** 4 - r_inner ** 4) / 4.
+    A = np.pi * (r_outer ** 2 - r_inner ** 2)
+    I1 = np.pi * (r_outer ** 4 - r_inner ** 4) / 4.
     I2 = I1
     I12 = 0.
     return A, I1, I2, I12
 
-def bar_section(class_type, beam_type, dim, prop):
+
+def bar_section(class_type: str, beam_type: str, dim, prop):
     #per https://docs.plm.automation.siemens.com/data_services/resources/nxnastran/10/help/en_US/tdocExt/pdf/element.pdf
     # <------> D1
     #
@@ -380,7 +389,8 @@ def bar_section(class_type, beam_type, dim, prop):
     #J = b*h**3*(1/3. - 0.21*h/b*(1-h**4/(12*b**4)))
     return A, I1, I2, I12
 
-def box_section(class_name, beam_type, dim, prop):
+
+def box_section(class_name: str, beam_type: str, dim, prop):
     #
     # +----------+ ^     ^
     # |          | | d3  |
@@ -405,13 +415,15 @@ def box_section(class_name, beam_type, dim, prop):
     hi = h - 2 * t1
     A = b * h - bi * hi
 
+    assert A > 0, A
     I1 = (b * h ** 3 - bi * hi ** 3) / 12
-    I2 = (h * b ** 3 - bi * hi ** 3) / 12
+    I2 = (h * b ** 3 - hi * bi ** 3) / 12
     I12 = 0.
     #j = (2*t2*t1*(b-t2)**2*(h-t1)**2)/(b*t2+h*t1-t2**2-t1**2)
     return A, I1, I2, I12
 
-def box1_section(class_name, beam_type, dim, prop):
+
+def box1_section(class_name: str, beam_type: str, dim, prop):
     dim1, dim2, dim3, dim4, dim5, dim6 = dim
     h1 = dim3  # top
     w1 = dim1
@@ -428,7 +440,8 @@ def box1_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def cross_section(class_type, beam_type, dim, prop):
+
+def cross_section(class_type: str, beam_type: str, dim, prop):
     dim1, dim2, dim3, dim4 = dim
     h1 = dim3
     w1 = dim2
@@ -439,7 +452,8 @@ def cross_section(class_type, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def h_section(class_name, beam_type, dim, prop):
+
+def h_section(class_name: str, beam_type: str, dim, prop):
     dim1, dim2, dim3, dim4 = dim
     h1 = dim3
     w1 = dim2
@@ -450,7 +464,8 @@ def h_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def t_section(class_name, beam_type, dim, prop):
+
+def t_section(class_name: str, beam_type: str, dim, prop):
     # per https://docs.plm.automation.siemens.com/data_services/resources/nxnastran/10/help/en_US/tdocExt/pdf/element.pdf
     #       ^ y
     #       |
@@ -480,14 +495,15 @@ def t_section(class_name, beam_type, dim, prop):
     yna = hw*tw*(hw+tf)/(2*A)
     i1 = (
        (d*tf**3 + tw*hw**3) / 12. +
-       hw*tw*(yna + 0.5 * (hw +tf))**2 + d*tf*yna**2
+       hw*tw*(yna + 0.5 * (hw + tf))**2 + d*tf*yna**2
     )
     i2 = (tf*d**3 + hw*tw**3)/12.
     i12 = 0.
     #j = 1/3 * (tf**3*d + tw**3 * h)
     return A, i1, i2, i12
 
-def t1_section(class_name, beam_type, dim, prop):
+
+def t1_section(class_name: str, beam_type: str, dim, prop):
     dim1, dim2, dim3, dim4 = dim
     h1 = dim1
     w1 = dim3
@@ -498,7 +514,8 @@ def t1_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def t2_section(class_name, beam_type, dim, prop):
+
+def t2_section(class_name: str, beam_type: str, dim, prop):
     #       ^ y
     #       |
     #       |
@@ -528,7 +545,8 @@ def t2_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def zee_section(class_name, beam_type, dim, prop):
+
+def zee_section(class_name: str, beam_type: str, dim, prop):
     #  bflange bweb
     # <--d1-><--d2-->
     # +-------------+            ^
@@ -551,7 +569,8 @@ def zee_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def hexa_section(class_name, beam_type, dim, prop):
+
+def hexa_section(class_name: str, beam_type: str, dim, prop):
     #     _______
     #   /        \     ^
     #  /          \    |
@@ -567,14 +586,15 @@ def hexa_section(class_name, beam_type, dim, prop):
     wall = dim2
     wtri = dim1
     wbox = wall - 2 * wtri
-    assert wbox > 0, 'wbox=%s' % (wbox)
+    assert wbox > 0, f'wbox={wbox}'
     A = hbox * wbox + hbox * wtri
     #print('hbox=%s wbox=%s hbox*wbox=%s 2*wtri*hbox=%s A=%s' % (
         #hbox, wbox, hbox*wbox, 2*wtri*hbox, A))
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def hat_section(class_name, beam_type, dim, prop):
+
+def hat_section(class_name: str, beam_type: str, dim, prop):
     #
     #        <--------d3------->
     #
@@ -598,7 +618,8 @@ def hat_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def hat1_section(class_name, beam_type, dim, prop):
+
+def hat1_section(class_name: str, beam_type: str, dim, prop):
     # per https://docs.plm.automation.siemens.com/data_services/resources/nxnastran/10/help/en_US/tdocExt/pdf/element.pdf
     #
     #        <-----d3=wmid----->
@@ -641,14 +662,14 @@ def hat1_section(class_name, beam_type, dim, prop):
     #*DIM4+DIM5, CAN NOT BE LARGER THAN THE HEIGHT OF
         #THE HAT, DIM2.
 
-
     #h1 = w  # upper, horizontal lower bar (see HAT)
     #w1 = w0 - w3
     #A = 2. * (h0 * w0 + h1 * w1 + h2 * w2 + h3 * w3)
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def i_section(class_name, beam_type, dim, prop):
+
+def i_section(class_name: str, beam_type: str, dim, prop):
     # per https://docs.plm.automation.siemens.com/data_services/resources/nxnastran/10/help/en_US/tdocExt/pdf/element.pdf
 
     #  <----d3=b---->
@@ -698,7 +719,8 @@ def i_section(class_name, beam_type, dim, prop):
     #CAN NOT BE GREATER THAT THE WEB HEIGHT, DIM1.
     return A, i1, i2, i12
 
-def i1_section(class_name, beam_type, dim, prop):
+
+def i1_section(class_name: str, beam_type: str, dim, prop):
     #
     #  d1/2   d2  d1/2
     #  <---><---><--->
@@ -736,7 +758,8 @@ def i1_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def l_section(class_type, beam_type, dim, prop):
+
+def l_section(class_type: str, beam_type: str, dim, prop):
     # per https://docs.plm.automation.siemens.com/data_services/resources/nxnastran/10/help/en_US/tdocExt/pdf/element.pdf
     #
     #  D4
@@ -784,7 +807,8 @@ def l_section(class_type, beam_type, dim, prop):
     #zna = zc
     return A, i1, i2, i12
 
-def chan_section(class_name, beam_type, dim, prop):
+
+def chan_section(class_name: str, beam_type: str, dim, prop):
     #
     # +-+----+   ^  ^
     # | |    |   |  | d4 = tf
@@ -846,7 +870,8 @@ def chan_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def chan1_section(class_name, beam_type, dim, prop):
+
+def chan1_section(class_name: str, beam_type: str, dim, prop):
     #
     # +--------+  ^
     # |        |  |
@@ -879,7 +904,8 @@ def chan1_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def chan2_section(class_name, beam_type, dim, prop):
+
+def chan2_section(class_name: str, beam_type: str, dim, prop):
     #  d1        d1
     # <-->      <-->
     # +--+      +--+        ^
@@ -910,7 +936,8 @@ def chan2_section(class_name, beam_type, dim, prop):
     I1 = I2 = I12 = None
     return A, I1, I2, I12
 
-def dbox_section(class_name, beam_type, dim, prop):
+
+def dbox_section(class_name: str, beam_type: str, dim, prop):
     #DBOX = ((DIM2*DIM3)-((DIM2-DIM7-DIM8)*(DIM3-((0.5*DIM5)+DIM4)))) +
     #       (((DIM1-DIM3)*DIM2)-((DIM2-(DIM9+DIM10))*(DIM1-DIM3-(0.5*DIM5)-DIM6)))
     #
@@ -1072,25 +1099,25 @@ class PBAR(LineProperty):
     type = 'PBAR'
     pname_fid_map = {
         # 1-based
-        4 : 'A', 'A' : 'A',
-        5 : 'i1', 'I1' : 'i1',
-        6 : 'i2', 'I2' : 'i2',
-        7 : 'j', 'J' : 'j',
-        10 : 'c1',
-        11 : 'c2',
-        12 : 'd1',
-        13 : 'd2',
-        14 : 'e1',
-        15 : 'e2',
-        16 : 'f1',
-        17 : 'f2',
-        18 : 'k1',
-        19 : 'k1',
-        20 : 'i12', 'I12' : 'i12',
+        4: 'A', 'A': 'A',
+        5: 'i1', 'I1': 'i1',
+        6: 'i2', 'I2': 'i2',
+        7: 'j', 'J': 'j',
+        10: 'c1',
+        11: 'c2',
+        12: 'd1',
+        13: 'd2',
+        14: 'e1',
+        15: 'e2',
+        16: 'f1',
+        17: 'f2',
+        18: 'k1',
+        19: 'k1',
+        20: 'i12', 'I12': 'i12',
     }
 
     @classmethod
-    def export_to_hdf5(cls, h5_file, model, pids):
+    def export_to_hdf5(cls, h5_file, model: BDF, pids: np.ndarray):
         """exports the properties in a vectorized way"""
         #comments = []
         mids = []
@@ -1143,9 +1170,14 @@ class PBAR(LineProperty):
         h5_file.create_dataset('nsm', data=nsm)
         #h5_file.create_dataset('_comment', data=comments)
 
-    def __init__(self, pid, mid, A=0., i1=0., i2=0., i12=0., j=0., nsm=0.,
-                 c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
-                 k1=1.e8, k2=1.e8, comment=''):
+    def __init__(self, pid: int, mid: int,
+                 A: float=0., i1: float=0., i2: float=0.,
+                 i12: float=0., j: float=0., nsm: float=0.,
+                 c1: float=0., c2: float=0.,
+                 d1: float=0., d2: float=0.,
+                 e1: float=0., e2: float=0.,
+                 f1: float=0., f2: float=0.,
+                 k1: float=1.e8, k2: float=1.e8, comment: str=''):
         """
         Creates a PBAR card
 
@@ -1214,14 +1246,16 @@ class PBAR(LineProperty):
 
     def validate(self):
         if self.i1 < 0.:
-            raise ValueError('I1=%r must be greater than or equal to 0.0' % self.i1)
+            raise ValueError(f'I1={self.i1:g} must be greater than or equal to 0.0')
         if self.i2 < 0.:
-            raise ValueError('I2=%r must be greater than or equal to 0.0' % self.i2)
+            raise ValueError(f'I2={self.i2:g} must be greater than or equal to 0.0')
         if self.j < 0.:
-            raise ValueError('J=%r must be greater than or equal to 0.0' % self.j)
-
+            raise ValueError(f'J={self.j:g} must be greater than or equal to 0.0')
+        if self.A == 0.0 and (self.k1 is not None or self.k2 is not None):
+            raise ValueError(f'A={self.A:g} must be greater than or equal to 0.0 when '
+                             f'k1={self.k1:g} or k2={self.k2:g} are used')
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a PBAR card from ``BDF.add_card(...)``
 
@@ -1235,44 +1269,97 @@ class PBAR(LineProperty):
         """
         pid = integer(card, 1, 'pid')
         mid = integer(card, 2, 'mid')
-        A = double_or_blank(card, 3, 'A', 0.0)
-        i1 = double_or_blank(card, 4, 'I1', 0.0)
-        i2 = double_or_blank(card, 5, 'I2', 0.0)
+        A = double_or_blank(card, 3, 'A', default=0.0)
+        i1 = double_or_blank(card, 4, 'I1', default=0.0)
+        i2 = double_or_blank(card, 5, 'I2', default=0.0)
 
-        j = double_or_blank(card, 6, 'J', 0.0)
-        nsm = double_or_blank(card, 7, 'nsm', 0.0)
+        j = double_or_blank(card, 6, 'J', default=0.0)
+        nsm = double_or_blank(card, 7, 'nsm', default=0.0)
 
-        c1 = double_or_blank(card, 9, 'C1', 0.0)
-        c2 = double_or_blank(card, 10, 'C2', 0.0)
-        d1 = double_or_blank(card, 11, 'D1', 0.0)
-        d2 = double_or_blank(card, 12, 'D2', 0.0)
-        e1 = double_or_blank(card, 13, 'E1', 0.0)
-        e2 = double_or_blank(card, 14, 'E2', 0.0)
-        f1 = double_or_blank(card, 15, 'F1', 0.0)
-        f2 = double_or_blank(card, 16, 'F2', 0.0)
+        c1 = double_or_blank(card, 9, 'C1', default=0.0)
+        c2 = double_or_blank(card, 10, 'C2', default=0.0)
+        d1 = double_or_blank(card, 11, 'D1', default=0.0)
+        d2 = double_or_blank(card, 12, 'D2', default=0.0)
+        e1 = double_or_blank(card, 13, 'E1', default=0.0)
+        e2 = double_or_blank(card, 14, 'E2', default=0.0)
+        f1 = double_or_blank(card, 15, 'F1', default=0.0)
+        f2 = double_or_blank(card, 16, 'F2', default=0.0)
 
-        i12 = double_or_blank(card, 19, 'I12', 0.0)
+        i12 = double_or_blank(card, 19, 'I12', default=0.0)
 
+        k1 = None
+        k2 = None
         if A == 0.0:
-            k1 = blank(card, 17, 'K1')
-            k2 = blank(card, 18, 'K2')
+            blank(card, 17, 'K1')
+            blank(card, 18, 'K2')
         elif i12 != 0.0:
             # K1 / K2 are ignored
-            k1 = None
-            k2 = None
+            pass
         else:
             #: default=infinite; assume 1e8
-            k1 = double_or_blank(card, 17, 'K1', 1e8)
+            k1 = double_or_blank(card, 17, 'K1', default=1e8)
             #: default=infinite; assume 1e8
-            k2 = double_or_blank(card, 18, 'K2', 1e8)
+            k2 = double_or_blank(card, 18, 'K2', default=1e8)
 
-        assert len(card) <= 20, 'len(PBAR card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 20, f'len(PBAR card) = {len(card):d}\ncard={card}'
         return PBAR(pid, mid, A, i1, i2, i12, j, nsm,
                     c1, c2, d1, d2, e1, e2,
                     f1, f2, k1, k2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a PBAR card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        pid = integer(card, 1, 'pid')
+        mid = integer(card, 2, 'mid')
+        A = force_double_or_blank(card, 3, 'A', default=0.0)
+        i1 = force_double_or_blank(card, 4, 'I1', default=0.0)
+        i2 = force_double_or_blank(card, 5, 'I2', default=0.0)
+
+        j = force_double_or_blank(card, 6, 'J', default=0.0)
+        nsm = force_double_or_blank(card, 7, 'nsm', default=0.0)
+
+        c1 = force_double_or_blank(card, 9, 'C1', default=0.0)
+        c2 = force_double_or_blank(card, 10, 'C2', default=0.0)
+        d1 = force_double_or_blank(card, 11, 'D1', default=0.0)
+        d2 = force_double_or_blank(card, 12, 'D2', default=0.0)
+        e1 = force_double_or_blank(card, 13, 'E1', default=0.0)
+        e2 = force_double_or_blank(card, 14, 'E2', default=0.0)
+        f1 = force_double_or_blank(card, 15, 'F1', default=0.0)
+        f2 = force_double_or_blank(card, 16, 'F2', default=0.0)
+
+        i12 = force_double_or_blank(card, 19, 'I12', default=0.0)
+
+        k1 = None
+        k2 = None
+        if A == 0.0:
+            blank(card, 17, 'K1')
+            blank(card, 18, 'K2')
+        elif i12 != 0.0:
+            # K1 / K2 are ignored
+            pass
+        else:
+            #: default=infinite; assume 1e8
+            k1 = force_double_or_blank(card, 17, 'K1', default=1e8)
+            #: default=infinite; assume 1e8
+            k2 = force_double_or_blank(card, 18, 'K2', default=1e8)
+
+        assert len(card) <= 20, f'len(PBAR card) = {len(card):d}\ncard={card}'
+        return PBAR(pid, mid, A, i1, i2, i12, j, nsm,
+                    c1, c2, d1, d2, e1, e2,
+                    f1, f2, k1, k2, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         pid = data[0]
         mid = data[1]
         A = data[2]
@@ -1297,7 +1384,6 @@ class PBAR(LineProperty):
             k1 = None
         if k2 == 0.:
             k2 = None
-
         return PBAR(pid, mid, A=A, i1=i1, i2=i2, i12=i12, j=j, nsm=nsm,
                     c1=c1, c2=c2, d1=d1, d2=d2, e1=e1, e2=e2,
                     f1=f1, f2=f2, k1=k1, k2=k2, comment=comment)
@@ -1308,16 +1394,16 @@ class PBAR(LineProperty):
         A = self.Area()
         J = self.J()
         #c = self.c
-        assert isinstance(pid, int), 'pid=%r' % pid
-        assert isinstance(mid, int), 'mid=%r' % mid
-        assert isinstance(A, float), 'pid=%r' % A
-        assert isinstance(J, float), 'cid=%r' % J
+        assert isinstance(pid, int), 'PBAR: pid=%r' % pid
+        assert isinstance(mid, int), 'PBAR: mid=%r' % mid
+        assert isinstance(A, float), 'PBAR: pid=%r' % A
+        assert isinstance(J, float), 'PBAR: cid=%r' % J
         #assert isinstance(c, float), 'c=%r' % c
         if xref:
             nsm = self.Nsm()
             mpa = self.MassPerLength()
-            assert isinstance(nsm, float), 'nsm=%r' % nsm
-            assert isinstance(mpa, float), 'mass_per_length=%r' % mpa
+            assert isinstance(nsm, float), 'PBAR: nsm=%r' % nsm
+            assert isinstance(mpa, float), 'PBAR: mass_per_length=%r' % mpa
 
     def MassPerLength(self) -> float:
         r"""
@@ -1326,10 +1412,21 @@ class PBAR(LineProperty):
         .. math:: \frac{m}{L} = \rho A + nsm
 
         """
-        A = self.Area()
         rho = self.Rho()
         nsm = self.Nsm()
+        if rho == 0.0 and nsm == 0.:
+            return 0.
+        A = self.Area()
         return rho * A + nsm
+
+    def get_cdef(self):
+        cdef = np.array([
+                [self.c1, self.c2],
+                [self.d1, self.d2],
+                [self.e1, self.e2],
+                [self.f1, self.f2],
+            ], dtype='float64')
+        return cdef
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -1343,6 +1440,19 @@ class PBAR(LineProperty):
         """
         msg = ', which is required by PBAR mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = ', which is required by PBAR mid=%s' % self.mid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg=msg)
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -1407,9 +1517,23 @@ class PBAR(LineProperty):
 
     def write_card(self, size: int=8, is_double: bool=False) -> str:
         card = self.repr_fields()
+        if max(self.pid, self.mid) > MAX_INT:
+            size = 16
         if size == 8:
             return self.comment + print_card_8(card)
         return self.comment + print_card_16(card)
+
+
+PBARL_MSG = '\n' + """
++-------+------+------+-------+------+------+------+------+------+
+|   1   |   2  |   3  |   4   |   5  |   6  |   7  |   8  |   9  |
++=======+======+======+=======+======+======+======+======+======+
+| PBARL | PID  | MID  | GROUP | TYPE |      |      |      |      |
++-------+------+------+-------+------+------+------+------+------+
+|       | DIM1 | DIM2 | DIM3  | DIM4 | DIM5 | DIM6 | DIM7 | DIM8 |
++-------+------+------+-------+------+------+------+------+------+
+|       | DIM9 | etc. |  NSM  |      |      |      |      |      |
++-------+------+------+-------+------+------+------+------+------+""".strip()
 
 
 class PBARL(LineProperty):
@@ -1454,7 +1578,7 @@ class PBARL(LineProperty):
 
         # approximate
         #'I', 'CHAN', 'T', 'CHAN1', 'T1', 'CHAN2', 'T2', 'L' and 'BOX1'.
-        'L' : 4,
+        'L': 4,
     }  # for GROUP="MSCBML0"
     #pname_fid_map = {
         #12 : 'DIM1',
@@ -1462,6 +1586,7 @@ class PBARL(LineProperty):
         #14 : 'DIM3',
         #15 : 'DIM3',
     #}
+
     def update_by_pname_fid(self, pname_fid, value):
         if isinstance(pname_fid, str) and pname_fid.startswith('DIM'):
             num = int(pname_fid[3:])
@@ -1478,7 +1603,8 @@ class PBARL(LineProperty):
         dim = [1.]
         return PBARL(pid, mid, Type, dim, group='MSCBML0', nsm=0., comment='')
 
-    def __init__(self, pid, mid, Type, dim, group='MSCBML0', nsm=0., comment=''):
+    def __init__(self, pid: int, mid: int, Type: str, dim: list[float],
+                 group: str='MSCBML0', nsm: float=0., comment: str=''):
         """
         Creates a PBARL card, which defines A, I1, I2, I12, and J using
         dimensions rather than explicit values.
@@ -1493,7 +1619,7 @@ class PBARL(LineProperty):
             type of the bar
             {ROD, TUBE, TUBE2, I, CHAN, T, BOX, BAR, CROSS, H, T1, I1,
             CHAN1, Z, CHAN2, T2, BOX1, HEXA, HAT, HAT1, DBOX}
-        dim : List[float]
+        dim : list[float]
             dimensions for cross-section corresponding to Type;
             the length varies
         group : str; default='MSCBML0'
@@ -1542,7 +1668,13 @@ class PBARL(LineProperty):
                    'valid_types=%s' % (self.Type, ', '.join(sorted(keys))))
             raise ValueError(msg)
 
-        ndim = self.valid_types[self.Type]
+        try:
+            ndim = self.valid_types[self.Type]
+        except KeyError:
+            allowed = list(self.valid_types.keys())
+            msg = f'PBARL pid={self.pid}; Type={self.Type}; allowed={allowed}'
+            raise KeyError(msg)
+
         if not isinstance(self.dim, list):
             msg = 'PBARL pid=%s; dim must be a list; type=%r' % (self.pid, type(self.dim))
             raise TypeError(msg)
@@ -1562,7 +1694,7 @@ class PBARL(LineProperty):
         assert None not in self.dim
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a PBARL card from ``BDF.add_card(...)``
 
@@ -1576,7 +1708,7 @@ class PBARL(LineProperty):
         """
         pid = integer(card, 1, 'pid')
         mid = integer(card, 2, 'mid')
-        group = string_or_blank(card, 3, 'group', 'MSCBML0')
+        group = string_or_blank(card, 3, 'group', default='MSCBML0')
         Type = string(card, 4, 'Type')
 
         try:
@@ -1598,29 +1730,87 @@ class PBARL(LineProperty):
             for i in range(ndim):
                 if i in [4, 5, 6, 7]:
                     dim4 = dim[3]
-                    dimi = double_or_blank(card, 9 + i, 'ndim=%s; dim%i' % (ndim, i + 1),
-                                           default=dim4)
+                    dimi = double_or_blank(card, 9 + i, f'ndim={ndim}; dim{i+1}',
+                                           default=dim4, end=PBARL_MSG)
                 elif i in [8, 9]:
                     dim6 = dim[5]
-                    dimi = double_or_blank(card, 9 + i, 'ndim=%s; dim%i' % (ndim, i + 1),
-                                           default=dim6)
+                    dimi = double_or_blank(card, 9 + i, f'ndim={ndim}; dim{i+1}',
+                                           default=dim6, end=PBARL_MSG)
                 else:
-                    dimi = double(card, 9 + i, 'ndim=%s; dim%i' % (ndim, i + 1))
+                    dimi = double(card, 9 + i, f'ndim={ndim}; dim{i+1}', end=PBARL_MSG)
                 dim.append(dimi)
         else:
             for i in range(ndim):
-                dimi = double(card, 9 + i, 'ndim=%s; dim%i' % (ndim, i + 1))
+                dimi = double(card, 9 + i, f'ndim={ndim}; dim{i+1}', end=PBARL_MSG)
                 dim.append(dimi)
 
         #: dimension list
         assert len(dim) == ndim, 'PBARL ndim=%s len(dims)=%s' % (ndim, len(dim))
         #assert len(dims) == len(self.dim), 'PBARL ndim=%s len(dims)=%s' % (ndim, len(self.dim))
 
-        nsm = double_or_blank(card, 9 + ndim, 'nsm', 0.0)
+        nsm = double_or_blank(card, 9 + ndim, 'nsm', default=0.0)
         return PBARL(pid, mid, Type, dim, group=group, nsm=nsm, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_card_lax(cls, card: BDFCard, comment: str=''):
+        """
+        Adds a PBARL card from ``BDF.add_card(...)``
+
+        Parameters
+        ----------
+        card : BDFCard()
+            a BDFCard object
+        comment : str; default=''
+            a comment for the card
+
+        """
+        pid = integer(card, 1, 'pid')
+        mid = integer(card, 2, 'mid')
+        group = string_or_blank(card, 3, 'group', default='MSCBML0')
+        Type = string(card, 4, 'Type')
+
+        try:
+            ndim = cls.valid_types[Type]
+        except KeyError:
+            keys = list(cls.valid_types.keys())
+            raise KeyError('%r is not a valid PBARL type\nallowed_types={%s}' % (
+                Type, ', '.join(sorted(keys))))
+
+        # PBARL
+        # 9. For DBOX section, the default value for DIM5 to DIM10 are
+        #    based on the following rules:
+        #     a. DIM5, DIM6, DIM7 and DIM8 have a default value of
+        #        DIM4 if not provided.
+        #     b. DIM9 and DIM10 have a default value of DIM6 if not
+        #        provided.
+        dim = []
+        if Type == 'DBOX':
+            for i in range(ndim):
+                if i in [4, 5, 6, 7]:
+                    dim4 = dim[3]
+                    dimi = force_double_or_blank(card, 9 + i, f'ndim={ndim}; dim{i+1}',
+                                                 default=dim4, end=PBARL_MSG)
+                elif i in [8, 9]:
+                    dim6 = dim[5]
+                    dimi = force_double_or_blank(card, 9 + i, f'ndim={ndim}; dim{i+1}',
+                                                 default=dim6, end=PBARL_MSG)
+                else:
+                    dimi = force_double(card, 9 + i, f'ndim={ndim}; dim{i+1}', end=PBARL_MSG)
+                dim.append(dimi)
+        else:
+            for i in range(ndim):
+                dimi = force_double(card, 9 + i, f'ndim={ndim}; dim{i+1}', end=PBARL_MSG)
+                dim.append(dimi)
+
+        #: dimension list
+        assert len(dim) == ndim, 'PBARL ndim=%s len(dims)=%s' % (ndim, len(dim))
+        #assert len(dims) == len(self.dim), 'PBARL ndim=%s len(dims)=%s' % (ndim, len(self.dim))
+
+        nsm = force_double_or_blank(card, 9 + ndim, 'nsm', default=0.0)
+        return PBARL(pid, mid, Type, dim, group=group, nsm=nsm, comment=comment)
+
+    @classmethod
+    def add_op2_data(cls, data, comment: str=''):
         pid = data[0]
         mid = data[1]
         group = data[2].strip()
@@ -1642,6 +1832,19 @@ class PBARL(LineProperty):
         msg = ', which is required by PBARL mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = ', which is required by PBARL mid=%s' % self.mid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg=msg)
+
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
         self.mid = self.Mid()
@@ -1658,27 +1861,59 @@ class PBARL(LineProperty):
             print(msg)
             J = 0.0
         nsm = self.Nsm()
-        assert isinstance(pid, int), 'pid=%r' % pid
-        assert isinstance(mid, int), 'mid=%r' % mid
-        assert isinstance(A, float), 'pid=%r' % A
-        assert isinstance(J, float), 'cid=%r' % J
-        assert isinstance(nsm, float), 'nsm=%r' % nsm
+        assert isinstance(pid, int), 'PBARL: pid=%r' % pid
+        assert isinstance(mid, int), 'PBARL: mid=%r' % mid
+        assert isinstance(A, float), 'PBARL: pid=%r' % A
+        assert isinstance(J, float), 'PBARL: J=%r' % J
+        assert isinstance(nsm, float), 'PBARL: nsm=%r' % nsm
         if xref:
             mpl = self.MassPerLength()
             assert isinstance(mpl, float), 'mass_per_length=%r' % mpl
 
+    def get_cdef(self):
+        r"""
+        these axes are backwards...
+
+            ^ y
+        +---|---+
+        |   |   |
+        |   +------> z
+        |       |
+        +-------+
+        """
+        if self.Type in ['ROD', 'TUBE']:
+            R = self.dims[0]
+            cdef = np.array([
+                [R, 0.],
+                [0., R],
+                [-R, 0.],
+                [0., -R],
+            ], dtype='float64')
+        elif self.Type in ['BAR', 'BOX']:
+            height, width = self.dims
+            cdef = np.array([
+                [width, height],
+                [width, -height],
+                [-width, -height],
+                [-width, height],
+            ], dtype='float64') / 2.
+        else:
+            raise NotImplementedError(self.Type)
+        return cdef
+
     @property
-    def Type(self):
+    def Type(self) -> str:
         """gets Type"""
         return self.beam_type
+
     @Type.setter
-    def Type(self, beam_type):
+    def Type(self, beam_type: str):
         """sets Type"""
         self.beam_type = beam_type
 
     def Area(self) -> float:
         """Gets the area :math:`A` of the CBAR."""
-        return _bar_areaL('PBARL', self.beam_type, self.dim, self)
+        return _bar_areaL('PBARL', self.beam_type, self.dim, self)[0]
 
     def Nsm(self) -> float:
         """Gets the non-structural mass :math:`nsm` of the CBAR."""
@@ -1691,28 +1926,32 @@ class PBARL(LineProperty):
         .. math:: \frac{m}{L} = A \rho + nsm
         """
         rho = self.Rho()
-        area = self.Area()
         nsm = self.Nsm()
+        if rho == 0.0 and nsm == 0.:
+            return 0.
+        area = self.Area()
         return area * rho + nsm
 
     def I1(self) -> float:
         """gets the section I1 moment of inertia"""
-        I1 = A_I1_I2_I12(self, self.beam_type, self.dim)
+        I1 = A_I1_I2_I12(self, self.beam_type, self.dim)[1]
+        assert isinstance(I1, float), I1
         return I1
 
     def I2(self) -> float:
         """gets the section I2 moment of inertia"""
         I2 = A_I1_I2_I12(self, self.beam_type, self.dim)[2]
+        assert isinstance(I2, float), I2
         return I2
 
     def I12(self) -> float:
         """gets the section I12 moment of inertia"""
         try:
             I12 = A_I1_I2_I12(self, self.beam_type, self.dim)
-        except:
+        except Exception:
             print(str(self))
             raise
-        return I12
+        return I12[3]
 
     #def I1_I2_I12(self):
         #"""gets the section I1, I2, I12 moment of inertia"""
@@ -1827,7 +2066,7 @@ class PBARL(LineProperty):
         else:
             msg = '_points for beam_type=%r dim=%r on PBARL is not supported' % (beam_type, self.dim)
             raise NotImplementedError(msg)
-        return array(points), Area
+        return np.array(points), Area
 
     def J(self) -> float:
         beam_type = self.beam_type
@@ -1967,10 +2206,10 @@ class PBRSECT(LineProperty):
         options = [('OUTP', 10)]
         return PBRSECT(pid, mid, form, options, comment='')
 
-    def _finalize_hdf5(self, encoding):
-        self.brps = {key : value for key, value in zip(*self.brps)}
-        self.ts = {key : value for key, value in zip(*self.ts)}
-        self.inps = {key : value for key, value in zip(*self.inps)}
+    def _finalize_hdf5(self, encoding: str):
+        self.brps = {key: value for key, value in zip(*self.brps)}
+        self.ts = {key: value for key, value in zip(*self.ts)}
+        self.inps = {key: value for key, value in zip(*self.inps)}
 
     def __init__(self, pid, mid, form, options, comment=''):
         LineProperty.__init__(self)
@@ -1985,60 +2224,19 @@ class PBRSECT(LineProperty):
 
         self.nsm = 0.
         self.t = None
-        self.outp = None
 
         # int : int
-        self.brps = {}
-        self.inps = {}
+        #self.brps = {}
+        #self.inps = {}
 
         # int : floats
-        self.ts = {}
-        assert isinstance(options, list), options
-        for key_value in options:
-            try:
-                key, value = key_value
-            except ValueError:
-                print(key_value)
-                raise
-            key = key.upper()
-
-            if key == 'NSM':
-                self.nsm = float(value)
-            elif 'INP' in key:
-                if key.startswith('INP('):
-                    assert key.endswith(')'), 'key=%r' % key
-                    key_id = int(key[4:-1])
-                    self.inps[key_id] = int(value)
-                else:
-                    self.inps[0] = int(value)
-            elif key == 'OUTP':
-                self.outp = int(value)
-
-            elif key.startswith('BRP'):
-                if key.startswith('BRP('):
-                    assert key.endswith(')'), 'key=%r' % key
-                    key_id = int(key[4:-1])
-                    self.brps[key_id] = int(value)
-                else:
-                    self.brps[0] = int(value)
-
-            elif key.startswith('T('):
-                index, out = split_arbitrary_thickness_section(key, value)
-                self.ts[index] = out
-            elif key == 'T':
-                self.ts[1] = float(value)
-
-            #if key == 'NSM':
-                #self.nsm = float(value)
-            #elif key == 'OUTP':
-                #self.outp = int(value)
-            #elif key == 'BRP(1)':
-                #self.brp1 = int(value)
-            #elif key == 'T':
-                #self.t = float(value)
-            else:
-                raise NotImplementedError('PBRSECT.pid=%s key=%r value=%r' % (pid, key, value))
-
+        #self.ts = {}
+        nsm, brps, inps, outp, ts = parse_pbrsect_options(pid, options)
+        self.outp = outp
+        self.nsm = nsm
+        self.brps = brps
+        self.inps = inps
+        self.ts = ts
         self.mid_ref = None
         self.brps_ref = {}
         self.outp_ref = None
@@ -2057,13 +2255,13 @@ class PBRSECT(LineProperty):
             assert len(self.ts) >= 0, 'form=%s ts=%s' % (self.form, self.ts)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a PBRSECT card from ``BDF.add_card(...)``
 
         Parameters
         ----------
-        card : List[str]
+        card : list[str]
             this card is special and is not a ``BDFCard`` like other cards
         comment : str; default=''
             a comment for the card
@@ -2101,20 +2299,20 @@ class PBRSECT(LineProperty):
         return PBRSECT(pid, mid, form, options, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
-        #pid = data[0]
-        #mid = data[1]
-        #group = data[2].strip()
-        #beam_type = data[3].strip()
-        #dim = list(data[4:-1])
-        #nsm = data[-1]
-        #print("group = %r" % self.group)
-        #print("beam_type  = %r" % self.beam_type)
-        #print("dim = ",self.dim)
-        #print(str(self))
-        #print("*PBARL = ",data)
+    def add_op2_data(cls, data, comment: str=''):
+        # pid = data[0]
+        # mid = data[1]
+        # group = data[2].strip()
+        # beam_type = data[3].strip()
+        # dim = list(data[4:-1])
+        # nsm = data[-1]
+        # print("group = %r" % self.group)
+        # print("beam_type  = %r" % self.beam_type)
+        # print("dim = ",self.dim)
+        # print(str(self))
+        # print("*PBARL = ",data)
         raise NotImplementedError('not finished...')
-        #return PBRSECT(pid, mid, group, beam_type, dim, nsm, comment=comment)
+        # return PBRSECT(pid, mid, group, beam_type, dim, nsm, comment=comment)
 
     def cross_reference(self, model: BDF) -> None:
         """
@@ -2155,9 +2353,9 @@ class PBRSECT(LineProperty):
         """
         class_name = self.__class__.__name__
         form_map = {
-            'GS' : 'General Section',
-            'OP' : 'Open Profile',
-            'CP' : 'Closed Profile',
+            'GS': 'General Section',
+            'OP': 'Open Profile',
+            'CP': 'Closed Profile',
         }
         formi = ' form=%s' % form_map[self.form]
         plot_arbitrary_section(
@@ -2181,12 +2379,12 @@ class PBRSECT(LineProperty):
         #J = self.J()
         #nsm = self.Nsm()
         #mpl = self.MassPerLength()
-        assert isinstance(pid, int), 'pid=%r' % pid
-        assert isinstance(mid, int), 'mid=%r' % mid
-        #assert isinstance(A, float), 'pid=%r' % A
-        #assert isinstance(J, float), 'cid=%r' % J
-        #assert isinstance(nsm, float), 'nsm=%r' % nsm
-        #assert isinstance(mpl, float), 'mass_per_length=%r' % mpl
+        assert isinstance(pid, int), 'PBARL: pid=%r' % pid
+        assert isinstance(mid, int), 'PBARL: mid=%r' % mid
+        #assert isinstance(A, float), 'PBARL: pid=%r' % A
+        #assert isinstance(J, float), 'PBARL: cid=%r' % J
+        #assert isinstance(nsm, float), 'PBARL: nsm=%r' % nsm
+        #assert isinstance(mpl, float), 'PBARL: mass_per_length=%r' % mpl
 
     def Area(self) -> float:
         """Gets the area :math:`A` of the CBAR."""
@@ -2242,8 +2440,69 @@ class PBRSECT(LineProperty):
         return self.write_card()
 
 
+def parse_pbrsect_options(pid: int, options: list[Any]):
+    # ???
+    outp = None
+
+    # int : int
+    brps = {}
+    inps = {}
+
+    # int : floats
+    ts = {}
+    nsm = 0.0
+    assert isinstance(options, list), options
+    for key_value in options:
+        try:
+            key, value = key_value
+        except ValueError:
+            print(key_value)
+            raise
+        key = key.upper()
+
+        if key == 'NSM':
+            nsm = float(value)
+        elif 'INP' in key:
+            if key.startswith('INP('):
+                assert key.endswith(')'), 'key=%r' % key
+                key_id = int(key[4:-1])
+                inps[key_id] = int(value)
+            else:
+                inps[0] = int(value)
+        elif key == 'OUTP':
+            outp = int(value)
+
+        elif key.startswith('BRP'):
+            if key.startswith('BRP('):
+                assert key.endswith(')'), 'key=%r' % key
+                key_id = int(key[4:-1])
+                brps[key_id] = int(value)
+            else:
+                brps[0] = int(value)
+
+        elif key.startswith('T('):
+            index, out = split_arbitrary_thickness_section(key, value)
+            ts[index] = out
+        elif key == 'T':
+            ts[1] = float(value)
+
+        #if key == 'NSM':
+            #self.nsm = float(value)
+        #elif key == 'OUTP':
+            #self.outp = int(value)
+        #elif key == 'BRP(1)':
+            #self.brp1 = int(value)
+        #elif key == 'T':
+            #self.t = float(value)
+        else:
+            raise NotImplementedError('PBRSECT.pid=%d key=%r value=%r' % (pid, key, value))
+
+    return nsm, brps, inps, outp, ts
+
+
 class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
     """
+    MSC
     +--------+----------+---------+---------+----------+---------+---------+----------+----------+
     |    1   |     2    |    3    |    4    |     5    |    6    |    7    |     8    |     9    |
     +========+==========+=========+=========+==========+=========+=========+==========+==========+
@@ -2298,15 +2557,21 @@ class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
                       cw=None, stress='GRID',
                       w=None, wy=None, wz=None, comment='')
 
-    def __init__(self, pid, mid, A, iz, iy, iyz=None, j=None, nsm=0.,
+    def __init__(self,
+                 pid: int, mid: int,
+                 A: float, iz: float, iy: float,
+                 iyz: float=0., j=None, nsm=0.,
                  so=None,
-                 cy=None, cz=None, dy=None, dz=None, ey=None, ez=None, fy=None, fz=None,
+                 cy: float=0., cz: float=0.,
+                 dy: float=0., dz: float=0.,
+                 ey: float=0., ez: float=0.,
+                 fy: float=0., fz: float=0.,
                  ky=1., kz=1.,
                  ny=None, nz=None, my=None, mz=None,
                  nsiy=None, nsiz=None, nsiyz=None,
                  cw=None, stress='GRID',
                  w=None, wy=None, wz=None,
-                 comment=''):
+                 comment: str=''):
         """
         Creates a PBEAM3 card
 
@@ -2316,28 +2581,28 @@ class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
             property id
         mid : int
             material id
-        A : List[float]
+        A : list[float]
             areas for ABC
-        iz / iy / iyz : List[float]
+        iz / iy / iyz : list[float]
             area moment of inertias for ABC
-        iyz : List[float]; default=None -> [0., 0., 0.]
+        iyz : list[float]; default=None -> [0., 0., 0.]
             area moment of inertias for ABC
-        j : List[float]; default=None
+        j : list[float]; default=None
             polar moment of inertias for ABC
             None -> iy + iz from section A for ABC
-        so : List[str]; default=None
+        so : list[str]; default=None
             None -> ['YES', 'YESA', 'YESA']
-        cy / cz / dy / dz / ey / ez / fy / fz : List[float]; default=[0., 0., 0.]
+        cy / cz / dy / dz / ey / ez / fy / fz : list[float]; default=[0., 0., 0.]
             stress recovery loctions for ABC
-        ny / nz : List[float]
+        ny / nz : list[float]
             Local (y, z) coordinates of neutral axis for ABC
-        my / mz : List[float]
+        my / mz : list[float]
             Local (y, z) coordinates of nonstructural mass center of gravity for ABC
-        nsiy / nsiz / nsiyz : List[float]
+        nsiy / nsiz / nsiyz : list[float]
             Nonstructural mass moments of inertia per unit length about
             local y and z-axes, respectively, with regard to the nonstructural mass
             center of gravity for ABC
-        cw : List[float]
+        cw : list[float]
             warping coefficients for ABC
         stress : str; default='GRID'
             Location selection for stress, strain and force output.
@@ -2456,9 +2721,9 @@ class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
         self.mid_ref = None
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
-        Adds a PBARL card from ``BDF.add_card(...)``
+        Adds a PBEAM3 card from ``BDF.add_card(...)``
 
         Parameters
         ----------
@@ -2475,9 +2740,9 @@ class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
         area = [double(card, 3, 'A')]
         iz = [double(card, 4, 'Iz')]
         iy = [double(card, 5, 'Iy')]
-        iyz = [double_or_blank(card, 6, 'Iyz', 0.0)]
+        iyz = [double_or_blank(card, 6, 'Iyz', default=0.0)]
         j = [double_or_blank(card, 7, 'J', iy[0] + iz[0])]
-        nsm = [double_or_blank(card, 8, 'nsm', 0.0)]
+        nsm = [double_or_blank(card, 8, 'nsm', default=0.0)]
 
         #CY(A) CZ(A) DY(A) DZ(A) EY(A) EZ(A) FY(A) FZ(A)
         cy = [double_or_blank(card, 9, 'cy', default=0.)]
@@ -2621,7 +2886,7 @@ class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
             self.comment = comment
         raise NotImplementedError(data)
 
-    def Nsm(self) -> List[float]:
+    def Nsm(self) -> list[float]:
         """
         Gets the non-structural mass :math:`nsm`.
         .. warning:: nsm field not supported fully on PBEAM3 card
@@ -2640,6 +2905,19 @@ class PBEAM3(LineProperty):  # not done, cleanup; MSC specific card
         """
         msg = ', which is required by PBEAM3 mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
+
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = ', which is required by PBEAM3 mid=%s' % self.mid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg=msg)
 
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
@@ -2776,9 +3054,10 @@ class PBEND(LineProperty):
         self.mid_ref = None
 
     @classmethod
-    def add_beam_type_1(cls, pid, mid,
-                        A, i1, i2, j,
-                        rb=None, theta_b=None,
+    def add_beam_type_1(cls, pid: int, mid: int,
+                        A: float, i1: float, i2: float, j: float,
+                        rb: Optional[float]=None,
+                        theta_b: Optional[float]=None,
                         c1=0., c2=0., d1=0., d2=0., e1=0., e2=0., f1=0., f2=0.,
                         k1=None, k2=None,
                         nsm=0., rc=0., zc=0., delta_n=0., comment=''):
@@ -2795,6 +3074,10 @@ class PBEND(LineProperty):
 
         Parameters
         ----------
+        pid : int
+            property id
+        mid : int
+            material id
         A : float
             cross-sectional area
         i1, i2 : float
@@ -2811,12 +3094,15 @@ class PBEND(LineProperty):
             Shear stiffness factor K in K*A*G for plane 1 and plane 2
         nsm : float; default=0.
             nonstructural mass per unit length???
+        rc : float; default=None
+            Radial offset of the geometric centroid from points GA and GB.
         zc : float; default=None
             Offset of the geometric centroid in a direction perpendicular to
             the plane of points GA and GB and vector v.
         delta_n : float; default=None
             Radial offset of the neutral axis from the geometric centroid,
             positive is toward the center of curvature
+
         """
         beam_type = 1
         fsi = None
@@ -2842,6 +3128,10 @@ class PBEND(LineProperty):
 
         Parameters
         ----------
+        pid : int
+            property id
+        mid : int
+            material id
         fsi : int
             Flag selecting the flexibility and stress intensification
             factors. See Remark 3. (Integer = 1, 2, or 3)
@@ -2923,7 +3213,7 @@ class PBEND(LineProperty):
                      #nsm, rc, zc, delta_n, fsi, rm, t, p, rb, theta_b, comment=comment)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a PBEND card from ``BDF.add_card(...)``
 
@@ -3062,7 +3352,7 @@ class PBEND(LineProperty):
 
         #: Arc angle :math:`\theta_B` of element  (optional)
         theta_b = double_or_blank(card, 8, 'thetab')
-        assert len(card) <= 23, 'len(PBEND card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 23, f'len(PBEND card) = {len(card):d}\ncard={card}'
         return PBEND(pid, mid, beam_type, A, i1, i2, j, c1, c2, d1, d2,
                      e1, e2, f1, f2, k1, k2, nsm,
                      rc, zc, delta_n, fsi, rm, t,
@@ -3092,6 +3382,19 @@ class PBEND(LineProperty):
         msg = ', which is required by PBEND mid=%s' % self.mid
         self.mid_ref = model.Material(self.mid, msg=msg)
 
+    def safe_cross_reference(self, model: BDF, xref_errors) -> None:
+        """
+        Cross links the card so referenced cards can be extracted directly
+
+        Parameters
+        ----------
+        model : BDF()
+            the BDF object
+
+        """
+        msg = ', which is required by PBEND mid=%s' % self.mid
+        self.mid_ref = model.safe_material(self.mid, self.pid, xref_errors, msg=msg)
+
     def uncross_reference(self) -> None:
         """Removes cross-reference links"""
         self.mid = self.Mid()
@@ -3103,7 +3406,7 @@ class PBEND(LineProperty):
         assert isinstance(self.A, float), self.get_stats()
         return self.A * rho + self.nsm
 
-    def raw_fields(self) -> List[Union[str, float, int, None]]:
+    def raw_fields(self) -> list[str | float | int | None]:
         return self.repr_fields()
 
     def repr_fields(self):
@@ -3137,8 +3440,9 @@ class PBEND(LineProperty):
         return self.comment + print_card_16(card)
 
 
-def split_arbitrary_thickness_section(key, value):
-    # type: (str, Union[str, float, List[int]]) -> Tuple[int, Union[float, List[int]]]
+def split_arbitrary_thickness_section(key: str,
+                                      value: str | float | list[int],
+                                      ) -> tuple[int, float | list[int]]:
     """
     Helper method for PBRSECT/PBMSECT
 
@@ -3174,7 +3478,7 @@ def split_arbitrary_thickness_section(key, value):
     return key_id, out
 
 
-def get_beam_sections(line: str) -> List[str]:
+def get_beam_sections(line: str) -> list[str]:
     """
     Splits a PBRSECT/PBMSECT line
 
@@ -3210,6 +3514,7 @@ def get_beam_sections(line: str) -> List[str]:
         words.append(word)
     return words
 
+
 def write_arbitrary_beam_section(inps, ts, branch_paths, nsm, outp_id, core=None):
     """writes the PBRSECT/PBMSECT card"""
     end = ''
@@ -3244,6 +3549,7 @@ def write_arbitrary_beam_section(inps, ts, branch_paths, nsm, outp_id, core=None
     if end:
         end = end[:-2] + '\n'
     return end
+
 
 def plot_arbitrary_section(model, self,
                            inps, ts, branch_paths, nsm, outp_ref,
@@ -3333,7 +3639,7 @@ def plot_arbitrary_section(model, self,
     add_to_sections(sections, xy, out_points, x, y)
     #print('x=%s y=%s' % (x, y))
     ax.plot(x, y, '-o', label='OUTP')
-    all_points = {point_id : (xi, yi)
+    all_points = {point_id: (xi, yi)
                   for point_id, xi, yi in zip(out_points, x, y)}
     #print('out_points =', out_points)
     #print('all_points =', all_points)
@@ -3392,7 +3698,6 @@ def plot_arbitrary_section(model, self,
                 x = inp_xyz[:, 0]
                 y = inp_xyz[:, 1]
                 ax.plot(x, y, '--x', label='INP')
-
 
     if ts:
         _plot_rectangles(ax, sections, xy, ts)

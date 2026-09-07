@@ -11,20 +11,16 @@ Defines:
 """
 import os
 from struct import pack, unpack
-from collections import OrderedDict
+from typing import BinaryIO
 
 import numpy as np
 from pyNastran.utils import check_path
-from cpylog import get_logger2
+from cpylog import __version__ as CPYLOG_VERSION
+if CPYLOG_VERSION > '1.6.0':
+    from cpylog import get_logger
+else:  # pragma: no cover
+    from cpylog import get_logger2 as get_logger
 
-
-def read_usm3d(basename, log=None, debug=None):
-    """reads a usm3d file"""
-    model = Usm3d(log=log, debug=debug)
-    #model.read_cogsg(cogsg_filename, stop_after_header=False)
-    unused_dimension_flag = None
-    model.read_usm3d(basename, unused_dimension_flag, read_loads=True)
-    return model
 
 class Usm3d:
     """Usm3d interface class"""
@@ -82,7 +78,7 @@ class Usm3d:
         self.loads = None
         self.mapbc = None
         self.precision = 'double'
-        self.log = get_logger2(log, debug=debug)
+        self.log = get_logger(log, debug)
 
 
     def read_mapbc(self, mapbc_filename):
@@ -134,12 +130,14 @@ class Usm3d:
         mapbc = {}
         for line in lines[1:]:
             sline = line.split()
-            #self.log.info(sline)
+            #self.log.info(str(sline))
             patch_id, bc, family, surf, surf_ids = sline[:5]
             mapbc[int(patch_id)] = [int(bc), int(family), int(surf), surf_ids]
         return mapbc
 
-    def read_usm3d(self, basename, unused_dimension_flag, read_loads=True):
+    def read_usm3d(self, basename: str,
+                   unused_dimension_flag: int,
+                   read_loads: bool=True):
         """
         Parameters
         ----------
@@ -163,7 +161,7 @@ class Usm3d:
            1-based patch/"property" IDs
         mapbc : dict[patch_id] : map_line
            patch_id : int
-           map_line : List[bc, family, surf, surf_ids]
+           map_line : list[bc, family, surf, surf_ids]
                bc : int
                    boundary condition number
                family : int
@@ -207,7 +205,7 @@ class Usm3d:
 
         # determine .flo file name
         if nmax > 0:
-            flo_filename = basename + '_%s.flo' % (nmax)
+            flo_filename = basename + f'_{nmax}.flo'
         else:
             flo_filename = basename + '.flo'
 
@@ -234,7 +232,7 @@ class Usm3d:
             npoints = nodes.shape[0]
             try:
                 unused_node_ids_volume, loads = self.read_flo(flo_filename, n=npoints)
-            except:
+            except Exception:
                 self.log.error('Had trouble reading %r...' % flo_filename)
                 raise
         else:
@@ -245,51 +243,23 @@ class Usm3d:
         #self.read_front(front_file)
         #self.read_face(face_file)
 
-    def write_usm3d(self, basename):
+    def write_usm3d(self, basename: str) -> None:
         """
         writes a *.cogsg, *.front, *.face file
         """
         write_usm3d_volume(self, basename)
 
-    def read_bc(self, bc_filename, stop_after_header=False, get_lbouf=False):
+    def read_bc(self, bc_filename: str,
+                stop_after_header: bool=False,
+                get_lbouf: bool=False) -> tuple[list[int], np.ndarray, np.ndarray]:
         self.log.info("bc_filename = %r" % bc_filename)
-        with open(bc_filename, 'r') as bc_file:
-            lines = bc_file.readlines()
-
-        #mbouf,dum1,dum1,igrid
-        header = lines[0].strip().split()
-
-        (nbouf, nbou1, npatch, igrid) = header
-       #(ntris, nbou1, npatch, igrid) = header
-        header[0] = int(nbouf)
-        header[1] = int(nbou1)
-        header[2] = int(npatch)
-        header[3] = int(igrid)
-        ntris = int(nbouf)
-
-        if stop_after_header:
-            return header, None, None
-
-        if get_lbouf:
-            lbouf = np.zeros((ntris, 4), dtype='int32')
-            for i in range(ntris):
-                line = lines[i+2].strip()
-                #print('%r' % line)
-                (unused_n, isurf, n1, n2, n3) = line.split()
-                lbouf[i, :] = [isurf, n1, n2, n3]
-            return header, lbouf
-
-        tris = np.zeros((ntris, 3), dtype='int32')
-        bcs = np.zeros(ntris, dtype='int32')
-        for i in range(ntris):
-            (unused_n, isurf, n1, n2, n3) = lines[i+2].split()
-            tris[i] = [n1, n2, n3]
-            bcs[i] = isurf
-        tris = tris - 1
-        #self.bcs = [tris, bcs]
+        header, tris, bcs = read_bc(
+            bc_filename, stop_after_header=stop_after_header,
+            get_lbouf=get_lbouf)
         return header, tris, bcs
 
-    def read_cogsg(self, cogsg_filename, stop_after_header=False):
+    def read_cogsg(self, cogsg_filename: str,
+                   stop_after_header: bool=False) -> tuple[np.ndarray, np.ndarray]:
         """
         Reads the *.cogsg file
 
@@ -332,7 +302,7 @@ class Usm3d:
             }
             if stop_after_header:
                 return self.header
-            self.log.info(self.header)
+            self.log.info(str(self.header))
 
             # nbn nodes
             #
@@ -420,13 +390,12 @@ class Usm3d:
         nodes_vol = np.array(nodes_vol)
         nodes_vol = nodes_vol.reshape((tets, 3))
 
-    def _read_cogsg_volume(self, cogsg_file):
+    def _read_cogsg_volume(self, cogsg_file: BinaryIO) -> tuple[np.ndarray, np.ndarray]:
         # volume cells
         self.log.debug('tell volume = %s' % cogsg_file.tell())
         # surface + volume cells ???
         nelements = self.header['nElements']
         #str_format = '>%si' % nelements
-
 
         self.log.debug("fv.tell = %s" % cogsg_file.tell())
         ndata = 4 * (4 * nelements)
@@ -460,7 +429,7 @@ class Usm3d:
         nodes = np.frombuffer(data, '>d').reshape(3, nnodes).T
 
         # the ravel creates a copy that we can then use to put in
-        # a contigous order
+        # a contiguous order
         nodes = np.asarray(nodes.ravel(), dtype='<d').reshape(nnodes, 3)
 
         dummy4 = cogsg_file.read(4) # nnodes * 3 * 8
@@ -472,7 +441,9 @@ class Usm3d:
         self.tets = elements
         return nodes, elements
 
-    def read_flo(self, flo_filename, n=None, node_ids=None):
+    def read_flo(self, flo_filename: str,
+                 n=None,
+                 node_ids=None) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         """
         ipltqn is a format code where:
          - ipltqn = 0  (no printout)
@@ -488,7 +459,7 @@ class Usm3d:
             n is typically the number of points, but is not required to be
             this lets you read nodes 1...n, but not greater than n+1.
             node_ids must be set to None.
-        node_ids : List[int]; default=None
+        node_ids : list[int]; default=None
             the specific points to read (n must be set to None).
 
         nvars = 5
@@ -514,7 +485,19 @@ class Usm3d:
         node_id, loads = read_flo(flo_filename, n=n, node_ids=node_ids)
         return node_id, loads
 
-def read_flo(flo_filename, n=None, node_ids=None):
+
+def read_usm3d(basename: str, log=None, debug=None) -> Usm3d:
+    """reads a usm3d file"""
+    model = Usm3d(log=log, debug=debug)
+    #model.read_cogsg(cogsg_filename, stop_after_header=False)
+    unused_dimension_flag = None
+    model.read_usm3d(basename, unused_dimension_flag, read_loads=True)
+    return model
+
+
+def read_flo(flo_filename: str,
+             n=None,
+             node_ids=None) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """reads a *.flo file"""
     result_names = ['Mach', 'U', 'V', 'W', 'T', 'rho', 'rhoU', 'rhoV', 'rhoW', 'p', 'Cp']
 
@@ -541,7 +524,7 @@ def read_flo(flo_filename, n=None, node_ids=None):
         try:
             #file is messsed up
             mach = float(line)
-        except:
+        except Exception:
             raise
             #loads['Cp'] = e  # it's 0 anyways...
             #return node_id, loads
@@ -684,7 +667,7 @@ def read_flo(flo_filename, n=None, node_ids=None):
     irho_zero = np.where(rho < rho_min)[0]
     rho[irho_zero] = rho_min
 
-    loads = OrderedDict()
+    loads = {}
 
     if '.aux.' in flo_filename:
         # the names (rho, e, rhoU, etc.) aren't correct, but that's OK
@@ -747,7 +730,7 @@ def read_flo(flo_filename, n=None, node_ids=None):
         loads['W'] = rhoW / rho
     return node_id, loads
 
-def parse_float(svalue):
+def parse_float(svalue) -> float:
     """floats a value"""
     try:
         val = float(svalue)
@@ -755,7 +738,7 @@ def parse_float(svalue):
         val = 0.0
     return val
 
-def write_usm3d_volume(model, basename):
+def write_usm3d_volume(model: Usm3d, basename: str) -> None:
     """
     writes a *.cogsg, *.front, *.face file
     """
@@ -774,7 +757,7 @@ def write_usm3d_volume(model, basename):
 #def write_face(model):
     #pass
 
-def write_cogsg_volume(model, cogsg_fileame):
+def write_cogsg_volume(model: Usm3d, cogsg_fileame: str) -> None:
     """
     writes a *.cogsg file
     """
@@ -815,16 +798,19 @@ def write_cogsg_volume(model, cogsg_fileame):
         #outfile.write(block_size)
 
         # tets
-        str_format = '>%si' % ntets
-        n0 = tets[:, 0] + 1
-        n1 = tets[:, 1] + 1
-        n2 = tets[:, 2] + 1
-        n3 = tets[:, 3] + 1
-        #print("n0 = %s" % n0)
-        outfile.write(pack(str_format, *n0))
-        outfile.write(pack(str_format, *n1))
-        outfile.write(pack(str_format, *n2))
-        outfile.write(pack(str_format, *n3))
+        if 0:
+            outfile.write((tets+1).T.ravel())
+        else:  # pragma: no cover
+            str_format = '>%si' % ntets
+            n0 = tets[:, 0] + 1
+            n1 = tets[:, 1] + 1
+            n2 = tets[:, 2] + 1
+            n3 = tets[:, 3] + 1
+            #print("n0 = %s" % n0)
+            outfile.write(pack(str_format, *n0))
+            outfile.write(pack(str_format, *n1))
+            outfile.write(pack(str_format, *n2))
+            outfile.write(pack(str_format, *n3))
         #n += 4 * 8 * ntets
         #print("outfile.tell 2 = ", outfile.tell(), n)
 
@@ -839,18 +825,60 @@ def write_cogsg_volume(model, cogsg_fileame):
 
         # nodes
         #npoints = header['nPoints']
-        str_format = '>%sd' % nnodes
         nodes = self.nodes
-        n0 = nodes[:, 0]
-        n1 = nodes[:, 1]
-        n2 = nodes[:, 2]
-        outfile.write(pack(str_format, *n0))
-        outfile.write(pack(str_format, *n1))
-        outfile.write(pack(str_format, *n2))
+        if 0:
+            outfile.write(nodes.T.ravel())
+        else:  # pragma: no cover
+            str_format = '>%sd' % nnodes
+            n0 = nodes[:, 0]
+            n1 = nodes[:, 1]
+            n2 = nodes[:, 2]
+            outfile.write(pack(str_format, *n0))
+            outfile.write(pack(str_format, *n1))
+            outfile.write(pack(str_format, *n2))
 
         # nodes footer
         outfile.write(block_size)
 
+
+def read_bc(bc_filename: str,
+            stop_after_header: bool=False,
+            get_lbouf: bool=False) -> tuple[list[int], np.ndarray, np.ndarray]:
+    with open(bc_filename, 'r') as bc_file:
+        lines = bc_file.readlines()
+
+    #mbouf,dum1,dum1,igrid
+    header = lines[0].strip().split()
+
+    (nbouf, nbou1, npatch, igrid) = header
+   #(ntris, nbou1, npatch, igrid) = header
+    header[0] = int(nbouf)
+    header[1] = int(nbou1)
+    header[2] = int(npatch)
+    header[3] = int(igrid)
+    ntris = int(nbouf)
+
+    if stop_after_header:
+        return header, None, None
+
+    if get_lbouf:
+        lbouf = np.zeros((ntris, 4), dtype='int32')
+        for i in range(ntris):
+            line = lines[i+2].strip()
+            #print('%r' % line)
+            (unused_n, isurf, n1, n2, n3) = line.split()
+            lbouf[i, :] = [isurf, n1, n2, n3]
+        return header, lbouf
+
+    tris = np.zeros((ntris, 3), dtype='int32')
+    bcs = np.zeros(ntris, dtype='int32')
+    for i in range(ntris):
+        (unused_n, isurf, n1, n2, n3) = lines[i+2].split()
+        tris[i] = [n1, n2, n3]
+        bcs[i] = isurf
+    tris = tris - 1
+    #self.bcs = [tris, bcs]
+    return header, tris, bcs
 
 def main():  # pragma: no cover
     """test problem"""

@@ -1,12 +1,12 @@
 """Defines various helper functions for exporting a HDF5 BDF file"""
 from __future__ import annotations
 from collections import defaultdict
-from typing import List, Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from io import StringIO
 import numpy as np
 
 from pyNastran.utils.dict_to_h5py import (
-    _add_list_tuple, integer_types, float_types, string_types)
+    add_list_tuple, integer_types, float_types)
 from pyNastran.bdf.bdf_interface.add_card import CARD_MAP
 from pyNastran.utils import object_attributes
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from pyNastran.bdf.bdf import BDF
 
 # dict[key] : [value1, value2, ...]
-dict_int_list_obj_attrs = [
+dict_int_list_obj_attrs: list[str] = [
     'spcs', 'spcadds',
     'mpcs', 'mpcadds',
     'loads', 'load_combinations',
@@ -30,8 +30,8 @@ dict_int_list_obj_attrs = [
 ]
 
 # dict[key] : value
-dict_int_obj_attrs = [
-    # are handled explictly----
+dict_int_obj_attrs: list[str] = [
+    # are handled explicitly----
     #'elements',
     #'nodes',
     #'coords',
@@ -45,7 +45,8 @@ dict_int_obj_attrs = [
     #'gusts',
     #'trims',
     #'plotels',
-    'MATS1', 'MATS3', 'MATS8', 'MATT1', 'MATT2', 'MATT3', 'MATT4', 'MATT5', 'MATT8', 'MATT9',
+    'MATS1', 'MATS3', 'MATS8', 'MATT1', 'MATT2', 'MATT3',
+    'MATT4', 'MATT5', 'MATT8', 'MATT9', 'MATT11',
 
     # TODO: don't work
     #'reject_count',
@@ -63,16 +64,18 @@ dict_int_obj_attrs = [
     # contact
     'bconp', 'bcrparas', 'bctadds',
     'bctparas', 'bctsets', 'blseg', 'bsurf', 'bsurfs',
-    'bfric',
+    'bgadds', 'bgsets', 'bctparms',
+    'bfric', 'bcbodys',
 
     # other
     'ao_element_flags', 'cMethods',
     'convection_properties',
     'dareas',
     'dmig', 'dmiji', 'dmij', 'dmik', 'dmi', 'dmiax',
-    'dti', 
+    'dti',
     'dphases', 'delays',
-    'epoints', 'gridb',
+    'epoints',
+    #'gridb',  (removed)
     'nlparms', 'nlpcis',
     'normals',
     'nxstrats',
@@ -96,7 +99,7 @@ dict_int_obj_attrs = [
     'release',
 
     # axisymmetric
-    'ringaxs', 'ringfl',
+    #'ringaxs', 'ringfl', # removed
 
     # parametric
     'pset', 'gmcurv', 'feedge', 'feface', 'gmsurf',
@@ -105,9 +108,11 @@ dict_int_obj_attrs = [
     'cyjoin',
 ]
 
-scalar_obj_keys = [
+scalar_obj_keys: list[str] = [
     # required----
-    'aero', 'aeros', 'axic', 'axif', 'cyax', 'baror', 'beamor',
+    'aero', 'aeros',
+    #'axic', 'axif',  # removed
+    'cyax', 'baror', 'beamor',
     'acmodl', 'modtrak',
     'doptprm',
     'dtable', 'grdset', 'radset', 'seqgp',
@@ -115,23 +120,22 @@ scalar_obj_keys = [
     #'zona',
 ]
 
-scalar_keys = [
+scalar_keys: list[str] = [
     # handled separately----
     #'cards_to_read',
 
     # basic types----
     'bdf_filename',
-    '_auto_reject', '_encoding', '_iparse_errors', '_is_axis_symmetric', '_is_cards_dict',
+    '_auto_reject', '_encoding', '_iparse_errors', '_is_cards_dict',
     '_is_dynamic_syntax', '_is_long_ids', '_ixref_errors', '_nastran_format', '_nparse_errors',
     '_nxref_errors', '_sol', '_stop_on_duplicate_error', '_stop_on_parsing_error',
-    '_stop_on_xref_error',
+    #'_stop_on_xref_error',
     '_xref', 'active_filename',
     'dumplines', 'echo', 'force_echo_off', 'include_dir',
     'is_msc', 'is_nx', 'punch',
     'read_includes', 'save_file_structure', 'sol', 'sol_iline', 'nastran_format',
-    'is_superelements', 'is_zona', 'sol_method', 'debug',
+    'is_superelements', 'is_zaero', 'sol_method', 'debug',
     #'_unique_bulk_data_cards',
-    #'is_bdf_vectorized',
     #'is_long_ids',
 
 
@@ -153,9 +157,7 @@ LIST_KEYS = [
     #'initial_superelement_models',
 
     # maybe...
-    #'_duplicate_coords', '_duplicate_elements', '_duplicate_masses', '_duplicate_materials',
-    '_duplicate_nodes', '_duplicate_properties',
-    '_duplicate_thermal_materials', '_stored_parse_errors',
+    #'_duplicate', '_stored_parse_errors',
     #'_stored_xref_errors',
     #'units', 'xyz_limits',
 
@@ -164,7 +166,7 @@ LIST_KEYS = [
     #'special_cards',
 ]
 
-LIST_OBJ_KEYS = [  ## TODO: not done
+LIST_OBJ_KEYS: list[str] = [  ## TODO: not done
     # TODO: required
     'asets', 'bsets', 'csets', 'omits', 'qsets',
     'mkaeros',
@@ -250,6 +252,19 @@ def export_bdf_to_hdf5_file(hdf5_file, model: BDF, exporter=None):
         group = hdf5_file.create_group('params')
         for key, param in model.params.items():
             _h5_export_class(group, model, key, param, skip_attrs, encoding, debug=False)
+    if model.bcparas:
+        model.log.debug('exporting bcparas')
+        skip_attrs = ['comment', '_field_map']
+        group = hdf5_file.create_group('bcparas')
+        for key, param in model.bcparas.items():
+            _h5_export_class(group, model, key, param, skip_attrs, encoding, debug=False)
+
+    if model.mdlprm:
+        model.log.debug('exporting mdlprm')
+        skip_attrs = ['comment', '_field_map']
+        group = hdf5_file.create_group('mdlprm')
+        str(model.mdlprm)
+        model.mdlprm.export_to_hdf5(group, model, encoding)
 
     if model.aelinks:
         model.log.debug('exporting aelinks')
@@ -371,7 +386,7 @@ def _export_scalar_group(hdf5_file, model: BDF, encoding):
 
 def _export_minor_attributes(hdf5_file, model: BDF, encoding):
     """
-    Minor atributes include:
+    Minor attributes include:
      - encoding
      - include_dir
      - is_enddata
@@ -405,16 +420,20 @@ def _export_minor_attributes(hdf5_file, model: BDF, encoding):
 
             #elif isinstance(value, bool):
                 #print('bool: %s %s' % (key, value))
-            elif isinstance(value, (integer_types, float_types, string_types, np.ndarray)):
+            elif isinstance(value, (integer_types, float_types, str, np.ndarray)):
                 try:
                     scalar_group.create_dataset(key, data=value)
                 except TypeError:  # pragma: no cover
                     print('key=%r value=%s type=%s' % (key, str(value), type(value)))
                     raise
             #elif isinstance(value, set):
-                #_add_list_tuple(hdf5_file, key, value, 'set', model.log)
+                #add_list_tuple(hdf5_file, key, value, 'set', model.log)
             elif isinstance(value, StringIO):
                 pass
+            elif isinstance(value, bytes):
+                assert len(value) > 0, key
+                value_bytes = np.void(value)
+                scalar_group.create_dataset(key, data=value_bytes)
             else:
                 #print(key, value)
                 scalar_group.create_dataset(key, data=value)
@@ -508,9 +527,11 @@ def _export_list_keys(model: BDF, hdf5_file, list_keys):
         #indices = list(range(len(list_keys)))
         #group.create_dataset('keys', data=keys)
 
-        if isinstance(list_obj[0], (int, float, string_types)):
+        if isinstance(list_obj[0], bytes):
+            raise RuntimeError(list_obj[0])
+        if isinstance(list_obj[0], (int, float, str)):
             try:
-                _add_list_tuple(hdf5_file, attr, list_obj, Type, model.log)
+                add_list_tuple(hdf5_file, attr, list_obj, Type, model.log)
             except TypeError:  # pragma: no cover
                 print(list_obj)
                 raise
@@ -520,7 +541,7 @@ def _export_list_keys(model: BDF, hdf5_file, list_keys):
             #for keyi, valuei in enumerate(list_obj):
                 ##sub_group = hdf5_file.create_group(str(keyi))
                 ##group
-                #_add_list_tuple(group, str(keyi), valuei, Type, model.log)
+                #add_list_tuple(group, str(keyi), valuei, Type, model.log)
         else:
             raise NotImplementedError(type(list_obj[0]))
         #_hdf5_export_object_dict(group, model, attr, list_obj, indices, encoding)
@@ -550,7 +571,7 @@ def _export_list_obj_keys(model: BDF, hdf5_file, list_obj_keys, encoding):
         indices = list(range(len(list_obj)))
         #group.create_dataset('keys', data=indices)
         #try:
-            #_add_list_tuple(hdf5_file, attr, list_obj, Type, model.log)
+            #add_list_tuple(hdf5_file, attr, list_obj, Type, model.log)
         #except TypeError:
             #print(list_obj)
             #raise
@@ -558,13 +579,13 @@ def _export_list_obj_keys(model: BDF, hdf5_file, list_obj_keys, encoding):
 
 
 def _h5_export_class(sub_group: Any, model: BDF, key: str, value: Any,
-                     skip_attrs: List[str], encoding: str, debug: bool=True) -> None:
+                     skip_attrs: list[str], encoding: str, debug: bool=True) -> None:
     #model.log.debug('exporting %s to hdf5' % key)
     #sub_groupi = sub_group.create_group('values')
     class_group = sub_group.create_group(str(key))
     try:
         class_group.attrs['type'] = value.type
-    except:  # pragma: no cover
+    except Exception:  # pragma: no cover
         print('key = %r' % key)
         print('value', value)
         model.log.error('ERROR: key=%s value=%s' % (key, value))
@@ -598,7 +619,7 @@ def _h5_export_class(sub_group: Any, model: BDF, key: str, value: Any,
         #for prop in value._properties:
             #try:
                 #h5attrs.remove(prop)
-            #except:
+            #except Exception:
                 #print('cant remove %s' % prop)
                 #print(value)
                 #raise
@@ -649,7 +670,7 @@ def _h5_export_class(sub_group: Any, model: BDF, key: str, value: Any,
                     is_none = True
                     #break
                 is_nones.append(is_none)
-        elif isinstance(class_value, (integer_types, float_types, string_types, bool)):
+        elif isinstance(class_value, (integer_types, float_types, str, bool)):
             is_nones = [False]
         #elif isinstance(class_value, dict) and len(class_value) == 0:
             #pass
@@ -715,7 +736,7 @@ def _h5_export_class(sub_group: Any, model: BDF, key: str, value: Any,
 #def _export_lists(h5_group, attr, name, values, encoding):
     #print(name, attr, values)
 
-def _export_list(h5_group, attr, name, values, encoding):
+def _export_list(h5_group, attr: str, name: str, values, encoding: str):
     """
     exports a list of:
      - constant type to a dataset
@@ -730,7 +751,7 @@ def _export_list(h5_group, attr, name, values, encoding):
         #if isinstance(values[0], list):
             #return _export_lists(h5_group, attr, name, values, encoding)
 
-        if not isinstance(values[0], (integer_types, float_types, string_types)):
+        if not isinstance(values[0], (integer_types, float_types, str)):
             raise TypeError('not a base type; %s; %s' % (attr, values2))
         try:
             h5_group.create_dataset(name, data=values2)
@@ -840,13 +861,14 @@ def _hdf5_export_group(hdf5_file, model: BDF, group_name, encoding, debug=False)
 
         group = hdf5_file.create_group(group_name)
         for card_type in types_actual:
-            sub_group = group.create_group(card_type)
             ids = model._type_to_id_map[card_type]
             if debug:  # pragma: no cover
                 print(ids)
             assert len(ids) > 0, '%s : %s' % (card_type, ids)
             class_obj = CARD_MAP[card_type]
             #print(class_obj)
+
+            sub_group = group.create_group(card_type)
             if hasattr(class_obj, 'export_to_hdf5'):
                 class_obj.export_to_hdf5(sub_group, model, ids)
             else:
@@ -875,7 +897,7 @@ def _hdf5_export_object_dict(group, model: BDF, name, obj_dict, keys, encoding):
                            for key in list(keys_write)])
 
     sub_group = group.create_group('values')
-    assert isinstance(name, string_types), 'name=%s; type=%s' % (name, type(name))
+    assert isinstance(name, str), 'name=%s; type=%s' % (name, type(name))
 
     for key in keys:
         value = obj_dict[key]
@@ -884,7 +906,7 @@ def _hdf5_export_object_dict(group, model: BDF, name, obj_dict, keys, encoding):
 
         #try:
         _h5_export_class(sub_group, model, key, value, skip_attrs, encoding, debug=False)
-        #except:  # pragma: no cover
+        #except Exception:  # pragma: no cover
             #raise
             # for debugging
             #sub_group2 = group.create_group('values2')

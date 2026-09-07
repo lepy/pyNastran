@@ -1,0 +1,53 @@
+# This workflow uploads a Python Package when a release is created.
+#
+# Authentication is PyPI Trusted Publishing: GitHub mints a short-lived OIDC
+# token for this repository and workflow, so there is no password or API token
+# stored anywhere. It needs one setting on PyPI, once:
+#
+#   https://pypi.org/manage/project/pynastran/settings/publishing/
+#     Owner:            SteveDoyle2
+#     Repository name:  pyNastran
+#     Workflow name:    python-publish.yml
+#     Environment name: pypi
+#
+# To use an API token instead, drop the `permissions:` and `environment:`
+# blocks and replace the last step with a `twine upload` using the literal
+# username `__token__` and a project-scoped token in secrets.
+
+name: Upload Python Package
+
+on:
+  release:
+    types: [created]
+  # Build and check without publishing, to rehearse a release.
+  workflow_dispatch:
+
+jobs:
+  deploy:
+
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pyNastran
+    permissions:
+      # Required to mint the OIDC token Trusted Publishing uses.
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.x'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+    - name: Build
+      run: |
+        python -m build --wheel --sdist --verbose .
+        twine check dist/*
+        ls dist
+    - name: Publish
+      if: github.event_name == 'release'
+      uses: pypa/gh-action-pypi-publish@release/v1

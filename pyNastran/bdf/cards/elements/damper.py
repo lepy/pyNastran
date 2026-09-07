@@ -58,7 +58,8 @@ class CDAMP1(LineDamper):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, pid, nids, c1=0, c2=0, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int],
+                 c1: int=0, c2: int=0, comment: str=''):
         """
         Creates a CDAMP1 card
 
@@ -68,7 +69,7 @@ class CDAMP1(LineDamper):
             element id
         pid : int
             property id (PDAMP)
-        nids : List[int, int]
+        nids : list[int]
             node ids
         c1 / c2 : int; default=0
             DOF for nid1 / nid2
@@ -107,7 +108,7 @@ class CDAMP1(LineDamper):
         h5_file.create_dataset('components', data=components)
 
     @classmethod
-    def add_card(cls, card, comment=''):
+    def add_card(cls, card: BDFCard, comment: str=''):
         """
         Adds a CDAMP1 card from ``BDF.add_card(...)``
 
@@ -126,23 +127,25 @@ class CDAMP1(LineDamper):
         #: component number
         c1 = integer_or_blank(card, 4, 'c1', 0)
         c2 = integer_or_blank(card, 6, 'c2', 0)
-        assert len(card) <= 7, 'len(CDAMP1 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(CDAMP1 card) = {len(card):d}\ncard={card}'
         return CDAMP1(eid, pid, nids, c1, c2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CDAMP1 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
         """
         eid, pid, g1, g2, c1, c2 = data
         nids = [g1, g2]
+        assert 0 <= c1 < 7
+        assert 0 <= c2 < 7
         return CDAMP1(eid, pid, nids, c1, c2, comment=comment)
 
     def validate(self):
@@ -151,7 +154,7 @@ class CDAMP1(LineDamper):
         assert self.c2 in [0, 1, 2, 3, 4, 5, 6], 'c2=%r %s' % (self.c2, msg)
         assert len(self.nodes) == 2
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         pid = self.Pid()
         nids = self.node_ids
@@ -207,7 +210,7 @@ class CDAMP1(LineDamper):
                    'Allowed Pids=%s' % (self.pid, self.eid, pids))
             raise KeyError(msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -250,7 +253,8 @@ class CDAMP2(LineDamper):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, b, nids, c1=0, c2=0, comment=''):
+    def __init__(self, eid: int, b: float, nids: list[int],
+                 c1: int=0, c2: int=0, comment: str=''):
         """
         Creates a CDAMP2 card
 
@@ -260,9 +264,8 @@ class CDAMP2(LineDamper):
             element id
         b : float
             damping
-        nids : List[int, int]
-            SPOINT ids
-            node ids
+        nids : list[int]
+            2 SPOINT ids or 2 node ids
         c1 / c2 : int; default=0
             DOF for nid1 / nid2
         comment : str; default=''
@@ -321,17 +324,17 @@ class CDAMP2(LineDamper):
                 integer_or_blank(card, 5, 'n2', 0)]
         c1 = integer_or_blank(card, 4, 'c1', 0)
         c2 = integer_or_blank(card, 6, 'c2', 0)
-        assert len(card) <= 7, 'len(CDAMP2 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 7, f'len(CDAMP2 card) = {len(card):d}\ncard={card}'
         return CDAMP2(eid, b, nids, c1, c2, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CDAMP2 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -341,6 +344,8 @@ class CDAMP2(LineDamper):
         nids = [data[2], data[3]]
         c1 = data[4]
         c2 = data[5]
+        assert 0 <= c1 < 7
+        assert 0 <= c2 < 7
         return CDAMP2(eid, b, nids, c1, c2, comment=comment)
 
     def validate(self):
@@ -374,7 +379,7 @@ class CDAMP2(LineDamper):
         msg = ', which is required by CDAMP2 eid=%s' % self.eid
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -390,7 +395,7 @@ class CDAMP2(LineDamper):
         self.nodes = self.node_ids
         self.nodes_ref = None
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         b = self.B()
         nids = self.node_ids
@@ -431,7 +436,7 @@ class CDAMP3(LineDamper):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, pid, nids, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int], comment: str=''):
         """
         Creates a CDAMP3 card
 
@@ -441,8 +446,8 @@ class CDAMP3(LineDamper):
             element id
         pid : int
             property id (PDAMP)
-        nids : List[int, int]
-            SPOINT ids
+        nids : list[int]
+            2 SPOINT ids
         comment : str; default=''
             a comment for the card
         """
@@ -489,17 +494,17 @@ class CDAMP3(LineDamper):
         pid = integer(card, 2, 'pid')
         nids = [integer_or_blank(card, 3, 's1', 0),
                 integer_or_blank(card, 4, 's2', 0)]
-        assert len(card) <= 5, 'len(CDAMP3 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(CDAMP3 card) = {len(card):d}\ncard={card}'
         return CDAMP3(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CDAMP3 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -509,7 +514,7 @@ class CDAMP3(LineDamper):
         nids = [data[2], data[3]]
         return CDAMP3(eid, pid, nids, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         pid = self.Pid()
         b = self.B()
@@ -535,11 +540,11 @@ class CDAMP3(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CDAMP3 eid=%s' % (self.eid)
+        msg = f', which is required by CDAMP3 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -548,7 +553,7 @@ class CDAMP3(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CDAMP3 eid=%s' % self.eid
+        msg = f', which is required by CDAMP3 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.nodes, msg=msg)
         #self.nodes_ref = model.safe_empty_nodes(self.nodes, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
@@ -562,7 +567,7 @@ class CDAMP3(LineDamper):
 
     @property
     def node_ids(self):
-        msg = ', which is required by CDAMP3 eid=%s' % (self.eid)
+        msg = f', which is required by CDAMP3 eid={self.eid:d}'
         return self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
 
     def raw_fields(self):
@@ -587,7 +592,7 @@ class CDAMP4(LineDamper):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, b, nids, comment=''):
+    def __init__(self, eid: int, b: float, nids: list[int], comment: str=''):
         """
         Creates a CDAMP4 card
 
@@ -597,7 +602,7 @@ class CDAMP4(LineDamper):
             element id
         b : float
             damping
-        nids : List[int, int]
+        nids : list[int]
             SPOINT ids
         comment : str; default=''
             a comment for the card
@@ -638,17 +643,17 @@ class CDAMP4(LineDamper):
             integer_or_blank(card, 3 + ioffset, 'n1', 0),
             integer_or_blank(card, 4 + ioffset, 'n2', 0)
         ]
-        assert len(card) <= 9, 'len(CDAMP4 card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 9, f'len(CDAMP4 card) = {len(card):d}\ncard={card}'
         return CDAMP4(eid, b, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CDAMP4 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -658,7 +663,7 @@ class CDAMP4(LineDamper):
         nids = [data[2], data[3]]
         return CDAMP4(eid, b, nids, comment=comment)
 
-    def _verify(self, xref):
+    def _verify(self, xref: bool) -> None:
         eid = self.eid
         b = self.B()
         nids = self.node_ids
@@ -672,7 +677,7 @@ class CDAMP4(LineDamper):
     def node_ids(self):
         if self.nodes_ref is None:
             return self.nodes
-        msg = ', which is required by CDAMP4 eid=%s' % (self.eid)
+        msg = f', which is required by CDAMP4 eid={self.eid:d}'
         nids = self._node_ids(nodes=self.nodes_ref, allow_empty_nodes=True, msg=msg)
         return nids
 
@@ -688,10 +693,10 @@ class CDAMP4(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CDAMP4 eid=%s' % (self.eid)
+        msg = f', which is required by CDAMP4 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -735,7 +740,7 @@ class CDAMP5(LineDamper):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, pid, nids, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int], comment: str=''):
         """
         Creates a CDAMP5 card
 
@@ -745,8 +750,8 @@ class CDAMP5(LineDamper):
             element id
         pid : int
             property id (PDAMP5)
-        nids : List[int, int]
-            GRID/SPOINT ids
+        nids : list[int]
+            2 GRID/SPOINT ids
         comment : str; default=''
             a comment for the card
         """
@@ -793,19 +798,19 @@ class CDAMP5(LineDamper):
         """
         eid = integer(card, 1, 'eid')
         pid = integer(card, 2, 'pid')
-        nids = [integer_or_blank(card, 3, 'n1', 0),
-                integer_or_blank(card, 4, 'n2', 0)]
-        assert len(card) <= 5, 'len(CDAMP5 card) = %i\ncard=%s' % (len(card), card)
+        nids = [integer_or_blank(card, 3, 'n1', default=0),
+                integer_or_blank(card, 4, 'n2', default=0)]
+        assert len(card) <= 5, f'len(CDAMP5 card) = {len(card):d}\ncard={card}'
         return CDAMP5(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CDAMP5 card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -838,11 +843,11 @@ class CDAMP5(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CDAMP5 eid=%s' % (self.eid)
+        msg = f', which is required by CDAMP5 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -851,7 +856,7 @@ class CDAMP5(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CDAMP5 eid=%s' % (self.eid)
+        msg = f', which is required by CDAMP5 eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 
@@ -902,7 +907,7 @@ class CVISC(LineDamper):
         else:
             raise KeyError('Field %r=%r is an invalid %s entry.' % (n, value, self.type))
 
-    def __init__(self, eid, pid, nids, comment=''):
+    def __init__(self, eid: int, pid: int, nids: list[int], comment: str=''):
         """
         Creates a CVISC card
 
@@ -912,8 +917,8 @@ class CVISC(LineDamper):
             element id
         pid : int
             property id (PVISC)
-        nids : List[int, int]
-            GRID ids
+        nids : list[int]
+            2 GRID ids
         comment : str; default=''
             a comment for the card
         """
@@ -960,17 +965,17 @@ class CVISC(LineDamper):
         pid = integer_or_blank(card, 2, 'pid', eid)
         nids = [integer_or_blank(card, 3, 'n1', 0),
                 integer_or_blank(card, 4, 'n2', 0)]
-        assert len(card) <= 5, 'len(CVISC card) = %i\ncard=%s' % (len(card), card)
+        assert len(card) <= 5, f'len(CVISC card) = {len(card):d}\ncard={card}'
         return CVISC(eid, pid, nids, comment=comment)
 
     @classmethod
-    def add_op2_data(cls, data, comment=''):
+    def add_op2_data(cls, data, comment: str=''):
         """
         Adds a CVISC card from the OP2
 
         Parameters
         ----------
-        data : List[varies]
+        data : list[varies]
             a list of fields defined in OP2 format
         comment : str; default=''
             a comment for the card
@@ -989,11 +994,11 @@ class CVISC(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CVISC eid=%s' % self.eid
+        msg = f', which is required by CVISC eid={self.eid:d}'
         self.nodes_ref = model.Nodes(self.nodes, msg=msg)
         self.pid_ref = model.Property(self.pid, msg=msg)
 
-    def safe_cross_reference(self, model, xref_errors):
+    def safe_cross_reference(self, model: BDF, xref_errors):
         """
         Cross links the card so referenced cards can be extracted directly
 
@@ -1002,7 +1007,7 @@ class CVISC(LineDamper):
         model : BDF()
             the BDF object
         """
-        msg = ', which is required by CVISC eid=%s' % (self.eid)
+        msg = f', which is required by CVISC eid={self.eid:d}'
         self.nodes_ref = model.EmptyNodes(self.node_ids, msg=msg)
         self.pid_ref = model.safe_property(self.pid, self.eid, xref_errors, msg=msg)
 

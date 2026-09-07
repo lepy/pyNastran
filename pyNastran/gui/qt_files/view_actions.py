@@ -1,7 +1,16 @@
 # coding: utf-8
-import vtk
+from __future__ import annotations
+from typing import Optional, Any, TYPE_CHECKING
+#import vtkmodules
+from pyNastran.gui.vtk_common_core import vtkMath
+from pyNastran.gui.vtk_rendering_core import vtkCamera, vtkRenderer
+from pyNastran.gui.gui_objects.settings import Settings
+
+from pyNastran.gui.utils.vtk.gui_utils import numpy_array_to_vtk_array, flip_actor_visibility
 
 #from pyNastran.gui.gui_objects.coord_properties import CoordProperties
+if TYPE_CHECKING:  # pragma: no cover
+    import numpy as np
 
 
 class ViewActions:
@@ -9,7 +18,15 @@ class ViewActions:
         self.gui = gui
         self.is_wireframe = False
 
-    def on_pan_left(self, event):
+    def log_command(self, msg: str) -> None:
+        return self.gui.log_command
+
+    def on_reset_camera(self) -> None:
+        self.log_command('self.on_reset_camera()')
+        self._simulate_key_press('r')
+        self.vtk_interactor.Render()
+
+    def on_pan_left(self, event) -> None:
         """https://semisortedblog.wordpress.com/2014/09/04/building-vtk-user-interfaces-part-3c-vtk-interaction"""
         camera, cam, focal = self._setup_pan()
 
@@ -21,25 +38,25 @@ class ViewActions:
 
         # Calculate the forward pointing unit-vector 'vec' again in the same way,
         # i.e. the normalized vector of focal point – camera position
-        vtk.vtkMath.Subtract(focal, cam, vec)
+        vtkMath.Subtract(focal, cam, vec)
 
         vec[1] = 0 #We don't want roll
-        vtk.vtkMath.Normalize(vec)
+        vtkMath.Normalize(vec)
 
         # Calculate the cross product of the forward vector by the up vector,
         # which will give us an orthogonal vector pointing right relative to
         #the camera
-        vtk.vtkMath.Cross(vec, up, vec)
+        vtkMath.Cross(vec, up, vec)
 
         # Add this to the camera position and focal point to move it right
         # new_cam = cam + vec
-        vtk.vtkMath.Add(cam, vec, new_cam)
+        vtkMath.Add(cam, vec, new_cam)
 
         # new_focal = focal + vec
-        vtk.vtkMath.Add(focal, vec, new_focal)
+        vtkMath.Add(focal, vec, new_focal)
         self._set_camera_position_focal_point(camera, new_cam, new_focal)
 
-    def on_pan_right(self, event):
+    def on_pan_right(self, event) -> None:
         """https://semisortedblog.wordpress.com/2014/09/04/building-vtk-user-interfaces-part-3c-vtk-interaction"""
         camera, cam, focal = self._setup_pan()
 
@@ -51,23 +68,23 @@ class ViewActions:
 
         # Calculate the forward pointing unit-vector 'vec' again in the same way,
         # i.e. the normalized vector of focal point – camera position
-        vtk.vtkMath.Subtract(focal, cam, vec)
+        vtkMath.Subtract(focal, cam, vec)
 
         vec[1] = 0 #We don't want roll
-        vtk.vtkMath.Normalize(vec)
+        vtkMath.Normalize(vec)
 
         # Calculate the cross product of the forward vector by the up vector,
         # which will give us an orthogonal vector pointing right relative to
         #the camera
         #vec = up x vec
-        vtk.vtkMath.Cross(vec, up, vec)
+        vtkMath.Cross(vec, up, vec)
 
         # Subtract vec from the camera position and focal point to move it right
         # new_cam = cam - vec
-        vtk.vtkMath.Subtract(cam, vec, new_cam)
+        vtkMath.Subtract(cam, vec, new_cam)
 
         # new_focal = focal - vec
-        vtk.vtkMath.Subtract(focal, vec, new_focal)
+        vtkMath.Subtract(focal, vec, new_focal)
         self._set_camera_position_focal_point(camera, new_cam, new_focal)
 
     def on_pan_up(self, event):
@@ -83,13 +100,13 @@ class ViewActions:
 
         # Add the movement to the current camera position and focal point,
         # and save these in 'new_cam' and 'new_focal' respectively
-        vtk.vtkMath.Subtract(cam, vec, new_cam)
+        vtkMath.Subtract(cam, vec, new_cam)
 
         # new_focal = focal - vec
-        vtk.vtkMath.Subtract(focal, vec, new_focal)
+        vtkMath.Subtract(focal, vec, new_focal)
         self._set_camera_position_focal_point(camera, new_cam, new_focal)
 
-    def on_pan_down(self, event):
+    def on_pan_down(self, event) -> None:
         """not 100% on this"""
         camera, cam, focal = self._setup_pan()
 
@@ -102,13 +119,13 @@ class ViewActions:
 
         # Add the movement to the current camera position and focal point,
         # and save these in 'new_cam' and 'new_focal' respectively
-        vtk.vtkMath.Add(cam, vec, new_cam)
+        vtkMath.Add(cam, vec, new_cam)
 
         # new_focal = focal + vec
-        vtk.vtkMath.Add(focal, vec, new_focal)
+        vtkMath.Add(focal, vec, new_focal)
         self._set_camera_position_focal_point(camera, new_cam, new_focal)
 
-    def _setup_pan(self):
+    def _setup_pan(self) -> tuple[vtkCamera, np.ndarray, np.ndarray]:
         camera = self.rend.GetActiveCamera()
         cam = camera.GetPosition()
         focal = camera.GetFocalPoint()
@@ -124,68 +141,128 @@ class ViewActions:
         self.Render()
 
     #---------------------------------------------------------------------------
-    def on_increase_magnification(self):
+
+    def on_show_hide_min_actor(self) -> None:
+        """flips the status of the min label actor"""
+        self.settings.is_min_visible = not self.settings.is_min_visible
+        actor = self.gui.min_max_actors[0]
+        flip_actor_visibility(actor)
+        self.Render()
+
+    def on_show_hide_max_actor(self) -> None:
+        """flips the status of the max label actor"""
+        self.settings.is_max_visible = not self.settings.is_max_visible
+        actor = self.gui.min_max_actors[1]
+        flip_actor_visibility(actor)
+        self.Render()
+
+    def on_increase_magnification(self) -> None:
         """zoom in"""
         self.zoom(1.1)
 
-    def on_decrease_magnification(self):
+    def on_decrease_magnification(self) -> None:
         """zoom out"""
         self.zoom(1.0 / 1.1)
 
-    def azimuth(self, azimuth_deg, render=True):
+    def on_rotate_clockwise(self) -> None:
+        """rotate clockwise"""
+        self.rotate(15.)
+
+    def on_rotate_cclockwise(self) -> None:
+        """rotate counter-clockwise"""
+        self.rotate(-15.)
+
+    def azimuth(self, azimuth_deg: float, render: bool=True) -> None:
         """see the gui"""
         camera = self.GetCamera()
         camera.Azimuth(-azimuth_deg)
         camera.Modified()
         if render:
             self.vtk_interactor.Render()
-        self.gui.log_command('azimuth(%s)' % azimuth_deg)
+        self.log_command('self.azimuth(%s)' % azimuth_deg)
 
-    def pitch(self, pitch_deg, render=True):
+    def pitch(self, pitch_deg: float, render: bool=True) -> None:
         """see the gui"""
         camera = self.GetCamera()
         camera.Pitch(-pitch_deg)
         camera.Modified()
         if render:
             self.vtk_interactor.Render()
-        self.gui.log_command('pitch(%s)' % pitch_deg)
+        self.log_command('self.pitch(%s)' % pitch_deg)
 
-    def yaw(self, yaw_deg, render=True):
-        """see the gui"""
+    def yaw(self, yaw_deg: float, render: bool=True) -> None:
+        """
+        see the gui
+
+        Parameters
+        ----------
+        yaw_deg : float
+            The yaw angle
+        render: bool; default=True
+            enable/disable the renderer
+
+        """
         camera = self.GetCamera()
         camera.Yaw(-yaw_deg)
         camera.Modified()
         if render:
             self.vtk_interactor.Render()
-        self.gui.log_command('yaw(%s)' % yaw_deg)
+        self.log_command('self.yaw(%s)' % yaw_deg)
 
-    def rotate(self, rotate_deg, render=True):
-        """see the gui"""
+    def rotate(self, rotate_deg: float, render: bool=True) -> None:
+        """
+        see the gui
+
+        Parameters
+        ----------
+        rotate_deg : float
+            The rotation angle
+        render: bool; default=True
+            enable/disable the renderer
+
+        """
         camera = self.GetCamera()
         camera.Roll(-rotate_deg)
         camera.Modified()
         if render:
             self.vtk_interactor.Render()
-        self.gui.log_command('rotate(%s)' % rotate_deg)
+        self.log_command('self.rotate(%s)' % rotate_deg)
 
-    def zoom(self, value, render=True):
+    def zoom(self, value: float, render: bool=True) -> None:
+        """
+        Zooms the camera
+
+        Parameters
+        ----------
+        value : float
+            The zoom percentage
+        render: bool; default=True
+            enable/disable the renderer
+
+        """
         camera = self.GetCamera()
         camera.Zoom(value)
         camera.Modified()
         if render:
             self.vtk_interactor.Render()
-        self.gui.log_command('zoom(%s)' % value)
+        self.log_command('self.zoom(%s)' % value)
 
-    def set_focal_point(self, focal_point, render=True):
+    def set_focal_point(self, focal_point: np.ndarray, render: bool=True) -> None:
         """
         Parameters
         ----------
         focal_point : (3, ) float ndarray
             The focal point
             [ 188.25109863 -7. -32.07858658]
+        render: bool; default=True
+            enable/disable the renderer
+
         """
         camera = self.rend.GetActiveCamera()
-        self.gui.log_command("set_focal_point(focal_point=%s)" % str(focal_point))
+        if focal_point is None:
+            self.gui.log.warning("self.set_focal_point(focal_point=%s)" % str(focal_point))
+            return
+        self.log_command("self.set_focal_point(focal_point=%s)" % str(focal_point))
 
         # now we can actually modify the camera
         camera.SetFocalPoint(focal_point[0], focal_point[1], focal_point[2])
@@ -193,10 +270,18 @@ class ViewActions:
         if render:
             self.vtk_interactor.Render()
 
-    def on_surface(self, render=True):
-        """sets the main/toggle actors to surface"""
+    def on_surface(self, render: bool=True) -> None:
+        """
+        sets the main/toggle actors to surface
+
+        Parameters
+        ----------
+        render: bool; default=True
+            enable/disable the renderer
+
+        """
         if self.is_wireframe:
-            self.gui.log_command('on_surface()')
+            self.log_command('self.on_surface()')
             for name, actor in self.gui.geometry_actors.items():
                 #if name != 'main':
                     #print('name: %s\nrep: %s' % (
@@ -210,10 +295,18 @@ class ViewActions:
             if render:
                 self.vtk_interactor.Render()
 
-    def on_wireframe(self, render=True):
-        """sets the main/toggle actors to wirefreme"""
+    def on_wireframe(self, render: bool=True) -> None:
+        """
+        sets the main/toggle actors to wireframe
+
+        Parameters
+        ----------
+        render: bool; default=True
+            enable/disable the renderer
+
+        """
         if not self.is_wireframe:
-            self.gui.log_command('on_wireframe()')
+            self.log_command('self.on_wireframe()')
             for name, actor in self.gui.geometry_actors.items():
                 #if name != 'main':
                     #print('name: %s\nrep: %s' % (
@@ -235,7 +328,7 @@ class ViewActions:
 
     #---------------------------------------------------------------------------
     # camera
-    def update_camera(self, code):
+    def update_camera(self, code: str) -> None:
         camera = self.GetCamera()
         #print("code =", code)
         if code == '+x':  # set x-axis
@@ -282,24 +375,24 @@ class ViewActions:
             camera.SetFocalPoint(0., 0., 0.)
             camera.SetViewUp(0., -1., 0.)
             camera.SetPosition(0., 0., -1.)
-        else:
-            self.gui.log_error('invalid camera code...%r' % code)
+        else:  # pragma: no cover
+            self.log_error('invalid camera code...{code!r}')
             return
         self._update_camera(camera)
         self.rend.ResetCamera()
-        self.gui.log_command('update_camera(%r)' % code)
+        self.log_command('self.update_camera(%r)' % code)
 
-    def _update_camera(self, camera=None):
+    def _update_camera(self, camera: Optional[vtkCamera]=None) -> None:
         if camera is None:
             camera = self.GetCamera()
         camera.Modified()
         self.vtk_interactor.Render()
 
     #---------------------------------------------------------------------------
-    def Render(self):
+    def Render(self) -> None:
         self.vtk_interactor.GetRenderWindow().Render()
 
-    def GetCamera(self):
+    def GetCamera(self) -> vtkCamera:
         return self.rend.GetActiveCamera()
 
     #@property
@@ -307,9 +400,13 @@ class ViewActions:
         #return self.gui.settings
 
     @property
-    def rend(self):
+    def rend(self) -> vtkRenderer:
         return self.gui.rend
 
     @property
-    def vtk_interactor(self):
+    def vtk_interactor(self) -> Any:
         return self.gui.vtk_interactor
+
+    @property
+    def settings(self) -> Settings:
+        return self.gui.settings
